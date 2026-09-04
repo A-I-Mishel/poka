@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+*.pptx
+*.docx
+*.pdf
+*.csv
+uploaded_*
+memory/chroma_db/
