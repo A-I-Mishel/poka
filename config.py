@@ -27,9 +27,12 @@ def _get_secret(name: str) -> Optional[str]:
     try:
         import streamlit as st
 
-        val = st.secrets.get(name)
-        if val:
-            return str(val)
+        # load_if_toml_exists() never raises or prints when no file exists
+        # (plain st.secrets access would st.error + break set_page_config order).
+        if st.secrets.load_if_toml_exists():
+            val = st.secrets.get(name)
+            if val:
+                return str(val)
     except Exception:
         pass
     return os.getenv(name)
