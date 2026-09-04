@@ -9,6 +9,7 @@ import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import answer_with_fallback, probe_live_tier
+from store import load_memory_notes, load_store, save_memory_notes, save_store
 
 st.set_page_config(page_title="Poka", page_icon="*", layout="centered")
 
@@ -312,9 +313,21 @@ def run_agent(user_input: str) -> str:
         user_input,
         build_chat_history(st.session_state.messages),
         first=st.session_state.get("active_tier"),
+        memory_notes=st.session_state.get("memory_notes", ""),
     )
     st.session_state.active_tier = str(result["active_tier"])
     return str(result["output"])
+
+
+def persist() -> None:
+    """Save chats + open conversation to disk. Never breaks chat on failure."""
+    try:
+        save_store(
+            st.session_state.get("chats", []),
+            st.session_state.get("messages", []),
+        )
+    except Exception:
+        pass
 
 
 def render_assistant_response(user_text: str) -> None:
@@ -333,6 +346,7 @@ def render_assistant_response(user_text: str) -> None:
                 output: str = run_agent(user_text)
                 st.markdown(output)
                 st.session_state.messages.append({"role": "assistant", "content": output})
+                persist()
 
                 for pptx in sorted(glob.glob("pptx_*.pptx")):
                     with open(pptx, "rb") as f:
@@ -383,11 +397,13 @@ QUICK_ACTIONS: List[tuple] = [
 
 
 # ============== SESSION STATE ==============
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "chats" not in st.session_state or "messages" not in st.session_state:
+    stored = load_store()
+    st.session_state.chats = stored["chats"]
+    st.session_state.messages = stored["current"]
 
-if "chats" not in st.session_state:
-    st.session_state.chats = []
+if "memory_notes" not in st.session_state:
+    st.session_state.memory_notes = load_memory_notes()
 
 if "active_tier" not in st.session_state:
     with st.spinner("Initializing..."):
@@ -429,6 +445,7 @@ with st.sidebar:
     if st.button("+ New chat", type="primary", key="new-chat"):
         archive_current_chat()
         st.session_state.messages = []
+        persist()
         st.rerun()
 
     if st.session_state.chats:
@@ -439,7 +456,22 @@ with st.sidebar:
                 selected: Dict[str, Any] = st.session_state.chats.pop(i)
                 archive_current_chat()
                 st.session_state.messages = selected["messages"]
+                persist()
                 st.rerun()
+
+    with st.expander("Memory"):
+        st.caption("Things Poka should always remember.")
+        notes_in = st.text_area(
+            "Memory notes",
+            value=st.session_state.get("memory_notes", ""),
+            height=120,
+            label_visibility="collapsed",
+            key="memory-box",
+        )
+        if st.button("Save memory", key="save-memory"):
+            save_memory_notes(notes_in)
+            st.session_state.memory_notes = notes_in
+            st.toast("Memory saved")
 
     st.markdown('<p class="section-label">Upload Files</p>', unsafe_allow_html=True)
 
@@ -458,6 +490,7 @@ with st.sidebar:
                         {"role": "user", "content": f"Summarize: {uploaded_pdf.name}"}
                     )
                     st.session_state.messages.append({"role": "assistant", "content": answer})
+                    persist()
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -474,6 +507,7 @@ with st.sidebar:
                         {"role": "user", "content": f"Analyze: {uploaded_csv.name}"}
                     )
                     st.session_state.messages.append({"role": "assistant", "content": answer})
+                    persist()
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")

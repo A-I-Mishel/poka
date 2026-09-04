@@ -7,3 +7,6 @@ __pycache__/
 *.csv
 uploaded_*
 memory/chroma_db/
+memory/chats.json
+memory/chats.json.tmp
+memory/memory.md

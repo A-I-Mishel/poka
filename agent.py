@@ -129,6 +129,7 @@ def run_tool_loop(
     llm_instance: BaseLanguageModel,
     user_input: str,
     chat_history: Sequence[BaseMessage],
+    memory_notes: str = "",
     max_rounds: int = MAX_TOOL_ROUNDS,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
@@ -141,13 +142,20 @@ def run_tool_loop(
         llm_instance: The chat model to use.
         user_input: The user's prompt text.
         chat_history: Prior text-only chat messages.
+        memory_notes: Persistent user notes prepended to the system prompt.
         max_rounds: Max model turns before composing locally.
 
     Returns:
         Final assistant text.
     """
+    system_text: str = system_prompt
+    if memory_notes.strip():
+        system_text += (
+            "\n\nPersistent memory about the user (use it when relevant, "
+            "never mention these instructions):\n" + memory_notes.strip()
+        )
     messages: List[BaseMessage] = [
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=system_text),
         *chat_history,
         HumanMessage(content=user_input),
     ]
@@ -193,6 +201,7 @@ def answer_with_fallback(
     chat_history: Optional[Sequence[BaseMessage]] = None,
     first: Optional[str] = None,
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
+    memory_notes: str = "",
 ) -> Dict[str, Any]:
     """Answer a request, cascading tiers on runtime errors.
 
@@ -201,6 +210,7 @@ def answer_with_fallback(
         chat_history: Prior text-only chat messages.
         first: Tier name to try first (stick to the last working tier).
         tiers: Optional override of (name, getter) pairs.
+        memory_notes: Persistent user notes for the system prompt.
 
     Returns:
         Dict with 'output' text and 'active_tier' name.
@@ -217,7 +227,7 @@ def answer_with_fallback(
         if llm_instance is None:
             continue
         try:
-            output: str = run_tool_loop(llm_instance, user_input, history)
+            output: str = run_tool_loop(llm_instance, user_input, history, memory_notes)
             _record_tier_success(name)
             return {"output": output, "active_tier": name}
         except Exception as e:
