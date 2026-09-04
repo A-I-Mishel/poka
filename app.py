@@ -369,7 +369,7 @@ def tier_status(tier_name: str) -> tuple:
     """Map a tier name to (badge class, marker) for the status badge."""
     if tier_name == "Muse Spark 1.3":
         return ("online", "●")
-    if tier_name.startswith("Gemini"):
+    if tier_name.startswith("Gemini") or tier_name.startswith("Ling"):
         return ("fallback", "◐")
     return ("offline", "○")
 
@@ -533,7 +533,7 @@ if prompt := st.chat_input("Type your message..."):
 
 st.markdown(
     '<div style="text-align: center; padding: 24px; color: #555; font-size: 12px;">'
-    "<p>Poka v1.0 — Muse Spark 1.3 / Gemini 3.6 / Gemini 3.5</p>"
+    "<p>Poka v1.0 — Muse Spark 1.3 / Ling 3.0 / Gemini 3.6 / Gemini 3.5</p>"
     "</div>",
     unsafe_allow_html=True,
 )

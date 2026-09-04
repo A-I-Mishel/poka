@@ -1,4 +1,4 @@
-"""Tool-calling agent with 3-tier LLM cascade.
+"""Tool-calling agent with multi-tier LLM cascade.
 
 Uses a small explicit tool loop instead of LangChain's AgentExecutor.
 Reason: Gemini 3.x rejects any history containing functionCall parts
@@ -8,10 +8,11 @@ every model call carries a clean history.
 """
 
 import concurrent.futures
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from config import get_tier1_llm, get_tier2_llm, get_tier3_llm
+from config import get_tier1_llm, get_tier1b_llm, get_tier2_llm, get_tier3_llm
 from tools import web_search, create_pptx, create_docx, read_pdf, analyze_csv
 
 tools: List[Any] = [web_search, create_pptx, create_docx, read_pdf, analyze_csv]
@@ -36,11 +37,52 @@ Rules:
 
 TIER_AGENT_GETTERS: List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]] = [
     ("Muse Spark 1.3", get_tier1_llm),  # type: ignore[arg-type]
+    ("Ling 3.0 Flash", get_tier1b_llm),  # type: ignore[arg-type]
     ("Gemini 3.6 Flash", get_tier2_llm),  # type: ignore[arg-type]
     ("Gemini 3.5 Flash", get_tier3_llm),  # type: ignore[arg-type]
 ]
 
 MAX_TOOL_ROUNDS: int = 4
+
+# Skip repeatedly failing tiers for a while so one message doesn't burn
+# quota on every dead tier (free-tier 429s recover with time).
+SKIP_AFTER_FAILS: int = 2
+SKIP_SECONDS: float = 600.0
+_TIER_FAILS: Dict[str, int] = {}
+_TIER_SKIP_UNTIL: Dict[str, float] = {}
+
+
+def _tier_skipped(name: str) -> bool:
+    """Check whether a tier is currently in its cool-down window."""
+    return time.time() < _TIER_SKIP_UNTIL.get(name, 0.0)
+
+
+def _record_tier_success(name: str) -> None:
+    """Clear failure state after a tier answers successfully."""
+    _TIER_FAILS.pop(name, None)
+    _TIER_SKIP_UNTIL.pop(name, None)
+
+
+def _record_tier_failure(name: str) -> None:
+    """Count a failure; cool the tier down after repeated failures."""
+    fails: int = _TIER_FAILS.get(name, 0) + 1
+    _TIER_FAILS[name] = fails
+    if fails >= SKIP_AFTER_FAILS:
+        _TIER_SKIP_UNTIL[name] = time.time() + SKIP_SECONDS
+
+
+def _friendly_cascade_error(last_error: Any) -> str:
+    """Translate raw provider errors into a human-readable message."""
+    raw: str = str(last_error)
+    lowered: str = raw.lower()
+    if "429" in raw or "quota" in lowered or "rate limit" in lowered or "freeusagelimit" in lowered:
+        return (
+            "All model tiers are unavailable right now: the free services are "
+            "rate-limited (daily quotas reset tomorrow) or temporarily down. "
+            "Please wait a while and try again. "
+            f"Technical detail: {raw[:200]}"
+        )
+    return f"All LLM tiers failed at runtime. Last error: {raw[:300]}"
 
 
 def _as_text(content: Any) -> str:
@@ -167,27 +209,29 @@ def answer_with_fallback(
         RuntimeError: If every tier fails.
     """
     history: List[BaseMessage] = list(chat_history) if chat_history else []
+    ordered = _ordered_tiers(first, tiers)
+    usable = [item for item in ordered if not _tier_skipped(item[0])] or ordered
     last_error: Exception | None = None
-    for name, getter in _ordered_tiers(first, tiers):
+    for name, getter in usable:
         llm_instance: Optional[BaseLanguageModel] = getter()
         if llm_instance is None:
             continue
         try:
             output: str = run_tool_loop(llm_instance, user_input, history)
+            _record_tier_success(name)
             return {"output": output, "active_tier": name}
         except Exception as e:
             last_error = e
+            _record_tier_failure(name)
             continue
-    raise RuntimeError(
-        f"All LLM tiers failed at runtime. Last error: {last_error}"
-    )
+    raise RuntimeError(_friendly_cascade_error(last_error))
 
 
 def probe_live_tier(timeout: float = 20.0) -> str:
     """Return the name of the first tier answering a minimal prompt.
 
-    Tries tiers in order (Muse -> Gemini 3.6 -> Gemini 3.5) so Muse is
-    automatically preferred again once its endpoint recovers.
+    Tries tiers in order (Muse -> Ling -> Gemini 3.6 -> Gemini 3.5) so the
+    preferred model is automatically picked again once it recovers.
 
     Args:
         timeout: Max seconds to wait per tier for the probe reply.
