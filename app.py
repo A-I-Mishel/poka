@@ -104,7 +104,7 @@ div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"])
     display: none;
 }
 div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]) div[data-testid="stChatMessageContent"] {
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    background: #6366f1;
     color: #FFFFFF;
     padding: 14px 20px;
     border-radius: 16px 16px 4px 16px;
@@ -475,36 +475,28 @@ with st.sidebar:
 
     st.markdown('<p class="section-label">Upload Files</p>', unsafe_allow_html=True)
 
-    uploaded_pdf = st.file_uploader("PDF Document", type="pdf", label_visibility="collapsed")
-    uploaded_csv = st.file_uploader("CSV Data", type="csv", label_visibility="collapsed")
+    uploaded_file = st.file_uploader(
+        "Upload a PDF or CSV", type=["pdf", "csv"], label_visibility="collapsed"
+    )
 
-    if uploaded_pdf:
-        pdf_path: str = f"uploaded_{uploaded_pdf.name}"
-        with open(pdf_path, "wb") as f:
-            f.write(uploaded_pdf.getbuffer())
-        if st.button("Summarize PDF", key="sum-pdf"):
-            with st.spinner("Reading..."):
+    if uploaded_file:
+        file_path: str = f"uploaded_{uploaded_file.name}"
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        is_pdf: bool = uploaded_file.name.lower().endswith(".pdf")
+        button_label: str = "Summarize PDF" if is_pdf else "Analyze CSV"
+        if st.button(button_label, key="process-file"):
+            with st.spinner("Reading..." if is_pdf else "Analyzing..."):
                 try:
-                    answer: str = run_agent(f"Read and summarize the PDF at {pdf_path}")
-                    st.session_state.messages.append(
-                        {"role": "user", "content": f"Summarize: {uploaded_pdf.name}"}
+                    instruction: str = (
+                        f"Read and summarize the PDF at {file_path}"
+                        if is_pdf
+                        else f"Analyze the CSV at {file_path}"
                     )
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                    persist()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-    if uploaded_csv:
-        csv_path: str = f"uploaded_{uploaded_csv.name}"
-        with open(csv_path, "wb") as f:
-            f.write(uploaded_csv.getbuffer())
-        if st.button("Analyze CSV", key="ana-csv"):
-            with st.spinner("Analyzing..."):
-                try:
-                    answer = run_agent(f"Analyze the CSV at {csv_path}")
+                    answer: str = run_agent(instruction)
+                    action_label: str = "Summarize" if is_pdf else "Analyze"
                     st.session_state.messages.append(
-                        {"role": "user", "content": f"Analyze: {uploaded_csv.name}"}
+                        {"role": "user", "content": f"{action_label}: {uploaded_file.name}"}
                     )
                     st.session_state.messages.append({"role": "assistant", "content": answer})
                     persist()
@@ -565,9 +557,9 @@ for msg in st.session_state.messages:
 if prompt := st.chat_input("Type your message..."):
     render_assistant_response(prompt)
 
-st.markdown(
-    '<div style="text-align: center; padding: 24px; color: #555; font-size: 12px;">'
-    "<p>Poka v1.0 — Muse Spark 1.3 / Ling 3.0 / Gemini 3.6 / Gemini 3.5</p>"
-    "</div>",
-    unsafe_allow_html=True,
-)
+    st.markdown(
+        f'<div style="text-align: center; padding: 24px; color: #555; font-size: 12px;">'
+        f"<p>Poka v1.0 — Powered by {model_name}</p>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
