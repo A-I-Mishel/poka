@@ -1516,7 +1516,7 @@ if not st.session_state.messages:
 
 
 # Render conversation
-for msg in st.session_state.messages:
+for idx, msg in enumerate(st.session_state.messages):
 
     with st.chat_message(msg["role"]):
 
@@ -1534,6 +1534,17 @@ for msg in st.session_state.messages:
         st.markdown(
             msg["content"]
         )
+
+    if isinstance(msg, dict) and msg.get("role") == "user":
+        with st.container(key=f"msgrow-{idx}"):
+            if st.button("Edit", key=f"edit-{idx}"):
+                old_text: str = str(msg.get("content", ""))
+                st.session_state.messages = st.session_state.messages[:idx]
+                st.session_state[
+                    f"composer_input_{st.session_state.composer_key}"
+                ] = old_text
+                persist()
+                st.rerun()
 
 
 # ============================================================
