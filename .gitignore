@@ -6,6 +6,10 @@ __pycache__/
 *.pdf
 *.csv
 uploaded_*
+camera_*
+*.png
+*.jpg
+*.jpeg
 memory/chroma_db/
 memory/chats.json
 memory/chats.json.tmp

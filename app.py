@@ -1,7 +1,9 @@
 """Streamlit UI for Poka -- indigo dark theme, no emojis."""
 
 import glob
+import html
 import os
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -275,6 +277,118 @@ div[data-testid="stDownloadButton"] > button:hover {
     animation: pulse 1.5s infinite;
     color: #8b8b9e;
 }
+
+/* ---- composer plus menu + attachment chip ---- */
+/* ---- unified composer pill: + button joined flush to the input ---- */
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) {
+    gap: 0 !important;
+    background: #1a1a2e;
+    border: 1px solid #27273a;
+    border-radius: 16px;
+    padding-left: 2px;
+    align-items: center;
+}
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]):has(div[data-testid="stChatInput"] textarea:focus) {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stPopover"] > button,
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) .stPopover > button {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none !important;
+    background: transparent !important;
+    color: #8b8b9e;
+    font-size: 22px;
+    line-height: 1;
+    padding: 0;
+    box-shadow: none !important;
+}
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stPopover"] > button:hover,
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) .stPopover > button:hover {
+    border: none !important;
+    background: rgba(99, 102, 241, 0.15) !important;
+    color: #FFFFFF;
+    box-shadow: none !important;
+}
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] textarea,
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] input {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] textarea:focus,
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] input:focus {
+    border: none !important;
+    box-shadow: none !important;
+}
+div[data-testid="stPopoverBody"] {
+    background: #1a1a2e;
+    border: 1px solid #27273a;
+    border-radius: 14px;
+    width: 240px !important;
+    max-width: 240px !important;
+    min-width: 0 !important;
+    padding: 6px !important;
+    box-shadow: none !important;
+}
+div[data-testid="stPopoverBody"] div[data-testid="stBaseButton-secondary"] > button,
+div[data-testid="stPopoverBody"] .stButton > button {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: #f1f1f4;
+    text-align: left;
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 14px;
+    box-shadow: none;
+    transform: none;
+    white-space: normal;
+    line-height: 1.4;
+}
+div[data-testid="stPopoverBody"] div[data-testid="stBaseButton-secondary"] > button:hover,
+div[data-testid="stPopoverBody"] .stButton > button:hover {
+    background: #27273a;
+    border: none;
+    color: #FFFFFF;
+    box-shadow: none;
+    transform: none;
+}
+div[data-testid="stPopoverBody"] div[data-testid="stBaseButton-secondary"] > button:focus,
+div[data-testid="stPopoverBody"] .stButton > button:focus,
+div[data-testid="stPopoverBody"] div[data-testid="stBaseButton-secondary"] > button:active,
+div[data-testid="stPopoverBody"] .stButton > button:active,
+div[data-testid="stPopoverBody"] div[data-testid="stBaseButton-secondary"] > button:focus-visible,
+div[data-testid="stPopoverBody"] .stButton > button:focus-visible {
+    background: transparent;
+    border: none;
+    color: #f1f1f4;
+    outline: none;
+    box-shadow: none;
+    transform: none;
+}
+div[data-testid="stCameraInput"] {
+    border: 1px solid #27273a;
+    border-radius: 12px;
+    padding: 8px;
+}
+.attach-chip {
+    display: inline-block;
+    background: #1a1a2e;
+    border: 1px solid #6366f1;
+    color: #f1f1f4;
+    font-size: 13px;
+    border-radius: 999px;
+    padding: 6px 14px;
+    margin-bottom: 8px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 """
 
 st.markdown("<style>" + THEME_CSS + "</style>", unsafe_allow_html=True)
@@ -330,20 +444,85 @@ def persist() -> None:
         pass
 
 
+def _stage_upload(uploaded: Any, kind: str, src: str) -> None:
+    """Save an uploader/camera value as the pending attachment (once per file).
+
+    Args:
+        uploaded: The UploadedFile value, or None.
+        kind: Attachment kind: "pdf", "csv", or "image".
+        src: Where it came from: "doc", "img", or "camera".
+    """
+    if uploaded is None:
+        return
+    mark: List[Any] = [src, getattr(uploaded, "name", ""), getattr(uploaded, "size", 0)]
+    pending = st.session_state.get("pending_attach")
+    if isinstance(pending, dict) and pending.get("mark") == mark:
+        return
+    if src == "camera":
+        fname: str = f"camera_{uuid.uuid4().hex[:8]}.png"
+    else:
+        fname = f"uploaded_{getattr(uploaded, 'name', 'file') or 'file'}"
+    with open(fname, "wb") as f:
+        f.write(uploaded.getbuffer())
+    st.session_state.pending_attach = {
+        "kind": kind,
+        "name": fname,
+        "path": fname,
+        "mark": mark,
+    }
+    st.rerun()
+
+
 def render_assistant_response(user_text: str) -> None:
-    """Append user text and render the assistant reply with file downloads.
+    """Append user text (plus any attachment) and render the assistant reply.
 
     Args:
         user_text: The user's prompt text.
     """
-    st.session_state.messages.append({"role": "user", "content": user_text})
+    attach = st.session_state.pop("pending_attach", None)
+    force_search: bool = bool(st.session_state.get("force_search", False))
+    st.session_state.force_search = False
+
+    send_text: str = user_text
+    image_path: Any = None
+    if isinstance(attach, dict):
+        kind: str = str(attach.get("kind", ""))
+        if kind == "pdf":
+            send_text += (
+                f"\n\n[Attached PDF: {attach.get('path', '')}. "
+                "Use the read_pdf tool on this path if the request needs it.]"
+            )
+        elif kind == "csv":
+            send_text += (
+                f"\n\n[Attached CSV: {attach.get('path', '')}. "
+                "Use the analyze_csv tool on this path if the request needs it.]"
+            )
+        else:
+            image_path = attach.get("path")
+            send_text += (
+                f"\n\n[Attached image: {attach.get('name', 'image')}. "
+                "You cannot view images; if asked about its contents, say so "
+                "briefly and continue helping from the text.]"
+            )
+    if force_search:
+        send_text = (
+            "Use web_search to find current information before answering.\n\n"
+            + send_text
+        )
+
+    user_msg: Dict[str, Any] = {"role": "user", "content": user_text}
+    if image_path:
+        user_msg["image"] = str(image_path)
+    st.session_state.messages.append(user_msg)
     with st.chat_message("user"):
+        if image_path and os.path.exists(str(image_path)):
+            st.image(str(image_path), width=280)
         st.markdown(user_text)
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                output: str = run_agent(user_text)
+                output: str = run_agent(send_text)
                 st.markdown(output)
                 st.session_state.messages.append({"role": "assistant", "content": output})
                 persist()
@@ -388,14 +567,6 @@ def tier_status(tier_name: str) -> tuple:
     return ("offline", "○")
 
 
-QUICK_ACTIONS: List[tuple] = [
-    ("Space Presentation", "Create a 5-slide presentation on space exploration"),
-    ("Professor Email", "Draft a professional email to my professor asking for a deadline extension"),
-    ("Latest AI News", "Search for the latest AI news and summarize the top 3 stories"),
-    ("Cow Paragraph", "Write a paragraph on the cow"),
-]
-
-
 # ============== SESSION STATE ==============
 if "chats" not in st.session_state or "messages" not in st.session_state:
     stored = load_store()
@@ -404,6 +575,12 @@ if "chats" not in st.session_state or "messages" not in st.session_state:
 
 if "memory_notes" not in st.session_state:
     st.session_state.memory_notes = load_memory_notes()
+
+if "pending_attach" not in st.session_state:
+    st.session_state.pending_attach = None
+
+if "force_search" not in st.session_state:
+    st.session_state.force_search = False
 
 if "active_tier" not in st.session_state:
     with st.spinner("Initializing..."):
@@ -473,68 +650,38 @@ with st.sidebar:
             st.session_state.memory_notes = notes_in
             st.toast("Memory saved")
 
-    st.markdown('<p class="section-label">Upload Files</p>', unsafe_allow_html=True)
+    with st.expander("Files & stats", expanded=False):
+        st.markdown('<p class="section-label">Generated Files</p>', unsafe_allow_html=True)
+        all_files: List[str] = sorted(glob.glob("pptx_*.pptx") + glob.glob("docx_*.docx"))
+        if all_files:
+            for fname in all_files[-5:]:
+                st.markdown(f'<div class="file-card">{fname}</div>', unsafe_allow_html=True)
+                with open(fname, "rb") as f:
+                    st.download_button("Get file", f, file_name=fname, key=f"side-dl-{fname}")
+        else:
+            st.markdown(
+                '<p style="color: #555; font-size: 12px; text-align: center;">No files yet</p>',
+                unsafe_allow_html=True,
+            )
 
-    uploaded_file = st.file_uploader(
-        "Upload a PDF or CSV", type=["pdf", "csv"], label_visibility="collapsed"
-    )
-
-    if uploaded_file:
-        file_path: str = f"uploaded_{uploaded_file.name}"
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        is_pdf: bool = uploaded_file.name.lower().endswith(".pdf")
-        button_label: str = "Summarize PDF" if is_pdf else "Analyze CSV"
-        if st.button(button_label, key="process-file"):
-            with st.spinner("Reading..." if is_pdf else "Analyzing..."):
-                try:
-                    instruction: str = (
-                        f"Read and summarize the PDF at {file_path}"
-                        if is_pdf
-                        else f"Analyze the CSV at {file_path}"
-                    )
-                    answer: str = run_agent(instruction)
-                    action_label: str = "Summarize" if is_pdf else "Analyze"
-                    st.session_state.messages.append(
-                        {"role": "user", "content": f"{action_label}: {uploaded_file.name}"}
-                    )
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                    persist()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-    st.markdown('<p class="section-label">Generated Files</p>', unsafe_allow_html=True)
-    all_files: List[str] = sorted(glob.glob("pptx_*.pptx") + glob.glob("docx_*.docx"))
-    if all_files:
-        for fname in all_files[-5:]:
-            st.markdown(f'<div class="file-card">{fname}</div>', unsafe_allow_html=True)
-            with open(fname, "rb") as f:
-                st.download_button("Get file", f, file_name=fname, key=f"side-dl-{fname}")
-    else:
+        st.markdown('<p class="section-label">Stats</p>', unsafe_allow_html=True)
         st.markdown(
-            '<p style="color: #555; font-size: 12px; text-align: center;">No files yet</p>',
+            '<div class="stats-box">'
+            '<div style="display: flex; justify-content: space-between; margin-bottom: 10px;">'
+            '<span style="color: #8b8b9e; font-size: 13px;">Messages</span>'
+            f'<span style="color: #f1f1f4; font-weight: 600;">{len(st.session_state.messages)}</span>'
+            "</div>"
+            '<div style="display: flex; justify-content: space-between; margin-bottom: 10px;">'
+            '<span style="color: #8b8b9e; font-size: 13px;">Files</span>'
+            f'<span style="color: #f1f1f4; font-weight: 600;">{len(all_files)}</span>'
+            "</div>"
+            '<div style="display: flex; justify-content: space-between;">'
+            '<span style="color: #8b8b9e; font-size: 13px;">Active</span>'
+            f'<span style="color: #6366f1; font-weight: 600; font-size: 12px;">{model_name}</span>'
+            "</div>"
+            "</div>",
             unsafe_allow_html=True,
         )
-
-    st.markdown('<p class="section-label">Stats</p>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="stats-box">'
-        '<div style="display: flex; justify-content: space-between; margin-bottom: 10px;">'
-        '<span style="color: #8b8b9e; font-size: 13px;">Messages</span>'
-        f'<span style="color: #f1f1f4; font-weight: 600;">{len(st.session_state.messages)}</span>'
-        "</div>"
-        '<div style="display: flex; justify-content: space-between; margin-bottom: 10px;">'
-        '<span style="color: #8b8b9e; font-size: 13px;">Files</span>'
-        f'<span style="color: #f1f1f4; font-weight: 600;">{len(all_files)}</span>'
-        "</div>"
-        '<div style="display: flex; justify-content: space-between;">'
-        '<span style="color: #8b8b9e; font-size: 13px;">Active</span>'
-        f'<span style="color: #6366f1; font-weight: 600; font-size: 12px;">{model_name}</span>'
-        "</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
 
 
 # ============== MAIN ==============
@@ -544,17 +691,64 @@ if not st.session_state.messages:
         "<p>Presentations, documents, research, data analysis — just ask.</p></div>",
         unsafe_allow_html=True,
     )
-    quick_cols = st.columns(4)
-    for col, (label, full_prompt) in zip(quick_cols, QUICK_ACTIONS):
-        with col:
-            if st.button(label, key=f"quick-{label}"):
-                render_assistant_response(full_prompt)
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
+        if msg.get("image") and os.path.exists(str(msg["image"])):
+            st.image(str(msg["image"]), width=280)
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Type your message..."):
+pending = st.session_state.get("pending_attach")
+if isinstance(pending, dict):
+    chip_text, chip_x = st.columns([5, 1])
+    chip_text.markdown(
+        f'<div class="attach-chip">Attached: {html.escape(str(pending.get("name", "file")))}</div>',
+        unsafe_allow_html=True,
+    )
+    if chip_x.button("x", key="rm-attach"):
+        st.session_state.pending_attach = None
+        st.rerun()
+elif st.session_state.get("force_search"):
+    st.caption("Web search will be used for the next message.")
+
+plus_col, input_col = st.columns([1, 11], vertical_alignment="center")
+with plus_col:
+    with st.popover("+"):
+        if "attach_menu" not in st.session_state:
+            st.session_state.attach_menu = None
+        menu: Any = st.session_state.attach_menu
+        if st.button("Add files or photos", key="m-files"):
+            st.session_state.attach_menu = None if menu == "files" else "files"
+            st.rerun()
+        if st.session_state.attach_menu == "files":
+            doc = st.file_uploader(
+                "Add files or photos",
+                type=["pdf", "csv", "png", "jpg", "jpeg"],
+                label_visibility="collapsed",
+            )
+            if doc is not None:
+                ext: str = str(doc.name).lower().rsplit(".", 1)[-1]
+                if ext == "pdf":
+                    doc_kind: str = "pdf"
+                elif ext == "csv":
+                    doc_kind = "csv"
+                else:
+                    doc_kind = "image"
+                _stage_upload(doc, doc_kind, "menu")
+        if st.button("Take a screenshot", key="m-cam"):
+            st.session_state.attach_menu = None if menu == "camera" else "camera"
+            st.rerun()
+        if st.session_state.attach_menu == "camera":
+            shot = st.camera_input("Take a screenshot", label_visibility="collapsed")
+            _stage_upload(shot, "image", "camera")
+        search_on: bool = bool(st.session_state.get("force_search", False))
+        if st.button(("✓ " if search_on else "") + "Web search", key="m-search"):
+            st.session_state.force_search = not search_on
+            st.rerun()
+with input_col:
+    prompt = st.chat_input("Type your message...")
+
+if prompt:
     render_assistant_response(prompt)
 
     st.markdown(
