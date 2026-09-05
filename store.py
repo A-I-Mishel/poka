@@ -22,7 +22,7 @@ def _ensure_dir() -> None:
 
 
 def _clean_messages(messages: Any) -> List[Dict[str, str]]:
-    """Validate and trim a message list to plain role/content dicts."""
+    """Validate and trim a message list to plain role/content dicts (keeps time)."""
     cleaned: List[Dict[str, str]] = []
     if isinstance(messages, list):
         for m in messages:
@@ -31,7 +31,10 @@ def _clean_messages(messages: Any) -> List[Dict[str, str]]:
                 and m.get("role") in ("user", "assistant")
                 and isinstance(m.get("content"), str)
             ):
-                cleaned.append({"role": m["role"], "content": m["content"]})
+                entry: Dict[str, str] = {"role": m["role"], "content": m["content"]}
+                if isinstance(m.get("time"), str):
+                    entry["time"] = m["time"]
+                cleaned.append(entry)
     return cleaned[-MAX_MSGS_PER_CHAT:]
 
 

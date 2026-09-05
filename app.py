@@ -3,7 +3,9 @@
 import glob
 import html
 import os
+import re
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List
 
 import streamlit as st
@@ -798,6 +800,34 @@ div[data-testid="stCameraInput"] {
 }
 
 
+/* Typing indicator (three bouncing dots) */
+.typing-indicator {
+    display: flex;
+    gap: 6px;
+    padding: 16px 20px;
+    align-items: center;
+}
+.typing-indicator span {
+    width: 8px;
+    height: 8px;
+    background: #6366f1;
+    border-radius: 50%;
+    animation: bounce 1.4s infinite ease-in-out both;
+}
+.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+@keyframes bounce {
+    0%, 80%, 100% { transform: scale(0); }
+    40% { transform: scale(1); }
+}
+mark.search-hit {
+    background: rgba(99, 102, 241, 0.45);
+    color: inherit;
+    border-radius: 3px;
+    padding: 0 2px;
+}
+
+
 /* ============================================================
    PAGE BOTTOM SPACE
    ============================================================ */
@@ -952,6 +982,59 @@ def _stage_upload(
     st.rerun()
 
 
+def _format_time(iso_str: str) -> str:
+    """Format an ISO timestamp as a short clock time, "" when missing."""
+    try:
+        return datetime.fromisoformat(str(iso_str)).strftime("%I:%M %p")
+    except Exception:
+        return ""
+
+
+def _highlight_query(text: str, query: str) -> str:
+    """Wrap case-insensitive query matches in <mark>, outside code fences."""
+    if not query.strip():
+        return text
+    parts = re.split(r"(```.*?```)", text, flags=re.DOTALL)
+    out: List[str] = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1 or not part.strip():
+            out.append(part)
+            continue
+        out.append(
+            re.sub(
+                re.escape(query),
+                lambda m: f'<mark class="search-hit">{m.group(0)}</mark>',
+                part,
+                flags=re.IGNORECASE,
+            )
+        )
+    return "".join(out)
+
+
+def _export_chat_to_markdown(messages: List[Dict[str, Any]]) -> str:
+    """Render the conversation as a Markdown document for download."""
+    lines: List[str] = [
+        "# Poka Chat Export\n",
+        f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n",
+    ]
+    for m in messages:
+        role = "You" if m.get("role") == "user" else "Poka"
+        time_str = _format_time(str(m.get("time", "")))
+        stamp = f" — {time_str}" if time_str else ""
+        lines.append(f"## {role}{stamp}\n\n{m.get('content', '')}\n\n---\n\n")
+    return "".join(lines)
+
+
+def _show_typing() -> Any:
+    """Show the three-dot typing indicator; caller empties the box."""
+    box = st.empty()
+    box.markdown(
+        '<div class="typing-indicator"><span></span><span></span><span></span></div>',
+        unsafe_allow_html=True,
+    )
+    return box
+
+
 def render_assistant_response(
     user_text: str,
 ) -> None:
@@ -1024,6 +1107,7 @@ def render_assistant_response(
     user_msg: Dict[str, Any] = {
         "role": "user",
         "content": user_text,
+        "time": datetime.now().isoformat(),
     }
 
     if image_path:
@@ -1050,70 +1134,109 @@ def render_assistant_response(
 
     with st.chat_message("assistant"):
 
-        with st.spinner("Thinking..."):
+        typing_box = _show_typing()
 
-            try:
+        try:
 
-                output: str = run_agent(
-                    send_text
-                )
+            output: str = run_agent(
+                send_text
+            )
 
-                st.markdown(output)
+            typing_box.empty()
 
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": output,
-                    }
-                )
+            st.markdown(output)
 
-                persist()
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": output,
+                    "time": datetime.now().isoformat(),
+                }
+            )
 
-                for pptx in sorted(
-                    glob.glob("pptx_*.pptx")
-                ):
+            persist()
 
-                    with open(
-                        pptx,
-                        "rb",
-                    ) as f:
+            for pptx in sorted(
+                glob.glob("pptx_*.pptx")
+            ):
 
-                        st.download_button(
-                            f"Download {pptx}",
-                            f,
-                            file_name=pptx,
-                            key=(
-                                f"dl-pptx-"
-                                f"{pptx}-"
-                                f"{len(st.session_state.messages)}"
-                            ),
-                        )
+                with open(
+                    pptx,
+                    "rb",
+                ) as f:
 
-                for docx in sorted(
-                    glob.glob("docx_*.docx")
-                ):
+                    st.download_button(
+                        f"Download {pptx}",
+                        f,
+                        file_name=pptx,
+                        key=(
+                            f"dl-pptx-"
+                            f"{pptx}-"
+                            f"{len(st.session_state.messages)}"
+                        ),
+                    )
 
-                    with open(
-                        docx,
-                        "rb",
-                    ) as f:
+            for docx in sorted(
+                glob.glob("docx_*.docx")
+            ):
 
-                        st.download_button(
-                            f"Download {docx}",
-                            f,
-                            file_name=docx,
-                            key=(
-                                f"dl-docx-"
-                                f"{docx}-"
-                                f"{len(st.session_state.messages)}"
-                            ),
-                        )
+                with open(
+                    docx,
+                    "rb",
+                ) as f:
 
-            except Exception as e:
+                    st.download_button(
+                        f"Download {docx}",
+                        f,
+                        file_name=docx,
+                        key=(
+                            f"dl-docx-"
+                            f"{docx}-"
+                            f"{len(st.session_state.messages)}"
+                        ),
+                    )
+
+        except Exception as e:
+
+                typing_box.empty()
+
+                st.session_state.last_failed = send_text
 
                 st.error(
                     f"Error: {e}"
                 )
+
+                if st.button(
+                    "Retry",
+                    key=f"retry-{len(st.session_state.messages)}",
+                ):
+                    st.session_state.do_retry = True
+                    st.rerun()
+
+
+def _retry_last() -> None:
+    """Re-run the last failed request without duplicating the user message."""
+    send_text = st.session_state.pop("last_failed", None)
+    if not send_text:
+        return
+    with st.chat_message("assistant"):
+        typing_box = _show_typing()
+        try:
+            output: str = run_agent(str(send_text))
+            typing_box.empty()
+            st.markdown(output)
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": output,
+                    "time": datetime.now().isoformat(),
+                }
+            )
+            persist()
+        except Exception as e:
+            typing_box.empty()
+            st.session_state.last_failed = send_text
+            st.error(f"Error: {e}")
 
 
 def archive_current_chat() -> None:
@@ -1205,6 +1328,9 @@ if "pending_attach" not in st.session_state:
 
 if "force_search" not in st.session_state:
     st.session_state.force_search = False
+
+if "confirm_clean" not in st.session_state:
+    st.session_state.confirm_clean = False
 
 
 if "attach_menu" not in st.session_state:
@@ -1314,6 +1440,20 @@ with st.sidebar:
         st.rerun()
 
 
+    search_q: str = st.text_input(
+        "Search chat",
+        placeholder="Find in conversation...",
+        label_visibility="collapsed",
+        key="chat-search",
+    )
+    if search_q.strip():
+        match_count: int = sum(
+            1
+            for m in st.session_state.messages
+            if search_q.lower() in str(m.get("content", "")).lower()
+        )
+        st.caption(f"{match_count} matches")
+
     if st.session_state.chats:
 
         st.markdown(
@@ -1332,24 +1472,48 @@ with st.sidebar:
                 )
             )[:34] or "Untitled"
 
-            if st.button(
-                chat_title,
-                key=f"hist-{i}",
-            ):
+            title_col, pencil_col = st.columns([4, 1])
+            with title_col:
+                if st.button(
+                    chat_title,
+                    key=f"hist-{i}",
+                ):
 
-                selected: Dict[str, Any] = (
-                    st.session_state.chats.pop(i)
+                    selected: Dict[str, Any] = (
+                        st.session_state.chats.pop(i)
+                    )
+
+                    archive_current_chat()
+
+                    st.session_state.messages = (
+                        selected["messages"]
+                    )
+
+                    persist()
+
+                    st.rerun()
+            with pencil_col:
+                if st.button("✎", key=f"rename-{i}"):
+                    st.session_state.renaming_idx = i
+                    st.rerun()
+
+            if st.session_state.get("renaming_idx") == i:
+                new_title: str = st.text_input(
+                    "Rename chat",
+                    value=str(chat.get("title", "")),
+                    key=f"rename-box-{i}",
                 )
-
-                archive_current_chat()
-
-                st.session_state.messages = (
-                    selected["messages"]
-                )
-
-                persist()
-
-                st.rerun()
+                save_col, cancel_col = st.columns(2)
+                if save_col.button("Save", key=f"rename-save-{i}"):
+                    st.session_state.chats[i]["title"] = (
+                        new_title.strip()[:38] or chat_title
+                    )
+                    st.session_state.renaming_idx = None
+                    persist()
+                    st.rerun()
+                if cancel_col.button("Cancel", key=f"rename-cancel-{i}"):
+                    st.session_state.renaming_idx = None
+                    st.rerun()
 
 
     with st.expander("Memory"):
@@ -1476,6 +1640,34 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
+        if st.session_state.messages:
+            st.download_button(
+                "Export chat",
+                _export_chat_to_markdown(st.session_state.messages),
+                file_name=f"poka_chat_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+                mime="text/markdown",
+                key="export-chat",
+            )
+
+        if st.button("Clean old files", key="clean-files"):
+            st.session_state.confirm_clean = True
+            st.rerun()
+        if st.session_state.get("confirm_clean"):
+            st.caption("Delete ALL generated PPTX/DOCX files?")
+            yes_col, no_col = st.columns(2)
+            if yes_col.button("Yes", key="clean-yes"):
+                for f in glob.glob("pptx_*.pptx") + glob.glob("docx_*.docx"):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+                st.session_state.confirm_clean = False
+                st.toast("Files cleaned")
+                st.rerun()
+            if no_col.button("Cancel", key="clean-no"):
+                st.session_state.confirm_clean = False
+                st.rerun()
+
 
 # ============================================================
 # MAIN
@@ -1496,6 +1688,7 @@ if not st.session_state.messages:
 
 
 # Render conversation
+search_text: str = str(st.session_state.get("chat-search", "") or "")
 for idx, msg in enumerate(st.session_state.messages):
 
     with st.chat_message(msg["role"]):
@@ -1512,8 +1705,11 @@ for idx, msg in enumerate(st.session_state.messages):
             )
 
         st.markdown(
-            msg["content"]
+            _highlight_query(str(msg.get("content", "")), search_text)
         )
+        msg_time: str = _format_time(str(msg.get("time", "")))
+        if msg_time:
+            st.caption(msg_time)
 
     if isinstance(msg, dict) and msg.get("role") == "user":
         with st.container(key=f"msgrow-{idx}"):
@@ -1525,6 +1721,9 @@ for idx, msg in enumerate(st.session_state.messages):
                 ] = old_text
                 persist()
                 st.rerun()
+
+if st.session_state.pop("do_retry", False):
+    _retry_last()
 
 
 # ============================================================
