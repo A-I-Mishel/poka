@@ -5,7 +5,7 @@ import html
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
@@ -279,50 +279,26 @@ div[data-testid="stDownloadButton"] > button:hover {
 }
 
 /* ---- composer plus menu + attachment chip ---- */
-/* ---- unified composer pill: + button joined flush to the input ---- */
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) {
-    gap: 0 !important;
-    background: #1a1a2e;
-    border: 1px solid #27273a;
-    border-radius: 16px;
-    padding-left: 2px;
-    align-items: center;
-}
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]):has(div[data-testid="stChatInput"] textarea:focus) {
-    border-color: #6366f1;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-}
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stPopover"] > button,
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) .stPopover > button {
-    width: 44px;
-    height: 44px;
+/* ---- composer + button (own small row above the input) ---- */
+div[data-testid="stPopover"] > button,
+.stPopover > button {
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
-    border: none !important;
-    background: transparent !important;
+    border: 1px solid #27273a;
+    background: #1a1a2e;
     color: #8b8b9e;
-    font-size: 22px;
+    font-size: 20px;
     line-height: 1;
     padding: 0;
-    box-shadow: none !important;
+    box-shadow: none;
 }
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stPopover"] > button:hover,
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) .stPopover > button:hover {
-    border: none !important;
-    background: rgba(99, 102, 241, 0.15) !important;
+div[data-testid="stPopover"] > button:hover,
+.stPopover > button:hover {
+    border-color: #6366f1;
+    background: rgba(99, 102, 241, 0.15);
     color: #FFFFFF;
-    box-shadow: none !important;
-}
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] textarea,
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] input {
-    background: transparent !important;
-    border: none !important;
-    border-radius: 0 !important;
-    box-shadow: none !important;
-}
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] textarea:focus,
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPopover"]) div[data-testid="stChatInput"] input:focus {
-    border: none !important;
-    box-shadow: none !important;
+    box-shadow: none;
 }
 div[data-testid="stPopoverBody"] {
     background: #1a1a2e;
@@ -473,17 +449,25 @@ def _stage_upload(uploaded: Any, kind: str, src: str) -> None:
     st.rerun()
 
 
-def render_assistant_response(user_text: str) -> None:
-    """Append user text (plus any attachment) and render the assistant reply.
+def render_assistant_response(
+    user_text: str,
+    extra_context: str = "",
+    images: Optional[List[str]] = None,
+) -> None:
+    """Append user text (plus attachments) and render the assistant reply.
 
     Args:
         user_text: The user's prompt text.
+        extra_context: Additional context (e.g. native file attachments)
+            appended to what the agent sees, but not shown in chat.
+        images: Local image paths to display in the user message.
     """
     attach = st.session_state.pop("pending_attach", None)
     force_search: bool = bool(st.session_state.get("force_search", False))
     st.session_state.force_search = False
 
-    send_text: str = user_text
+    send_text: str = user_text + extra_context
+    shown_images: List[str] = list(images or [])
     image_path: Any = None
     if isinstance(attach, dict):
         kind: str = str(attach.get("kind", ""))
@@ -504,6 +488,8 @@ def render_assistant_response(user_text: str) -> None:
                 "You cannot view images; if asked about its contents, say so "
                 "briefly and continue helping from the text.]"
             )
+    if image_path:
+        shown_images.insert(0, str(image_path))
     if force_search:
         send_text = (
             "Use web_search to find current information before answering.\n\n"
@@ -511,12 +497,13 @@ def render_assistant_response(user_text: str) -> None:
         )
 
     user_msg: Dict[str, Any] = {"role": "user", "content": user_text}
-    if image_path:
-        user_msg["image"] = str(image_path)
+    if shown_images:
+        user_msg["images"] = shown_images
     st.session_state.messages.append(user_msg)
     with st.chat_message("user"):
-        if image_path and os.path.exists(str(image_path)):
-            st.image(str(image_path), width=280)
+        for img_path in shown_images:
+            if os.path.exists(img_path):
+                st.image(img_path, width=280)
         st.markdown(user_text)
 
     with st.chat_message("assistant"):
@@ -694,8 +681,14 @@ if not st.session_state.messages:
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        if msg.get("image") and os.path.exists(str(msg["image"])):
-            st.image(str(msg["image"]), width=280)
+        msg_images: List[str] = []
+        if isinstance(msg.get("images"), list):
+            msg_images = [str(p) for p in msg["images"]]
+        elif msg.get("image"):
+            msg_images = [str(msg["image"])]
+        for img_path in msg_images:
+            if os.path.exists(img_path):
+                st.image(img_path, width=280)
         st.markdown(msg["content"])
 
 pending = st.session_state.get("pending_attach")
@@ -711,42 +704,40 @@ if isinstance(pending, dict):
 elif st.session_state.get("force_search"):
     st.caption("Web search will be used for the next message.")
 
-plus_col, input_col = st.columns([1, 11], vertical_alignment="center")
-with plus_col:
-    with st.popover("+"):
-        if "attach_menu" not in st.session_state:
-            st.session_state.attach_menu = None
-        menu: Any = st.session_state.attach_menu
-        if st.button("Add files or photos", key="m-files"):
-            st.session_state.attach_menu = None if menu == "files" else "files"
-            st.rerun()
-        if st.session_state.attach_menu == "files":
-            doc = st.file_uploader(
-                "Add files or photos",
-                type=["pdf", "csv", "png", "jpg", "jpeg"],
-                label_visibility="collapsed",
-            )
-            if doc is not None:
-                ext: str = str(doc.name).lower().rsplit(".", 1)[-1]
-                if ext == "pdf":
-                    doc_kind: str = "pdf"
-                elif ext == "csv":
-                    doc_kind = "csv"
-                else:
-                    doc_kind = "image"
-                _stage_upload(doc, doc_kind, "menu")
-        if st.button("Take a screenshot", key="m-cam"):
-            st.session_state.attach_menu = None if menu == "camera" else "camera"
-            st.rerun()
-        if st.session_state.attach_menu == "camera":
-            shot = st.camera_input("Take a screenshot", label_visibility="collapsed")
-            _stage_upload(shot, "image", "camera")
-        search_on: bool = bool(st.session_state.get("force_search", False))
-        if st.button(("✓ " if search_on else "") + "Web search", key="m-search"):
-            st.session_state.force_search = not search_on
-            st.rerun()
-with input_col:
-    prompt = st.chat_input("Type your message...")
+with st.popover("+"):
+    if "attach_menu" not in st.session_state:
+        st.session_state.attach_menu = None
+    menu: Any = st.session_state.attach_menu
+    if st.button("Add files or photos", key="m-files"):
+        st.session_state.attach_menu = None if menu == "files" else "files"
+        st.rerun()
+    if st.session_state.attach_menu == "files":
+        doc = st.file_uploader(
+            "Add files or photos",
+            type=["pdf", "csv", "png", "jpg", "jpeg"],
+            label_visibility="collapsed",
+        )
+        if doc is not None:
+            ext: str = str(doc.name).lower().rsplit(".", 1)[-1]
+            if ext == "pdf":
+                doc_kind: str = "pdf"
+            elif ext == "csv":
+                doc_kind = "csv"
+            else:
+                doc_kind = "image"
+            _stage_upload(doc, doc_kind, "menu")
+    if st.button("Take a screenshot", key="m-cam"):
+        st.session_state.attach_menu = None if menu == "camera" else "camera"
+        st.rerun()
+    if st.session_state.attach_menu == "camera":
+        shot = st.camera_input("Take a screenshot", label_visibility="collapsed")
+        _stage_upload(shot, "image", "camera")
+    search_on: bool = bool(st.session_state.get("force_search", False))
+    if st.button(("✓ " if search_on else "") + "Web search", key="m-search"):
+        st.session_state.force_search = not search_on
+        st.rerun()
+
+prompt = st.chat_input("Type your message...")
 
 if prompt:
     render_assistant_response(prompt)
