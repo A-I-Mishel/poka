@@ -1601,19 +1601,22 @@ components.html(
     const win = window.parent;
     const doc = win.document;
 
-    /* --- Enter-to-send (bound once per composer node) --- */
-    const scope = doc.querySelector(".st-key-composer");
-    if (scope && !scope.dataset.enterBound) {
-        scope.dataset.enterBound = "1";
+    /* --- Enter-to-send (rebound to the fresh input after every send,
+       since each send recreates the input with a new widget key) --- */
+    const scope = doc.querySelector(".st-key-composer")
+        || doc.querySelector('section[data-testid="stMain"]');
+    if (scope) {
         const input = scope.querySelector('div[data-testid="stTextInput"] input');
-        if (input) {
+        if (input && !input.dataset.enterBound) {
+            input.dataset.enterBound = "1";
             input.setAttribute("autocomplete", "off");
             input.setAttribute("autocapitalize", "off");
             input.setAttribute("autocorrect", "off");
             input.addEventListener("keydown", function (e) {
                 if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
                     e.preventDefault();
-                    const btns = scope.querySelectorAll("button");
+                    const box = input.closest(".st-key-composer") || scope;
+                    const btns = box.querySelectorAll("button");
                     const send = btns[btns.length - 1];
                     if (send) send.click();
                 }
