@@ -1,0 +1,69 @@
+POKA - BUILD LOG (everything done till now)
+===========================================
+Project: C:\Users\ASUS\smart task  |  Repo: github.com/A-I-Mishel/poka (main)
+Live at: Streamlit Cloud (.streamlit.app link) + http://localhost:8501
+
+1. BUILT THE APP FROM SUPER-PROMPT
+   - Full project scaffold: config.py, agent.py, app.py, requirements.txt,
+     .env, .gitignore, tools/ (search, pptx, docx, pdf, data), memory/.
+   - Fixed spec bugs: data_tool f-string syntax error, missing
+     langchain-community/langchain-core pins, placeholder-safe config.
+
+2. API KEYS + 4-TIER MODEL CASCADE
+   - Saved OPENCODE_API_KEY + GEMINI_API_KEY to local .env (gitignored).
+   - Cascade order: Muse Spark 1.3 -> Nemotron 3.5 Lightning (OpenCode free)
+     -> Gemini 3.6 Flash -> Gemini 3.5 Flash.
+   - Tier history: started Muse/Gemini-only; Muse 500s server-side, Gemini
+     free quota is 20 req/day/model (burned through in testing), Ling 3.0
+     added then died (503), Laguna delisted, DeepSeek unavailable.
+     Nemotron 3.5 Lightning (3s, tool-capable) is the current working horse.
+   - Runtime auto-fallback per message, 10-min cool-down after first failure,
+     immediate switch to next live tier, friendly quota-exhausted message.
+
+3. GEMINI THOUGHT_SIGNATURE 400 FIX
+   - Replaced LangChain AgentExecutor with a custom explicit tool loop that
+     never sends functionCall history back (tool results folded into fresh
+     human messages). Verified with live tool-call tests.
+
+4. CLOUD DEPLOY (Streamlit Community Cloud)
+   - GitHub repo wired, secrets support added (st.secrets first, .env fallback),
+     .python-version pin, consistent dependency pins after uv/pip conflicts.
+   - Cloud runs Python 3.12 (3.14 default broke pandas builds).
+   - localStorage-free; secrets via dashboard Settings -> Secrets.
+
+5. UI: CLAUDE-STYLE INDIGO DARK THEME
+   - Dark #0a0a0f theme, indigo #6366f1 accents, gradient bubbles, serif hero,
+     status badge, file cards, stats box, animations, custom scrollbar.
+   - Sidebar: brand, status badge, + New chat, chat history list, collapsible
+     Memory + Files & stats sections.
+
+6. COMPOSER EVOLUTION
+   - Custom fixed composer pill (+ button, text input, send button).
+   - Attachment menu: Add files or photos / Take a screenshot / Web search.
+   - Pending-attachment chip, force-search toggle, Enter-to-send bridge,
+     auto-scroll follower, browser-autocomplete suppression.
+
+7. MEMORY (PERSISTENT)
+   - store.py: disk-persisted chats (20 chats x 100 msgs) + open conversation,
+     auto-restored on launch. Memory notes expander injected into every prompt.
+
+8. MESSAGE ACTIONS
+   - Copy button on every bubble (hover-reveal, touch-always, clipboard+fallback).
+   - Edit pill under every user message: truncates from there, prefills
+     composer for fix-and-resend (AppTest-verified).
+
+9. DEPENDENCIES
+   - streamlit==1.63.0, langchain==0.3.0 stack, pandas, plotly, python-pptx,
+     python-docx, PyPDF2, duckduckgo-search, chromadb left OUT (no Win wheels).
+
+10. BUGFIXES ALONG THE WAY
+    - st.secrets st.error breaking set_page_config order (load_if_toml_exists).
+    - Enter handler rebinding after each send (widget key rotation).
+    - Full-file pastes silently dropping code (now verified by grep/tests).
+
+KNOWN LIMITS (external, not code bugs)
+- Muse Spark 1.3: 500s on OpenCode side. Gemini free: 20 req/day/model.
+- Free OpenCode models churn fast (delisted/break without notice).
+- Cloud free tier sleeps when idle (~1-2 min wake); disk ephemeral
+  (chats/memory persist on laptop, cloud keeps them per waking session).
+- Agent cannot view images (text note attached instead).

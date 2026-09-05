@@ -114,35 +114,3 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
 ]
-
-
-def get_llm() -> Union[ChatOpenAI, ChatGoogleGenerativeAI]:
-    """Cascade: Muse -> Nemotron -> Gemini 3.6 -> Gemini 3.5. Raises if all fail."""
-    for _name, getter in TIER_GETTERS:
-        llm = getter()
-        if llm is not None:
-            return llm
-    raise RuntimeError(
-        "No LLM available. Add OPENCODE_API_KEY or GEMINI_API_KEY to .env "
-        "(or Streamlit Secrets when deployed)"
-    )
-
-
-def get_llm_with_name() -> tuple[str, Union[ChatOpenAI, ChatGoogleGenerativeAI]]:
-    """Return (tier_name, llm) for the first available tier. Raises if none."""
-    for name, getter in TIER_GETTERS:
-        llm = getter()
-        if llm is not None:
-            return name, llm
-    raise RuntimeError(
-        "No LLM available. Add OPENCODE_API_KEY or GEMINI_API_KEY to .env "
-        "(or Streamlit Secrets when deployed)"
-    )
-
-
-# Import-safe: do not crash at import time when keys are missing (e.g. Streamlit Cloud
-# secrets not yet configured). Callers should use get_llm() / get_llm_with_name().
-try:
-    llm: Optional[Union[ChatOpenAI, ChatGoogleGenerativeAI]] = get_llm()
-except RuntimeError:
-    llm = None

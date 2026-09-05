@@ -4,7 +4,7 @@ import glob
 import html
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -396,26 +396,6 @@ div[data-testid="stDownloadButton"] > button:hover {
     border-radius: 12px;
     padding: 16px;
     border: 1px solid #27273a;
-}
-
-
-/* ============================================================
-   THINKING
-   ============================================================ */
-
-@keyframes pulse {
-    0%, 100% {
-        opacity: 1;
-    }
-
-    50% {
-        opacity: 0.4;
-    }
-}
-
-.thinking {
-    animation: pulse 1.5s infinite;
-    color: #8b8b9e;
 }
 
 
