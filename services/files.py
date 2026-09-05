@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.limits import ALLOWED_UPLOAD_EXTS, MAX_FILENAME_LEN, MAX_UPLOAD_BYTES, UPLOAD_ID_RE
-from services.storage import StorageError, user_dir
+from services.storage import StorageError, atomic_replace, path_lock, user_dir
 
 _ID_RE = re.compile(UPLOAD_ID_RE)
 _SAFE_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -57,6 +57,13 @@ class OutputMeta:
     created: float
 
 
+_WINDOWS_RESERVED = frozenset(
+    ["NUL", "CON", "PRN", "AUX"]
+    + [f"COM{i}" for i in range(1, 10)]
+    + [f"LPT{i}" for i in range(1, 10)]
+)
+
+
 def sanitize_filename(name: Any) -> str:
     """Strip directories/control chars; keep a safe basename or 'file'."""
     text = str(name or "").replace("\x00", "").strip()
@@ -64,6 +71,9 @@ def sanitize_filename(name: Any) -> str:
     text = _SAFE_CHARS_RE.sub("_", text).strip(" .")
     if not text:
         return "file"
+    stem = text.split(".", 1)[0].upper()
+    if stem in _WINDOWS_RESERVED:
+        text = f"_{text}"
     return text[:MAX_FILENAME_LEN]
 
 
@@ -103,8 +113,9 @@ class FileStore:
 
     def _load_registry(self, path: Path) -> Dict[str, Any]:
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with path_lock(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
             return data if isinstance(data, dict) else {}
         except FileNotFoundError:
             return {}
@@ -116,19 +127,38 @@ class FileStore:
                 pass
             return {}
 
-    def _save_registry(self, path: Path, payload: Dict[str, Any]) -> None:
-        tmp_path = path.with_name(path.name + ".tmp")
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
-            os.replace(tmp_path, path)
-        except OSError as e:
+    def _update_registry(self, path: Path, mutate: Any) -> None:
+        """Atomically read-modify-write a registry under one lock hold."""
+        with path_lock(path):
             try:
-                if tmp_path.exists():
-                    tmp_path.unlink()
-            except OSError:
-                pass
-            raise StorageError(f"Could not update file registry: {e}") from e
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                registry = data if isinstance(data, dict) else {}
+            except FileNotFoundError:
+                registry = {}
+            except (OSError, ValueError):
+                try:
+                    backup = path.with_name(
+                        f"{path.stem}.corrupt-{int(time.time())}{path.suffix}"
+                    )
+                    os.replace(path, backup)
+                except OSError:
+                    pass
+                registry = {}
+            mutate(registry)
+            token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+            tmp_path = path.with_name(f"{path.name}.{token}.tmp")
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(registry, f, ensure_ascii=False)
+                atomic_replace(tmp_path, path)
+            except OSError as e:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
+                raise StorageError(f"Could not update file registry: {e}") from e
 
     # -- uploads --------------------------------------------------
     def validate_upload(self, data: bytes, filename: str) -> str:
@@ -178,9 +208,10 @@ class FileStore:
             size=len(data),
             created=time.time(),
         )
-        registry = self._load_registry(self.uploads_registry)
-        registry[upload_id] = asdict(meta)
-        self._save_registry(self.uploads_registry, registry)
+        def _add_upload(registry: Dict[str, Any]) -> None:
+            registry[upload_id] = asdict(meta)
+
+        self._update_registry(self.uploads_registry, _add_upload)
         return meta
 
     def get_upload(self, upload_id: Any) -> Optional[UploadMeta]:
@@ -232,10 +263,17 @@ class FileStore:
             size=len(data),
             created=time.time(),
         )
-        registry = self._load_registry(self.outputs_registry)
-        registry[file_id] = asdict(meta)
-        self._save_registry(self.outputs_registry, registry)
+        def _add_output(registry: Dict[str, Any]) -> None:
+            registry[file_id] = asdict(meta)
+
+        self._update_registry(self.outputs_registry, _add_output)
         return meta
+
+    def _drop_output_record(self, file_id: str) -> None:
+        def _drop(registry: Dict[str, Any]) -> None:
+            registry.pop(file_id, None)
+
+        self._update_registry(self.outputs_registry, _drop)
 
     def list_outputs(self) -> List[OutputMeta]:
         """List this user's outputs, newest first."""
@@ -292,10 +330,8 @@ class FileStore:
                     candidate.unlink()
             except OSError:
                 return False
-        registry = self._load_registry(self.outputs_registry)
-        registry.pop(meta.id, None)
         try:
-            self._save_registry(self.outputs_registry, registry)
+            self._drop_output_record(meta.id)
         except StorageError:
             return False
         return True

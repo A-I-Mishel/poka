@@ -316,6 +316,227 @@ def test_legacy_migration_imports_once(data_dir, tmp_path):
     assert len(data2["chats"]) == 1
 
 
+def test_env_identity_override(monkeypatch):
+    from services.identity import get_current_user
+
+    monkeypatch.setenv("POKA_USER_ID", "operator-1")
+    ident = get_current_user()
+    assert ident.id == "operator-1" and ident.source == "env"
+
+
+def test_symlink_upload_cannot_escape(data_dir):
+    outside = data_dir.parent / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    store = FileStore("user-a")
+    meta = store.save_upload(_pdf_bytes(), "doc.pdf")
+    stored_path = store.uploads_dir / meta.stored_name
+    stored_path.unlink()
+    try:
+        stored_path.symlink_to(outside)
+    except OSError as e:
+        pytest.skip(f"symlinks need privilege on this machine: {e}")
+    assert store.resolve_upload(meta.id) is None
+
+
+def test_symlink_user_dir_rejected(data_dir):
+    import services.storage as storage_mod
+
+    outside = data_dir.parent / "evil_target"
+    outside.mkdir(exist_ok=True)
+    link = storage_mod.data_root() / "users" / "evil"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as e:
+        pytest.skip(f"symlinks need privilege on this machine: {e}")
+    with pytest.raises(StorageError):
+        storage_mod.user_dir("evil")
+
+
+def test_adversarial_filenames(data_dir):
+    store = FileStore("user-a")
+    with pytest.raises(FileValidationError):
+        store.save_upload(_pdf_bytes(), "x.pdf.exe")
+    with pytest.raises(FileValidationError):
+        store.save_upload(_pdf_bytes(), "noextension")
+    # Null bytes are stripped; Windows-reserved stems are neutralized.
+    meta = store.save_upload(_pdf_bytes(), "nul\x00.pdf")
+    assert "_nul.pdf" in meta.stored_name
+    assert store.resolve_upload(meta.id) is not None
+    meta = store.save_upload(_pdf_bytes(), "  spaced name.pdf  ")
+    assert meta.ext == "pdf"
+    assert "/" not in meta.stored_name and "\\" not in meta.stored_name
+
+
+def test_concurrent_saves_stay_valid(data_dir):
+    import concurrent.futures as cf
+
+    store = UserStore("user-a")
+    vault = FileStore("user-a")
+
+    def worker(n):
+        store.save_chats([{"title": f"c{n}", "messages": []}], [])
+        vault.register_output(f"f{n}.pptx", b"BYTES", "pptx")
+
+    with cf.ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(worker, range(8)))
+    data, warnings = store.load_chats()
+    assert isinstance(data, dict) and isinstance(data.get("chats"), list)
+    assert len(vault.list_outputs()) == 8
+
+
+def test_missing_directories_recreated(data_dir):
+    import shutil
+
+    shutil.rmtree(data_dir, ignore_errors=True)
+    UserStore("user-a").save_chats([], [{"role": "user", "content": "hi"}])
+    data, _ = UserStore("user-a").load_chats()
+    assert data["current"] and data["current"][0]["content"] == "hi"
+
+
+def test_generation_failure_is_structured(data_dir, monkeypatch):
+    import tools.pptx_tool as pptx_tool
+    import tools.docx_tool as docx_tool
+
+    class Boom:
+        def __init__(self, *a, **k):
+            raise RuntimeError("lib broken")
+
+    monkeypatch.setattr(pptx_tool, "Presentation", Boom)
+    monkeypatch.setattr(docx_tool, "Document", Boom)
+    ctx.set_current_user_id("user-a")
+    assert pptx_tool.create_pptx.invoke(
+        {"topic": "T", "content": "S1\n- a"}
+    ).startswith("STATUS=FAILED")
+    assert docx_tool.create_docx.invoke(
+        {"title": "T", "content": "Hello"}
+    ).startswith("STATUS=FAILED")
+
+
+def test_cooldown_shared_by_classify_and_answer():
+    calls = {"bad": 0}
+
+    def bad_getter():
+        calls["bad"] += 1
+        raise ConnectionError("down")
+
+    class CatLLM:
+        def invoke(self, messages):
+            class R:
+                content = "simple"
+
+            return R()
+
+    def good_getter():
+        return CatLLM()
+
+    out = agent.answer_with_fallback(
+        "hi",
+        tiers=[("bad", bad_getter), ("good", good_getter)],
+        raw_messages=[{"role": "user", "content": "hi"}],
+    )
+    assert out["task_type"] == "simple"
+    assert calls["bad"] == 1, calls
+
+
+def test_probe_respects_cooldown(monkeypatch):
+    calls = {"bad": 0}
+
+    def bad_getter():
+        calls["bad"] += 1
+        raise ConnectionError("down")
+
+    class HiLLM:
+        def invoke(self, messages):
+            class R:
+                content = "hi"
+
+            return R()
+
+    monkeypatch.setattr(
+        agent,
+        "TIER_AGENT_GETTERS",
+        [("bad", bad_getter), ("good", lambda: HiLLM())],
+    )
+    agent._record_tier_failure("bad")
+    assert agent.probe_live_tier(timeout=5) == "good"
+    assert calls["bad"] == 0
+
+
+def test_forced_search_off_calls_nothing(monkeypatch):
+    seen = []
+
+    class SearchStub:
+        name = "web_search"
+
+        def invoke(self, args):
+            seen.append(args)
+            return "x"
+
+    monkeypatch.setitem(agent.TOOL_MAP, "web_search", SearchStub())
+    out = agent.run_tool_loop(_NoToolLLM(), "tell me news", [], force_web_search=False)
+    assert seen == [] and out == "done"
+
+
+def test_single_input_reaches_model_once(monkeypatch):
+    import services.identity as identity
+
+    monkeypatch.setattr(identity, "get_current_user", lambda: identity.UserIdentity(id="u1", email=None, source="env"))
+    captured = {}
+
+    def fake_answer(user_input, chat_history=None, **kwargs):
+        captured["input"] = user_input
+        captured["history"] = list(chat_history or [])
+        return {"output": "ok", "active_tier": "T", "task_type": "simple"}
+
+    monkeypatch.setattr(agent, "answer_with_fallback", fake_answer)
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=120)
+    assert not at.exception
+    at.text_input(key="composer_input_0").set_value("unique-phrase-xyz").run(timeout=60)
+    at.button(key="composer_send").click().run(timeout=120)
+    assert not at.exception, f"send failed: {at.exception}"
+    assert captured["input"] == "unique-phrase-xyz"
+    for m in captured["history"]:
+        assert getattr(m, "content", "") != "unique-phrase-xyz"
+
+
+def test_attachment_send_uses_id_once(monkeypatch):
+    import services.identity as identity
+
+    monkeypatch.setattr(identity, "get_current_user", lambda: identity.UserIdentity(id="u1", email=None, source="env"))
+    captured = {}
+
+    def fake_answer(user_input, chat_history=None, **kwargs):
+        captured["input"] = user_input
+        return {"output": "ok", "active_tier": "T", "task_type": "research"}
+
+    monkeypatch.setattr(agent, "answer_with_fallback", fake_answer)
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=120)
+    assert not at.exception
+    meta = FileStore("u1").save_upload(_pdf_bytes(), "doc.pdf")
+    at.session_state.pending_attach = {
+        "upload_id": meta.id,
+        "kind": "pdf",
+        "name": "doc.pdf",
+        "mark": ["t"],
+    }
+    at.run(timeout=60)
+    at.text_input(key="composer_input_0").set_value("summarize").run(timeout=60)
+    at.button(key="composer_send").click().run(timeout=120)
+    assert not at.exception, f"send failed: {at.exception}"
+    # The ID appears once as human-readable text and once inside the
+    # explicit tool-call hint; the attachment itself is referenced once.
+    assert captured["input"].count(f'upload_id="{meta.id}"') == 1
+    users = [m for m in at.session_state.messages if m["role"] == "user"]
+    assert users[-1]["attachments"] == [{"id": meta.id, "kind": "pdf", "name": "doc.pdf"}]
+
+
 def test_corrupt_storage_recovered_with_warning(data_dir):
     store = UserStore("user-a")
     store.chats_path.parent.mkdir(parents=True, exist_ok=True)

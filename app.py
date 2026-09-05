@@ -5,7 +5,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -936,11 +936,20 @@ def build_chat_history(
     return history
 
 
-def run_agent(user_input: str) -> str:
-    """Answer via the tool loop."""
+def run_agent(
+    user_input: str,
+    history: Optional[List[Any]] = None,
+    raw_messages: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Answer via the tool loop.
+
+    The current input must reach the model exactly once, so callers that
+    already appended it pass pre-append history explicitly. Defaults build
+    from the session for flows that append after answering.
+    """
     result: Dict[str, Any] = answer_with_fallback(
         user_input,
-        build_chat_history(
+        history if history is not None else build_chat_history(
             st.session_state.messages
         ),
         first=st.session_state.get("active_tier"),
@@ -948,9 +957,11 @@ def run_agent(user_input: str) -> str:
             "memory_notes",
             "",
         ),
-        raw_messages=[
-            dict(m) for m in st.session_state.messages if isinstance(m, dict)
-        ],
+        raw_messages=(
+            raw_messages if raw_messages is not None else [
+                dict(m) for m in st.session_state.messages if isinstance(m, dict)
+            ]
+        ),
         deep_mode=bool(st.session_state.get("deep_mode", False)),
         force_web_search=bool(st.session_state.get("force_search", False)),
     )
@@ -1162,6 +1173,11 @@ def render_assistant_response(
     if image_path:
         user_msg["image"] = str(image_path)
 
+    prior_history = build_chat_history(st.session_state.messages)
+    prior_raw: List[Dict[str, Any]] = [
+        dict(m) for m in st.session_state.messages if isinstance(m, dict)
+    ]
+
     st.session_state.messages.append(
         user_msg
     )
@@ -1190,7 +1206,9 @@ def render_assistant_response(
             request_started: float = time.time()
 
             output: str = run_agent(
-                send_text
+                send_text,
+                history=prior_history,
+                raw_messages=prior_raw,
             )
 
             typing_box.empty()
@@ -1248,10 +1266,19 @@ def _retry_last() -> None:
     send_text = st.session_state.pop("last_failed", None)
     if not send_text:
         return
+    prior = list(st.session_state.messages)
+    retry_history = build_chat_history(prior[:-1] if prior else [])
+    retry_raw: List[Dict[str, Any]] = [
+        dict(m) for m in (prior[:-1] if prior else []) if isinstance(m, dict)
+    ]
     with st.chat_message("assistant"):
         typing_box = _show_typing()
         try:
-            output: str = run_agent(str(send_text))
+            output: str = run_agent(
+                str(send_text),
+                history=retry_history,
+                raw_messages=retry_raw,
+            )
             typing_box.empty()
             st.markdown(output)
             st.session_state.messages.append(

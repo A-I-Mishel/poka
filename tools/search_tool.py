@@ -37,7 +37,8 @@ def web_search(query: str) -> str:
     except Exception as e:
         logger.warning(f"Search failed: {e}")
         return (
-            "Web search is temporarily unavailable (rate-limited). "
+            "STATUS=DEGRADED tool=web_search: web search is temporarily "
+            "unavailable (rate-limited). "
             "I will answer from my training knowledge instead. "
             f"Your query was: {query}"
         )

@@ -40,9 +40,9 @@ def create_docx(title: str, content: str) -> str:
                 meta = FileStore(user_id).register_output(filename, data, "docx")
                 return f"Document saved as {meta.display_name} (file ID: {meta.id})"
             except StorageError as e:
-                return f"Error saving document: {e}"
+                return f"STATUS=FAILED tool=create_docx: {e}"
         with open(filename, "wb") as f:
             f.write(data)
         return f"Document saved as {filename}"
     except Exception as e:
-        return f"Error creating document: {str(e)}"
+        return f"STATUS=FAILED tool=create_docx: {str(e)}"

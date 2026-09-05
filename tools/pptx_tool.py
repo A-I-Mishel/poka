@@ -73,9 +73,9 @@ def create_pptx(topic: str, content: str) -> str:
                 meta = FileStore(user_id).register_output(filename, data, "pptx")
                 return f"Presentation saved as {meta.display_name} (file ID: {meta.id})"
             except StorageError as e:
-                return f"Error saving presentation: {e}"
+                return f"STATUS=FAILED tool=create_pptx: {e}"
         with open(filename, "wb") as f:
             f.write(data)
         return f"Presentation saved as {filename}"
     except Exception as e:
-        return f"Error creating presentation: {str(e)}"
+        return f"STATUS=FAILED tool=create_pptx: {str(e)}"

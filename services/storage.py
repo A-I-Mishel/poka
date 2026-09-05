@@ -11,12 +11,15 @@ files are quarantined next to the original and reported as warnings
 instead of silently resetting user data.
 """
 
+import contextlib
 import json
 import os
 import re
+import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 MAX_STORED_CHATS: int = 20
 MAX_MSGS_PER_CHAT: int = 100
@@ -55,11 +58,52 @@ def user_dir(user_id: str) -> Path:
     return candidate
 
 
+def _tmp_path(path: Path) -> Path:
+    """Unique tmp sibling so concurrent writers never share one file."""
+    token = f"{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}"
+    return path.with_name(f"{path.name}.{token}.tmp")
+
+
+_locks_guard = threading.Lock()
+_locks: Dict[str, threading.Lock] = {}
+
+
+@contextlib.contextmanager
+def path_lock(path: Path) -> Iterator[None]:
+    """Per-file mutex so concurrent readers/writers never race on Windows."""
+    try:
+        key = str(path.resolve())
+    except OSError:
+        key = str(path.absolute())
+    with _locks_guard:
+        lock = _locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _locks[key] = lock
+    with lock:
+        yield
+
+
+def atomic_replace(src: Path, dst: Path, attempts: int = 5) -> None:
+    """os.replace with retries: Windows AV/indexer locks briefly race us."""
+    last: Optional[Exception] = None
+    for _ in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as e:
+            last = e
+            time.sleep(0.05)
+    assert last is not None
+    raise last
+
+
 def _read_json(path: Path) -> Tuple[Any, bool]:
     """Read JSON, returning (data, was_corrupt). Missing file -> (None, False)."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f), False
+        with path_lock(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f), False
     except FileNotFoundError:
         return None, False
     except (OSError, ValueError):
@@ -72,13 +116,14 @@ def _read_json(path: Path) -> Tuple[Any, bool]:
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    """Write JSON atomically via tmp file + os.replace."""
+    """Write JSON atomically via unique-tmp + os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp")
+    tmp_path = _tmp_path(path)
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
-        os.replace(tmp_path, path)
+        with path_lock(path):
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            atomic_replace(tmp_path, path)
     except OSError as e:
         try:
             if tmp_path.exists():
@@ -190,11 +235,12 @@ class UserStore:
 
     def save_notes(self, text: str) -> None:
         self.memory_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.memory_path.with_name(self.memory_path.name + ".tmp")
+        tmp_path = _tmp_path(self.memory_path)
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(text)
-            os.replace(tmp_path, self.memory_path)
+            with path_lock(self.memory_path):
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                atomic_replace(tmp_path, self.memory_path)
         except OSError as e:
             try:
                 if tmp_path.exists():

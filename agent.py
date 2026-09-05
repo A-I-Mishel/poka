@@ -546,8 +546,9 @@ def answer_with_fallback(
         first: Tier name to try first (stick to the last working tier).
         tiers: Optional override of (name, getter) pairs.
         memory_notes: Persistent user notes for the system prompt.
-        raw_messages: Raw role/content dicts; enables memory extraction
-            and history summarization.
+        raw_messages: Raw role/content dicts of PRIOR messages only (the
+            current input is passed separately and must appear exactly
+            once); enables memory extraction and history summarization.
         deep_mode: When True, run planning + reflection (more calls).
         force_web_search: When True, execute a web search first (policy,
             not just a prompt hint).
