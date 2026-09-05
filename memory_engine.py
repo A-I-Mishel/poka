@@ -16,6 +16,23 @@ from typing import Any, Dict, List
 MEMORY_FILE: str = "structured_memory.json"
 MAX_FACTS: int = 50
 
+# Optional override so hosts (e.g. per-user stores) can relocate the file.
+# Defaults to the legacy working-directory location.
+_MEMORY_DIR: str = ""
+
+
+def set_memory_dir(directory: str) -> None:
+    """Direct structured-memory reads/writes at directory/structured_memory.json."""
+    global _MEMORY_DIR
+    _MEMORY_DIR = directory or ""
+
+
+def _memory_path() -> str:
+    """Resolve the active structured-memory file path."""
+    if _MEMORY_DIR:
+        return os.path.join(_MEMORY_DIR, "structured_memory.json")
+    return MEMORY_FILE
+
 
 def _blank_memory() -> Dict[str, Any]:
     """Return an empty memory structure."""
@@ -25,7 +42,7 @@ def _blank_memory() -> Dict[str, Any]:
 def load_structured_memory() -> Dict[str, Any]:
     """Load memory from disk, or an empty structure when missing/corrupt."""
     try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+        with open(_memory_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return _blank_memory()
@@ -42,7 +59,10 @@ def load_structured_memory() -> Dict[str, Any]:
 def save_structured_memory(mem: Dict[str, Any]) -> None:
     """Save memory to disk. Never raises (storage must not break chat)."""
     try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        directory = os.path.dirname(_memory_path())
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(_memory_path(), "w", encoding="utf-8") as f:
             json.dump(mem, f, indent=2, ensure_ascii=False)
     except OSError:
         pass

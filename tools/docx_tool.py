@@ -1,6 +1,11 @@
+import io
 import uuid
 from langchain.tools import tool
 from docx import Document
+
+from services.context import get_current_user_id
+from services.files import FileStore
+from services.storage import StorageError
 
 
 @tool
@@ -16,7 +21,7 @@ def create_docx(title: str, content: str) -> str:
         content: Body text; each newline-separated line becomes a paragraph.
 
     Returns:
-        Filename of the saved document.
+        Filename of the saved document (plus its download ID).
     """
     try:
         doc: Document = Document()
@@ -25,7 +30,19 @@ def create_docx(title: str, content: str) -> str:
             if paragraph.strip():
                 doc.add_paragraph(paragraph.strip())
         filename: str = f"docx_{uuid.uuid4().hex[:8]}.docx"
-        doc.save(filename)
+        buf = io.BytesIO()
+        doc.save(buf)
+        data: bytes = buf.getvalue()
+
+        user_id = get_current_user_id()
+        if user_id:
+            try:
+                meta = FileStore(user_id).register_output(filename, data, "docx")
+                return f"Document saved as {meta.display_name} (file ID: {meta.id})"
+            except StorageError as e:
+                return f"Error saving document: {e}"
+        with open(filename, "wb") as f:
+            f.write(data)
         return f"Document saved as {filename}"
     except Exception as e:
         return f"Error creating document: {str(e)}"

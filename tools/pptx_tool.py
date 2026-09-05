@@ -1,7 +1,12 @@
+import io
 import uuid
 from langchain.tools import tool
 from pptx import Presentation
 from pptx.util import Inches
+
+from services.context import get_current_user_id
+from services.files import FileStore
+from services.storage import StorageError
 
 
 @tool
@@ -18,7 +23,7 @@ def create_pptx(topic: str, content: str) -> str:
             line is the slide title, remaining lines are bullet points.
 
     Returns:
-        Filename of the saved presentation.
+        Filename of the saved presentation (plus its download ID).
     """
     try:
         prs: Presentation = Presentation()
@@ -58,7 +63,19 @@ def create_pptx(topic: str, content: str) -> str:
                     p.level = 0
 
         filename: str = f"pptx_{uuid.uuid4().hex[:8]}.pptx"
-        prs.save(filename)
+        buf = io.BytesIO()
+        prs.save(buf)
+        data: bytes = buf.getvalue()
+
+        user_id = get_current_user_id()
+        if user_id:
+            try:
+                meta = FileStore(user_id).register_output(filename, data, "pptx")
+                return f"Presentation saved as {meta.display_name} (file ID: {meta.id})"
+            except StorageError as e:
+                return f"Error saving presentation: {e}"
+        with open(filename, "wb") as f:
+            f.write(data)
         return f"Presentation saved as {filename}"
     except Exception as e:
         return f"Error creating presentation: {str(e)}"

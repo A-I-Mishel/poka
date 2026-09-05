@@ -1,10 +1,9 @@
 """Streamlit UI for Poka -- indigo dark theme, no emojis."""
 
-import glob
 import html
 import os
 import re
-import uuid
+import time
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -12,8 +11,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent import answer_with_fallback, probe_live_tier
-from store import load_memory_notes, load_store, save_memory_notes, save_store
+from agent import answer_with_fallback
+from services.context import set_current_user_id
+from services.files import FileStore, FileValidationError
+from services.identity import get_current_user
+from services.storage import StorageError, UserStore
+import memory_engine
 
 
 st.set_page_config(
@@ -21,6 +24,37 @@ st.set_page_config(
     page_icon="*",
     layout="centered",
 )
+
+
+# ============== REQUEST IDENTITY (set fresh on every run) ==============
+try:
+    _identity = get_current_user()
+    set_current_user_id(_identity.id)
+    _USER_ID: str = _identity.id
+except Exception:
+    set_current_user_id(None)
+    _USER_ID = ""
+
+
+def _user_store() -> UserStore:
+    """Return the storage bound to the current request user."""
+    if not _USER_ID:
+        raise StorageError("No user identity for this request.")
+    return UserStore(_USER_ID)
+
+
+def _file_store() -> FileStore:
+    """Return the file vault bound to the current request user."""
+    if not _USER_ID:
+        raise StorageError("No user identity for this request.")
+    return FileStore(_USER_ID)
+
+
+try:
+    if _USER_ID:
+        memory_engine.set_memory_dir(str(UserStore(_USER_ID).root))
+except Exception:
+    pass
 
 
 # ============================================================
@@ -918,6 +952,7 @@ def run_agent(user_input: str) -> str:
             dict(m) for m in st.session_state.messages if isinstance(m, dict)
         ],
         deep_mode=bool(st.session_state.get("deep_mode", False)),
+        force_web_search=bool(st.session_state.get("force_search", False)),
     )
 
     st.session_state.active_tier = str(
@@ -928,14 +963,19 @@ def run_agent(user_input: str) -> str:
 
 
 def persist() -> None:
-    """Save chats + open conversation."""
+    """Save chats + open conversation to the current user's store.
+
+    Storage failures are surfaced as a non-blocking warning, never silent.
+    """
     try:
-        save_store(
+        _user_store().save_chats(
             st.session_state.get("chats", []),
             st.session_state.get("messages", []),
         )
+    except StorageError as e:
+        st.toast(f"Could not save chat history: {e}")
     except Exception:
-        pass
+        st.toast("Could not save chat history.")
 
 
 def _stage_upload(
@@ -943,7 +983,13 @@ def _stage_upload(
     kind: str,
     src: str,
 ) -> None:
-    """Save an uploader/camera value as pending attachment."""
+    """Validate + vault an uploader/camera value as the pending attachment.
+
+    Args:
+        uploaded: The UploadedFile value, or None.
+        kind: Attachment kind: "pdf", "csv", or "image".
+        src: Where it came from: "menu" or "camera".
+    """
     if uploaded is None:
         return
 
@@ -963,23 +1009,28 @@ def _stage_upload(
     ):
         return
 
+    try:
+        data: bytes = bytes(uploaded.getbuffer())
+    except Exception:
+        st.toast("Could not read that file.")
+        return
+    original = getattr(uploaded, "name", "file") or "file"
     if src == "camera":
-        fname: str = (
-            f"camera_{uuid.uuid4().hex[:8]}.png"
-        )
-    else:
-        fname: str = (
-            f"uploaded_"
-            f"{getattr(uploaded, 'name', 'file') or 'file'}"
-        )
-
-    with open(fname, "wb") as f:
-        f.write(uploaded.getbuffer())
+        original = f"camera.{original.rsplit('.', 1)[-1]}" if "." in str(original) else "camera.png"
+    try:
+        meta = _file_store().save_upload(data, str(original))
+    except (FileValidationError, StorageError) as e:
+        st.toast(f"Upload rejected: {e}")
+        return
+    except Exception:
+        st.toast("Upload rejected: unexpected storage error.")
+        return
 
     st.session_state.pending_attach = {
-        "kind": kind,
-        "name": fname,
-        "path": fname,
+        "upload_id": meta.id,
+        "kind": meta.kind,
+        "name": meta.display_name,
+        "path": meta.display_name,
         "mark": mark,
     }
 
@@ -1049,70 +1100,64 @@ def render_assistant_response(
         None,
     )
 
-    force_search: bool = bool(
-        st.session_state.get(
-            "force_search",
-            False,
-        )
-    )
-
+    # One-shot toggle: the agent enforces the search as policy (see run_agent).
     st.session_state.force_search = False
 
     send_text: str = user_text
 
     image_path: Any = None
+    attachments: List[Dict[str, str]] = []
 
     if isinstance(attach, dict):
 
         kind: str = str(
             attach.get("kind", "")
         )
+        upload_id: str = str(attach.get("upload_id", ""))
+        disp_name: str = str(attach.get("name", "file"))
+        if upload_id:
+            attachments.append({"id": upload_id, "kind": kind, "name": disp_name})
 
         if kind == "pdf":
 
             send_text += (
-                f"\n\n[Attached PDF: "
-                f"{attach.get('path', '')}. "
-                "Use the read_pdf tool on this path "
-                "if the request needs it.]"
+                f"\n\n[Attached PDF '{disp_name}' with upload ID: {upload_id}. "
+                "To read it, call read_pdf(upload_id=\""
+                f"{upload_id}"
+                "\"). Never use any other path or ID.]"
             )
 
         elif kind == "csv":
 
             send_text += (
-                f"\n\n[Attached CSV: "
-                f"{attach.get('path', '')}. "
-                "Use the analyze_csv tool on this path "
-                "if the request needs it.]"
+                f"\n\n[Attached CSV '{disp_name}' with upload ID: {upload_id}. "
+                "To analyze it, call analyze_csv(upload_id=\""
+                f"{upload_id}"
+                "\"). Never use any other path or ID.]"
             )
 
         else:
 
-            image_path = attach.get(
-                "path"
-            )
+            try:
+                resolved = _file_store().resolve_upload(upload_id) if upload_id else None
+            except (StorageError, FileValidationError):
+                resolved = None
+            image_path = str(resolved) if resolved is not None else None
 
             send_text += (
-                f"\n\n[Attached image: "
-                f"{attach.get('name', 'image')}. "
+                f"\n\n[Attached image: {disp_name}. "
                 "You cannot view images; if asked "
                 "about its contents, say so briefly "
                 "and continue helping from the text.]"
             )
-
-    if force_search:
-
-        send_text = (
-            "Use web_search to find current "
-            "information before answering.\n\n"
-            + send_text
-        )
 
     user_msg: Dict[str, Any] = {
         "role": "user",
         "content": user_text,
         "time": datetime.now().isoformat(),
     }
+    if attachments:
+        user_msg["attachments"] = attachments
 
     if image_path:
         user_msg["image"] = str(image_path)
@@ -1142,6 +1187,8 @@ def render_assistant_response(
 
         try:
 
+            request_started: float = time.time()
+
             output: str = run_agent(
                 send_text
             )
@@ -1158,64 +1205,42 @@ def render_assistant_response(
                 }
             )
 
+            st.session_state.pop("last_failed", None)
+
             persist()
 
-            for pptx in sorted(
-                glob.glob("pptx_*.pptx")
-            ):
-
-                with open(
-                    pptx,
-                    "rb",
-                ) as f:
-
-                    st.download_button(
-                        f"Download {pptx}",
-                        f,
-                        file_name=pptx,
-                        key=(
-                            f"dl-pptx-"
-                            f"{pptx}-"
-                            f"{len(st.session_state.messages)}"
-                        ),
-                    )
-
-            for docx in sorted(
-                glob.glob("docx_*.docx")
-            ):
-
-                with open(
-                    docx,
-                    "rb",
-                ) as f:
-
-                    st.download_button(
-                        f"Download {docx}",
-                        f,
-                        file_name=docx,
-                        key=(
-                            f"dl-docx-"
-                            f"{docx}-"
-                            f"{len(st.session_state.messages)}"
-                        ),
-                    )
+            try:
+                fresh_files = [
+                    m for m in _file_store().list_outputs()
+                    if m.created >= request_started
+                ]
+            except StorageError:
+                fresh_files = []
+            for meta in fresh_files:
+                file_bytes = _file_store().read_output(meta.id)
+                if file_bytes is None:
+                    continue
+                st.download_button(
+                    f"Download {meta.display_name}",
+                    file_bytes,
+                    file_name=meta.display_name,
+                    key=(
+                        f"dl-{meta.id}-"
+                        f"{len(st.session_state.messages)}"
+                    ),
+                )
 
         except Exception as e:
 
-                typing_box.empty()
+            typing_box.empty()
 
-                st.session_state.last_failed = send_text
+            st.session_state.last_failed = send_text
 
-                st.error(
-                    f"Error: {e}"
-                )
-
-                if st.button(
-                    "Retry",
-                    key=f"retry-{len(st.session_state.messages)}",
-                ):
-                    st.session_state.do_retry = True
-                    st.rerun()
+            st.error(
+                f"Error: {e}"
+            )
+            # Rerun so the standalone Retry button below renders.
+            st.rerun()
 
 
 def _retry_last() -> None:
@@ -1241,6 +1266,7 @@ def _retry_last() -> None:
             typing_box.empty()
             st.session_state.last_failed = send_text
             st.error(f"Error: {e}")
+            st.rerun()
 
 
 def archive_current_chat() -> None:
@@ -1309,7 +1335,10 @@ if (
     or "messages" not in st.session_state
 ):
 
-    stored = load_store()
+    try:
+        stored, store_warnings = _user_store().load_chats()
+    except StorageError:
+        stored, store_warnings = {"chats": [], "current": []}, []
 
     st.session_state.chats = (
         stored["chats"]
@@ -1319,11 +1348,17 @@ if (
         stored["current"]
     )
 
+    for warning in store_warnings:
+        st.toast(warning)
+
 
 if "memory_notes" not in st.session_state:
-    st.session_state.memory_notes = (
-        load_memory_notes()
-    )
+    try:
+        st.session_state.memory_notes = (
+            _user_store().load_notes()
+        )
+    except StorageError:
+        st.session_state.memory_notes = ""
 
 
 if "pending_attach" not in st.session_state:
@@ -1354,45 +1389,37 @@ if "show_attach_menu" not in st.session_state:
 
 if "active_tier" not in st.session_state:
 
-    with st.spinner("Initializing..."):
+    # Lazy health detection: start on the first configured tier without
+    # probing every provider at load. The cascade corrects on first use.
+    from config import TIER_GETTERS
 
-        try:
+    configured: List[str] = [
+        n
+        for n, g in TIER_GETTERS
+        if g() is not None
+    ]
 
-            st.session_state.active_tier = (
-                probe_live_tier(timeout=20.0)
-            )
+    if not configured:
 
-        except RuntimeError:
+        st.error(
+            "No LLM available. Add "
+            "OPENCODE_API_KEY or "
+            "GEMINI_API_KEY to .env"
+        )
 
-            from config import TIER_GETTERS
+        st.info(
+            "Add at least one key to `.env` "
+            "(OPENCODE_API_KEY or "
+            "GEMINI_API_KEY), or set them "
+            "in Streamlit Cloud Secrets, "
+            "then rerun the app."
+        )
 
-            configured: List[str] = [
-                n
-                for n, g in TIER_GETTERS
-                if g() is not None
-            ]
+        st.stop()
 
-            if not configured:
-
-                st.error(
-                    "No LLM available. Add "
-                    "OPENCODE_API_KEY or "
-                    "GEMINI_API_KEY to .env"
-                )
-
-                st.info(
-                    "Add at least one key to `.env` "
-                    "(OPENCODE_API_KEY or "
-                    "GEMINI_API_KEY), or set them "
-                    "in Streamlit Cloud Secrets, "
-                    "then rerun the app."
-                )
-
-                st.stop()
-
-            st.session_state.active_tier = (
-                configured[0]
-            )
+    st.session_state.active_tier = (
+        configured[0]
+    )
 
 
 # ============================================================
@@ -1557,13 +1584,16 @@ with st.sidebar:
             key="save-memory",
         ):
 
-            save_memory_notes(notes_in)
+            try:
+                _user_store().save_notes(notes_in)
+            except StorageError as e:
+                st.toast(f"Could not save memory: {e}")
+            else:
+                st.session_state.memory_notes = (
+                    notes_in
+                )
 
-            st.session_state.memory_notes = (
-                notes_in
-            )
-
-            st.toast("Memory saved")
+                st.toast("Memory saved")
 
 
     with st.expander(
@@ -1578,32 +1608,29 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-        all_files: List[str] = sorted(
-            glob.glob("pptx_*.pptx")
-            + glob.glob("docx_*.docx")
-        )
+        try:
+            owned_files = _file_store().list_outputs()
+        except StorageError:
+            owned_files = []
 
-        if all_files:
+        if owned_files:
 
-            for fname in all_files[-5:]:
+            for meta in owned_files[:5]:
 
                 st.markdown(
                     f'<div class="file-card">'
-                    f'{fname}'
+                    f'{meta.display_name}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-                with open(
-                    fname,
-                    "rb",
-                ) as f:
-
+                file_bytes = _file_store().read_output(meta.id)
+                if file_bytes is not None:
                     st.download_button(
                         "Get file",
-                        f,
-                        file_name=fname,
-                        key=f"side-dl-{fname}",
+                        file_bytes,
+                        file_name=meta.display_name,
+                        key=f"side-dl-{meta.id}",
                     )
 
         else:
@@ -1642,7 +1669,7 @@ with st.sidebar:
             'font-size: 13px;">Files</span>'
             f'<span style="color: #f1f1f4; '
             f'font-weight: 600;">'
-            f'{len(all_files)}'
+            f'{len(owned_files)}'
             '</span>'
             '</div>'
             '<div style="display: flex; '
@@ -1675,13 +1702,12 @@ with st.sidebar:
             st.caption("Delete ALL generated PPTX/DOCX files?")
             yes_col, no_col = st.columns(2)
             if yes_col.button("Yes", key="clean-yes"):
-                for f in glob.glob("pptx_*.pptx") + glob.glob("docx_*.docx"):
-                    try:
-                        os.remove(f)
-                    except OSError:
-                        pass
+                try:
+                    removed = _file_store().delete_all_outputs()
+                except StorageError:
+                    removed = 0
                 st.session_state.confirm_clean = False
-                st.toast("Files cleaned")
+                st.toast(f"Files cleaned ({removed} removed)")
                 st.rerun()
             if no_col.button("Cancel", key="clean-no"):
                 st.session_state.confirm_clean = False
@@ -1734,15 +1760,33 @@ for idx, msg in enumerate(st.session_state.messages):
         with st.container(key=f"msgrow-{idx}"):
             if st.button("Edit", key=f"edit-{idx}"):
                 old_text: str = str(msg.get("content", ""))
+                old_atts = msg.get("attachments")
+                restored = None
+                if isinstance(old_atts, list):
+                    for candidate in old_atts:
+                        if isinstance(candidate, dict) and candidate.get("id"):
+                            restored = {
+                                "upload_id": str(candidate["id"]),
+                                "kind": str(candidate.get("kind", "image")),
+                                "name": str(candidate.get("name", "file")),
+                                "mark": ["restored", str(candidate["id"])],
+                            }
+                            break
                 st.session_state.messages = st.session_state.messages[:idx]
                 st.session_state[
                     f"composer_input_{st.session_state.composer_key}"
                 ] = old_text
+                st.session_state.pending_attach = restored
                 persist()
                 st.rerun()
 
 if st.session_state.pop("do_retry", False):
     _retry_last()
+
+if st.session_state.get("last_failed"):
+    if st.button("Retry", key="retry-main"):
+        st.session_state.do_retry = True
+        st.rerun()
 
 
 # ============================================================

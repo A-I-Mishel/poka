@@ -15,3 +15,5 @@ memory/chats.json
 memory/chats.json.tmp
 memory/memory.md
 structured_memory.json
+data/
+.streamlit/secrets.toml

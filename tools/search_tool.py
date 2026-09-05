@@ -1,6 +1,8 @@
 import logging
 from langchain.tools import tool
 
+from services.limits import MAX_SEARCH_CHARS
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,8 @@ def web_search(query: str) -> str:
             result = search.run(query)
         if not result or result.strip() == "":
             return "No search results found. Try rephrasing your query."
+        if len(result) > MAX_SEARCH_CHARS:
+            result = result[:MAX_SEARCH_CHARS] + "\n[Note: results truncated.]"
         return result
     except Exception as e:
         logger.warning(f"Search failed: {e}")

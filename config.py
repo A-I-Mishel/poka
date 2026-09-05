@@ -123,24 +123,3 @@ TASK_TEMPERATURES: Dict[str, float] = {
     "data": 0.2,
     "multi_step": 0.4,
 }
-
-
-def get_llm_for_task(
-    task_type: str = "research",
-) -> Union[ChatOpenAI, ChatGoogleGenerativeAI]:
-    """Get the first available LLM with temperature tuned for the task.
-
-    Task types (from classify_task): simple, research, creative, data,
-    multi_step. Unknown types fall back to 0.5. Raises if no tier is
-    configured; callers must handle runtime failures via the cascade.
-    """
-    temperature: float = TASK_TEMPERATURES.get(task_type, 0.5)
-    for _name, getter in TIER_GETTERS:
-        llm_instance = getter()
-        if llm_instance is not None:
-            try:
-                llm_instance.temperature = temperature  # type: ignore[attr-defined]
-            except Exception:
-                pass
-            return llm_instance
-    raise RuntimeError("No LLM available. Check API keys in .env")
