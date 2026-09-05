@@ -44,9 +44,9 @@ TIER_AGENT_GETTERS: List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]] 
 
 MAX_TOOL_ROUNDS: int = 4
 
-# Skip repeatedly failing tiers for a while so one message doesn't burn
-# quota on every dead tier (free-tier 429s recover with time).
-SKIP_AFTER_FAILS: int = 2
+# Skip a failing tier immediately so the next message goes straight to
+# the next live model (cool-down still expires so recovered tiers return).
+SKIP_AFTER_FAILS: int = 1
 SKIP_SECONDS: float = 600.0
 _TIER_FAILS: Dict[str, int] = {}
 _TIER_SKIP_UNTIL: Dict[str, float] = {}
