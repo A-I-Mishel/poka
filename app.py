@@ -1607,6 +1607,9 @@ components.html(
         scope.dataset.enterBound = "1";
         const input = scope.querySelector('div[data-testid="stTextInput"] input');
         if (input) {
+            input.setAttribute("autocomplete", "off");
+            input.setAttribute("autocapitalize", "off");
+            input.setAttribute("autocorrect", "off");
             input.addEventListener("keydown", function (e) {
                 if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
                     e.preventDefault();
