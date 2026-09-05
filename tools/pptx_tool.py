@@ -6,6 +6,7 @@ from pptx.util import Inches
 
 from services.context import get_current_user_id
 from services.files import FileStore
+from services.ratelimit import get_rate_limiter
 from services.storage import StorageError
 
 
@@ -69,6 +70,12 @@ def create_pptx(topic: str, content: str) -> str:
 
         user_id = get_current_user_id()
         if user_id:
+            verdict = get_rate_limiter().check(user_id, "generate")
+            if not verdict.allowed:
+                return (
+                    "STATUS=DENIED tool=create_pptx: generation rate limit "
+                    f"exceeded, retry in {verdict.retry_after:.0f}s."
+                )
             try:
                 meta = FileStore(user_id).register_output(filename, data, "pptx")
                 return f"Presentation saved as {meta.display_name} (file ID: {meta.id})"

@@ -12,8 +12,10 @@ bounded execution time, and request IDs for diagnostics.
 
 import concurrent.futures
 import logging
+import re
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -26,11 +28,26 @@ from config import (
 )
 from memory_engine import (
     load_structured_memory,
-    update_memory_from_chat,
     format_memory_for_prompt,
     get_relevant_memory_context,
+    update_memory_incremental,
 )
-from services.limits import MODEL_TIMEOUT_SECONDS, TOOL_TIMEOUT_SECONDS
+from services.context import get_current_user_id, set_current_user_id
+from services.context_budget import CTX_HISTORY_TOKENS, CTX_MEMORY_TOKENS, CTX_SUMMARY_TOKENS, fit_history, fit_text
+from services.limits import (
+    MAX_EXTERNAL_TOKENS,
+    MAX_LLM_CALLS_PER_REQUEST,
+    MAX_PLANNING_CALLS,
+    MAX_QUERY_CHARS,
+    MAX_REFLECTION_CALLS,
+    MAX_SEARCH_CALLS_PER_REQUEST,
+    MAX_TOOL_CALLS_PER_REQUEST,
+    MAX_TOOL_RESULT_TOKENS,
+    MAX_TOTAL_REQUEST_TIME,
+    MODEL_TIMEOUT_SECONDS,
+    TOOL_TIMEOUT_SECONDS,
+)
+from services.tokens import count_tokens, truncate_tokens
 from tools import web_search, create_pptx, create_docx, read_pdf, analyze_csv
 
 logger = logging.getLogger(__name__)
@@ -95,10 +112,120 @@ REFLECTION_ENABLED: bool = True
 
 # Skip a failing tier immediately so the next message goes straight to
 # the next live model (cool-down still expires so recovered tiers return).
+# Permanent failures (bad credentials, invalid requests) cool down longer.
 SKIP_AFTER_FAILS: int = 1
 SKIP_SECONDS: float = 600.0
+SKIP_SECONDS_PERMANENT: float = 3600.0
 _TIER_FAILS: Dict[str, int] = {}
 _TIER_SKIP_UNTIL: Dict[str, float] = {}
+
+# Deterministic router stats (process-aggregate metrics, no user data).
+ROUTER_STATS: Dict[str, int] = {"rule": 0, "llm": 0}
+
+
+class BudgetExhausted(Exception):
+    """Raised when a request-level budget runs out. Never marks tiers failed."""
+
+
+@dataclass
+class RequestBudget:
+    """Bounded resources for one user message (also collects metrics)."""
+
+    max_llm: int = MAX_LLM_CALLS_PER_REQUEST
+    max_tools: int = MAX_TOOL_CALLS_PER_REQUEST
+    max_search: int = MAX_SEARCH_CALLS_PER_REQUEST
+    max_reflect: int = MAX_REFLECTION_CALLS
+    max_plan: int = MAX_PLANNING_CALLS
+    deadline: float = field(default_factory=lambda: time.time() + MAX_TOTAL_REQUEST_TIME)
+    llm_calls: int = 0
+    tool_calls: int = 0
+    search_calls: int = 0
+    reflect_calls: int = 0
+    plan_calls: int = 0
+    timeouts: int = 0
+    external_tokens: int = 0
+
+    def check_time(self) -> None:
+        """Raise BudgetExhausted when the request ran too long."""
+        if time.time() > self.deadline:
+            raise BudgetExhausted("Request time budget exhausted.")
+
+    def count_llm(self) -> None:
+        """Charge one model call; raise when the LLM budget is spent."""
+        self.check_time()
+        self.llm_calls += 1
+        if self.llm_calls > self.max_llm:
+            raise BudgetExhausted(f"LLM call budget exhausted ({self.max_llm}).")
+
+    def count_tool(self, is_search: bool = False) -> None:
+        """Charge one tool call (search calls have their own sub-budget)."""
+        self.check_time()
+        self.tool_calls += 1
+        if is_search:
+            self.search_calls += 1
+            if self.search_calls > self.max_search:
+                raise BudgetExhausted(f"Search budget exhausted ({self.max_search}).")
+        if self.tool_calls > self.max_tools:
+            raise BudgetExhausted(f"Tool budget exhausted ({self.max_tools}).")
+
+    def count_reflect(self) -> None:
+        """Charge one reflection call."""
+        self.reflect_calls += 1
+        if self.reflect_calls > self.max_reflect:
+            raise BudgetExhausted(f"Reflection budget exhausted ({self.max_reflect}).")
+
+    def count_plan(self) -> None:
+        """Charge one planning call."""
+        self.plan_calls += 1
+        if self.plan_calls > self.max_plan:
+            raise BudgetExhausted(f"Planning budget exhausted ({self.max_plan}).")
+
+
+def classify_provider_error(error: Any) -> Tuple[str, bool]:
+    """Classify a provider failure as (kind, retryable_elsewhere).
+
+    Permanent kinds (bad credentials, invalid requests) earn a long
+    cool-down; temporary ones keep the short cool-down. Budget exhaustion
+    is ours, never the provider's — callers must handle it separately.
+    """
+    text = str(error)
+    lowered = text.lower()
+    if isinstance(error, TimeoutError) or "timed out after" in lowered:
+        return ("timeout", True)
+    if (
+        "429" in text
+        or "quota" in lowered
+        or "rate limit" in lowered
+        or "freeusagelimit" in lowered
+        or "resource_exhausted" in lowered
+        or "overloaded" in lowered
+        or "529" in text
+    ):
+        return ("rate_limit", True)
+    if (
+        "401" in text
+        or "403" in text
+        or "unauthorized" in lowered
+        or "invalid api key" in lowered
+        or "invalid_api_key" in lowered
+        or "credits" in lowered
+        or "permission denied" in lowered
+    ):
+        return ("auth", False)
+    if (
+        "500" in text
+        or "502" in text
+        or "503" in text
+        or "504" in text
+        or "internal" in lowered
+        or "unavailable" in lowered
+    ):
+        return ("server", True)
+    if "400" in text or "invalid" in lowered or "bad request" in lowered:
+        return ("invalid", False)
+    if isinstance(error, ConnectionError) or "connection" in lowered or "network" in lowered or "dns" in lowered:
+        return ("network", True)
+    return ("unknown", True)
 
 
 def _tier_skipped(name: str) -> bool:
@@ -112,12 +239,13 @@ def _record_tier_success(name: str) -> None:
     _TIER_SKIP_UNTIL.pop(name, None)
 
 
-def _record_tier_failure(name: str) -> None:
-    """Count a failure; cool the tier down after repeated failures."""
+def _record_tier_failure(name: str, permanent: bool = False) -> None:
+    """Count a failure; cool the tier down (longer when permanent)."""
     fails: int = _TIER_FAILS.get(name, 0) + 1
     _TIER_FAILS[name] = fails
+    window = SKIP_SECONDS_PERMANENT if permanent else SKIP_SECONDS
     if fails >= SKIP_AFTER_FAILS:
-        _TIER_SKIP_UNTIL[name] = time.time() + SKIP_SECONDS
+        _TIER_SKIP_UNTIL[name] = time.time() + window
 
 
 def _friendly_cascade_error(last_error: Any) -> str:
@@ -155,9 +283,17 @@ def _invoke_bounded(
     llm_instance: BaseLanguageModel,
     messages: Any,
     timeout: float = MODEL_TIMEOUT_SECONDS,
+    budget: Optional[RequestBudget] = None,
 ) -> Any:
-    """Invoke a model with bounded execution time."""
-    return _call_bounded(lambda: llm_instance.invoke(messages), timeout, "Model request")
+    """Invoke a model with bounded execution time, charging the budget."""
+    if budget is not None:
+        budget.count_llm()
+    try:
+        return _call_bounded(lambda: llm_instance.invoke(messages), timeout, "Model request")
+    except TimeoutError:
+        if budget is not None:
+            budget.timeouts += 1
+        raise
 
 
 def _as_text(content: Any) -> str:
@@ -175,11 +311,25 @@ def _as_text(content: Any) -> str:
     return str(content)
 
 
-def _execute_tool_call(tool_call: Any) -> str:
-    """Execute one model-requested tool call with a time bound.
+def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any]) -> Any:
+    """Invoke a tool with the submitting request's user bound.
+
+    Worker threads do not inherit contextvars, so the user ID captured
+    on the calling thread is explicitly restored here. Without this,
+    every tool would see "no user" and deny vault access.
+    """
+    if user_id is not None:
+        set_current_user_id(user_id)
+    return tool.invoke(args)
+
+
+def _execute_tool_call(tool_call: Any, budget: Optional[RequestBudget] = None) -> str:
+    """Execute one model-requested tool call with time + budget bounds.
 
     Returns explicit STATUS markers (OK/EMPTY/FAILED/INVALID/DENIED) so the
-    model can distinguish success from failure. Never raises.
+    model can distinguish success from failure. Result text is capped to
+    the per-result token budget. Never raises for tool problems, but
+    BudgetExhausted propagates so the loop stops instead of spinning.
     """
     if isinstance(tool_call, dict):
         name: str = str(tool_call.get("name", ""))
@@ -191,18 +341,79 @@ def _execute_tool_call(tool_call: Any) -> str:
     tool = TOOL_MAP.get(name)
     if tool is None:
         return f"STATUS=INVALID tool call: unknown tool '{name}'."
+    if budget is not None:
+        # May raise BudgetExhausted: intentional, stops the loop upstream.
+        budget.count_tool(is_search=(name == "web_search"))
     try:
-        out = _call_bounded(lambda: tool.invoke(args), TOOL_TIMEOUT_SECONDS, f"Tool {name}")
+        user_id = get_current_user_id()
+        out = _call_bounded(
+            lambda: _run_tool_with_context(user_id, tool, args),
+            TOOL_TIMEOUT_SECONDS,
+            f"Tool {name}",
+        )
         text = str(out)
         if text.startswith("STATUS="):
             return f"[{name}] {text}"
         if not text.strip():
             return f"STATUS=EMPTY tool={name}: the tool returned no content."
+        if count_tokens(text) > MAX_TOOL_RESULT_TOKENS:
+            text = truncate_tokens(text, MAX_TOOL_RESULT_TOKENS)
+        if budget is not None:
+            budget.external_tokens += count_tokens(text)
         return f"STATUS=OK tool={name}\n<untrusted_tool_output>\n{text}\n</untrusted_tool_output>"
     except TimeoutError as e:
         return f"STATUS=FAILED tool={name}: {e}"
     except Exception as e:
         return f"STATUS=FAILED tool={name}: {str(e)[:300]}"
+
+
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|yo|good\s?(morning|afternoon|evening|night)"
+    r"|thanks|thank you|bye|ok|okay|sure|yes|no)\b[?!.]*$",
+    re.IGNORECASE,
+)
+_UPLOAD_ID_RE = re.compile(r"[0-9a-f]{16}")
+
+
+def _signals(text: str, words: Sequence[str]) -> bool:
+    """True when any keyword appears in the text."""
+    return any(w in text for w in words)
+
+
+def rule_route(user_input: str) -> Optional[str]:
+    """Deterministically classify obvious requests without a model call.
+
+    Returns a task type, or None when ambiguous (caller falls back to the
+    LLM classifier). Routing only selects temperature/planning policy —
+    tool choice always stays with the model, so a wrong route degrades
+    gracefully instead of breaking tool use.
+    """
+    text = user_input.lower().strip()
+    if not text:
+        return "simple"
+    if _GREETING_RE.match(text) and len(text) <= 40:
+        return "simple"
+    hits = set()
+    if _UPLOAD_ID_RE.search(text) or _signals(text, ["pdf", ".pdf", "read", "summar", "document"]):
+        hits.add("research")
+    if _signals(text, ["csv", "analyz", "spreadsheet", "dataset", "chart", "plot", "data table"]):
+        hits.add("data")
+    if _signals(
+        text,
+        ["presentation", "slides", "pptx", "powerpoint", "essay", "report",
+         "resume", "write", "draft", "letter", "docx", "word document"],
+    ):
+        hits.add("creative")
+    if _signals(
+        text,
+        ["latest", "recent", "current", "today", "news", "search", "look up", "find out"],
+    ):
+        hits.add("research")
+    if len(hits) == 1:
+        return next(iter(hits))
+    if len(hits) > 1:
+        return "multi_step"
+    return None
 
 
 def _messages_to_langchain(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
@@ -223,7 +434,11 @@ def _messages_to_langchain(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
     return result
 
 
-def classify_task(user_input: str, llm_instance: BaseLanguageModel) -> str:
+def classify_task(
+    user_input: str,
+    llm_instance: BaseLanguageModel,
+    budget: Optional[RequestBudget] = None,
+) -> str:
     """Classify a request: simple, research, creative, data, or multi_step."""
     prompt = (
         "Classify this request into exactly one category:\n"
@@ -234,7 +449,7 @@ def classify_task(user_input: str, llm_instance: BaseLanguageModel) -> str:
         "- multi_step: Combines multiple tools\n\n"
         f"Request: {user_input}\nCategory:"
     )
-    response = _invoke_bounded(llm_instance, [HumanMessage(content=prompt)])
+    response = _invoke_bounded(llm_instance, [HumanMessage(content=prompt)], budget=budget)
     category = _as_text(response.content).strip().lower()
     valid = ["simple", "research", "creative", "data", "multi_step"]
     return category if category in valid else "simple"
@@ -244,6 +459,7 @@ def summarize_history(
     messages: List[Dict[str, Any]],
     llm_instance: BaseLanguageModel,
     max_messages: int = MAX_HISTORY_MESSAGES,
+    budget: Optional[RequestBudget] = None,
 ) -> List[BaseMessage]:
     """Keep the last N messages verbatim; summarize older ones into context."""
     if len(messages) <= max_messages:
@@ -258,11 +474,14 @@ def summarize_history(
             continue
         role = "User" if m.get("role") == "user" else "AI"
         lines.append(f"{role}: {str(m.get('content', ''))[:200]}")
-    summary_prompt = (
+    summary_prompt = fit_text(
         "Summarize this conversation concisely, preserving key facts "
-        "and user intent:\n\n" + "\n".join(lines)
+        "and user intent:\n\n" + "\n".join(lines),
+        CTX_SUMMARY_TOKENS,
     )
-    summary_response = _invoke_bounded(llm_instance, [HumanMessage(content=summary_prompt)])
+    summary_response = _invoke_bounded(
+        llm_instance, [HumanMessage(content=summary_prompt)], budget=budget
+    )
     summary = _as_text(summary_response.content)
 
     result: List[BaseMessage] = [
@@ -303,27 +522,39 @@ def run_tool_loop(
     relevant_context: str = "",
     force_web_search: bool = False,
     max_rounds: int = MAX_TOOL_ROUNDS,
+    budget: Optional[RequestBudget] = None,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
     Tool results are returned to the model inside fresh human messages so
     the history never contains functionCall blocks (which Gemini 3.x
     rejects without thought_signature). Untrusted tool content is always
-    wrapped in <untrusted_tool_output> delimiters.
+    wrapped in <untrusted_tool_output> delimiters. History and memory are
+    fitted to token budgets; the current request is never truncated.
 
     When force_web_search is true, a web search is EXECUTED first (not
     merely suggested) and its results seed the conversation.
     """
-    system_text: str = _build_system_prompt(memory_notes, relevant_context)
+    if budget is None:
+        budget = RequestBudget()
+    mem_fit = fit_text(
+        (memory_notes.strip() + "\n" + relevant_context.strip()).strip(),
+        CTX_MEMORY_TOKENS,
+    )
+    system_text: str = _build_system_prompt(mem_fit, "")
+    fitted_history, _hist_stats = fit_history(chat_history, CTX_HISTORY_TOKENS)
     messages: List[BaseMessage] = [
         SystemMessage(content=system_text),
-        *chat_history,
+        *fitted_history,
     ]
     if force_web_search:
         try:
             forced = _execute_tool_call(
-                {"name": "web_search", "args": {"query": user_input[:300]}}
+                {"name": "web_search", "args": {"query": user_input[:MAX_QUERY_CHARS]}},
+                budget,
             )
+        except BudgetExhausted:
+            forced = "STATUS=FAILED tool=web_search: search budget exhausted."
         except Exception as e:
             forced = f"STATUS=FAILED tool=web_search: {e}"
         messages.append(
@@ -340,14 +571,28 @@ def run_tool_loop(
     last_text: str = ""
     last_results: List[str] = []
     for _ in range(max_rounds):
-        response = _invoke_bounded(bound, messages)
+        budget.check_time()
+        response = _invoke_bounded(bound, messages, budget=budget)
         text: str = _as_text(response.content).strip()
         if text:
             last_text = text
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
         if not tool_calls:
             return text if text else "I couldn't generate a response. Please try again."
-        last_results = [_execute_tool_call(tc) for tc in tool_calls]
+        try:
+            last_results = [_execute_tool_call(tc, budget) for tc in tool_calls]
+        except BudgetExhausted:
+            last_results.append(
+                "[budget] Tool budget exhausted; no further tool calls. "
+                "Synthesize from results so far."
+            )
+            break
+        if budget.external_tokens > MAX_EXTERNAL_TOKENS:
+            last_results.append(
+                "[budget] External content budget exhausted; "
+                "synthesize from results so far."
+            )
+            break
         messages.append(
             HumanMessage(
                 content=(
@@ -375,6 +620,7 @@ def run_tool_loop(
                 ),
             ],
             timeout=60.0,
+            budget=budget,
         )
         text = _as_text(final.content).strip()
         if text:
@@ -393,11 +639,20 @@ def plan_then_execute(
     chat_history: Sequence[BaseMessage],
     memory_notes: str = "",
     relevant_context: str = "",
+    budget: Optional[RequestBudget] = None,
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
     Falls back to a plain tool loop if the planning call itself fails.
     """
+    if budget is not None:
+        try:
+            budget.count_plan()
+        except BudgetExhausted:
+            return run_tool_loop(
+                llm_instance, user_input, chat_history, memory_notes,
+                relevant_context, False, MAX_TOOL_ROUNDS, budget,
+            )
     try:
         plan_prompt = (
             "Given this user request, create a short step-by-step plan. "
@@ -411,6 +666,7 @@ def plan_then_execute(
                 *chat_history,
                 HumanMessage(content=plan_prompt),
             ],
+            budget=budget,
         )
         plan_text = _as_text(plan_response.content)
         execution_prompt = (
@@ -419,11 +675,13 @@ def plan_then_execute(
             "Execute the plan using available tools. Adapt if tools fail."
         )
         return run_tool_loop(
-            llm_instance, execution_prompt, chat_history, memory_notes, relevant_context
+            llm_instance, execution_prompt, chat_history, memory_notes,
+            relevant_context, False, MAX_TOOL_ROUNDS, budget,
         )
     except Exception:
         return run_tool_loop(
-            llm_instance, user_input, chat_history, memory_notes, relevant_context
+            llm_instance, user_input, chat_history, memory_notes,
+            relevant_context, False, MAX_TOOL_ROUNDS, budget,
         )
 
 
@@ -432,6 +690,7 @@ def reflect_and_improve(
     original_input: str,
     draft_output: str,
     chat_history: Sequence[BaseMessage],
+    budget: Optional[RequestBudget] = None,
 ) -> str:
     """Critique a draft answer; return the improved version or the draft.
 
@@ -440,6 +699,11 @@ def reflect_and_improve(
     """
     if not REFLECTION_ENABLED or not draft_output.strip():
         return draft_output
+    if budget is not None:
+        try:
+            budget.count_reflect()
+        except BudgetExhausted:
+            return draft_output
     try:
         reflection_prompt = (
             "You just produced this output for the user. Critique it honestly: "
@@ -459,6 +723,7 @@ def reflect_and_improve(
                 *chat_history,
                 HumanMessage(content=reflection_prompt),
             ],
+            budget=budget,
         )
         reflection_text = _as_text(reflection.content)
         if "[IMPROVE]" in reflection_text:
@@ -494,20 +759,28 @@ def _run_cascade_step(
     fn: Callable[[str, BaseLanguageModel], Any],
     first: Optional[str] = None,
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
+    attempts: Optional[List[str]] = None,
 ) -> Tuple[str, Any]:
     """Run fn(name, llm) on tiers under ONE policy. Returns (tier, result).
 
     This is the single funnel for classification, summarization, planning,
     answering, reflection support, and probing: a skipped provider is never
-    selected here, no matter which feature is calling.
+    selected here, no matter which feature is calling. BudgetExhausted is
+    never swallowed and never cools a tier (it is our limit, not theirs).
+    Tried tier names are appended to `attempts` when provided (metrics).
     """
     last_error: Exception | None = None
     for name, getter in _usable_tiers(first, tiers):
+        if attempts is not None:
+            attempts.append(name)
         try:
             llm_instance = getter()
+        except BudgetExhausted:
+            raise
         except Exception as e:
             last_error = e
-            _record_tier_failure(name)
+            _, permanent = classify_provider_error(e)
+            _record_tier_failure(name, permanent)
             continue
         if llm_instance is None:
             continue
@@ -515,9 +788,12 @@ def _run_cascade_step(
             result = fn(name, llm_instance)
             _record_tier_success(name)
             return name, result
+        except BudgetExhausted:
+            raise
         except Exception as e:
             last_error = e
-            _record_tier_failure(name)
+            _, permanent = classify_provider_error(e)
+            _record_tier_failure(name, permanent)
             continue
     raise RuntimeError(_friendly_cascade_error(last_error))
 
@@ -560,6 +836,9 @@ def answer_with_fallback(
         RuntimeError: If every tier fails (friendly message + ref ID).
     """
     request_id: str = uuid.uuid4().hex[:8]
+    started_at: float = time.time()
+    user_id = get_current_user_id()
+    budget = RequestBudget()
     history: List[BaseMessage] = list(chat_history) if chat_history else []
     history_list: List[Dict[str, Any]] = list(raw_messages) if raw_messages else []
     combined_notes: str = memory_notes
@@ -567,7 +846,7 @@ def answer_with_fallback(
 
     try:
         if history_list:
-            update_memory_from_chat(history_list)
+            update_memory_incremental(history_list)
     except Exception:
         logger.debug("req=%s memory update failed", request_id, exc_info=True)
     try:
@@ -581,25 +860,29 @@ def answer_with_fallback(
     if formatted_memory:
         combined_notes = (combined_notes + "\n" + formatted_memory).strip()
 
-    task_type: str = "research"
-    try:
-        _, task_type = _run_cascade_step(
-            lambda _name, llm: classify_task(user_input, llm), first, tiers
-        )
-    except RuntimeError:
-        pass
+    task_type: str = rule_route(user_input) or ""
+    if task_type:
+        ROUTER_STATS["rule"] += 1
+    else:
+        ROUTER_STATS["llm"] += 1
+        try:
+            _, task_type = _run_cascade_step(
+                lambda _name, llm: classify_task(user_input, llm, budget), first, tiers
+            )
+        except (RuntimeError, BudgetExhausted):
+            task_type = "research"
     logger.info("req=%s task=%s", request_id, task_type)
 
     langchain_history: List[BaseMessage] = history
     try:
         if history_list and len(history_list) > MAX_HISTORY_MESSAGES:
             def _summarize(_name: str, llm: BaseLanguageModel) -> List[BaseMessage]:
-                return summarize_history(history_list, llm)
+                return summarize_history(history_list, llm, budget=budget)
 
             _, langchain_history = _run_cascade_step(_summarize, first, tiers)
         elif history_list:
             langchain_history = _messages_to_langchain(history_list)
-    except RuntimeError:
+    except (RuntimeError, BudgetExhausted):
         langchain_history = history
 
     if task_type == "simple":
@@ -612,19 +895,27 @@ def answer_with_fallback(
                     *langchain_history,
                     HumanMessage(content=user_input),
                 ],
+                budget=budget,
             )
             return _as_text(response.content)
 
         try:
-            active_tier, output_simple = _run_cascade_step(_answer_direct, first, tiers)
-            logger.info("req=%s tier=%s ok", request_id, active_tier)
+            answer_attempts: List[str] = []
+            active_tier, output_simple = _run_cascade_step(_answer_direct, first, tiers, answer_attempts)
+            latency_ms = int((time.time() - started_at) * 1000)
+            logger.info(
+                "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d fallbacks=%d latency_ms=%d",
+                request_id, user_id, task_type, active_tier,
+                budget.llm_calls, budget.tool_calls,
+                max(0, len(answer_attempts) - 1), latency_ms,
+            )
             return {
                 "output": output_simple,
                 "active_tier": active_tier,
                 "task_type": task_type,
                 "request_id": request_id,
             }
-        except RuntimeError as e:
+        except (RuntimeError, BudgetExhausted) as e:
             logger.warning("req=%s failed: %s", request_id, e)
             raise RuntimeError(f"{e} (ref {request_id})") from e
 
@@ -637,27 +928,38 @@ def answer_with_fallback(
             pass
         if use_planning:
             draft = plan_then_execute(
-                llm, user_input, langchain_history, combined_notes, relevant_context,
+                llm, user_input, langchain_history, combined_notes,
+                relevant_context, budget,
             )
         else:
             draft = run_tool_loop(
                 llm, user_input, langchain_history, combined_notes,
                 relevant_context, force_web_search,
+                MAX_TOOL_ROUNDS, budget,
             )
         if should_reflect(task_type, draft, user_input, deep_mode):
-            return reflect_and_improve(llm, user_input, draft, langchain_history)
+            return reflect_and_improve(llm, user_input, draft, langchain_history, budget)
         return draft
 
     try:
-        active_tier, output = _run_cascade_step(_answer_tooled, first, tiers)
-        logger.info("req=%s tier=%s ok", request_id, active_tier)
+        answer_attempts = []
+        active_tier, output = _run_cascade_step(_answer_tooled, first, tiers, answer_attempts)
+        latency_ms = int((time.time() - started_at) * 1000)
+        logger.info(
+            "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d search=%d "
+            "reflect=%d plan=%d ext=%d timeouts=%d fallbacks=%d latency_ms=%d",
+            request_id, user_id, task_type, active_tier, budget.llm_calls,
+            budget.tool_calls, budget.search_calls, budget.reflect_calls,
+            budget.plan_calls, budget.external_tokens, budget.timeouts,
+            max(0, len(answer_attempts) - 1), latency_ms,
+        )
         return {
             "output": output,
             "active_tier": active_tier,
             "task_type": task_type,
             "request_id": request_id,
         }
-    except RuntimeError as e:
+    except (RuntimeError, BudgetExhausted) as e:
         logger.warning("req=%s failed: %s", request_id, e)
         raise RuntimeError(f"{e} (ref {request_id})") from e
 

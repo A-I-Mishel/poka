@@ -5,8 +5,10 @@ Persists to structured_memory.json (gitignored user data):
 - facts: extracted dated facts (name, preferences, task patterns)
 - past_tasks: reserved for future task logging
 - user_name: detected user name, if any
+- _processed_hashes: content digests already mined (incremental updates)
 """
 
+import hashlib
 import json
 import os
 import re
@@ -15,8 +17,11 @@ from typing import Any, Dict, List
 
 MEMORY_FILE: str = "structured_memory.json"
 MAX_FACTS: int = 50
+MAX_PROCESSED_HASHES: int = 300
 
 # Optional override so hosts (e.g. per-user stores) can relocate the file.
+# Defaults to the legacy working-directory location.
+_MEMORY_DIR: str = ""
 # Defaults to the legacy working-directory location.
 _MEMORY_DIR: str = ""
 
@@ -103,6 +108,67 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
         facts.append({"type": "task_pattern", "value": "frequently emails professors"})
 
     return facts
+
+
+def _content_hash(content: str) -> str:
+    """Stable digest identifying one message for processed tracking."""
+    import hashlib
+
+    return hashlib.sha1(content.encode("utf-8", errors="replace")).hexdigest()
+
+
+def update_memory_incremental(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Mine only newly added user messages; persist only when state changed.
+
+    Tracks content digests in `_processed_hashes` (capped) so a 10-message
+    history followed by 1 new message processes exactly 1 message. Disk is
+    touched only when hashes or facts actually change; failed writes never
+    destroy valid memory (save is best-effort, chat continues regardless).
+
+    Args:
+        messages: Raw chat message dicts with 'role'/'content'.
+
+    Returns:
+        {"processed": n_new_messages, "new_facts": n, "saved": bool}.
+    """
+    mem = load_structured_memory()
+    if not isinstance(messages, list):
+        return {"processed": 0, "new_facts": 0, "saved": False}
+
+    processed = mem.get("_processed_hashes")
+    if not isinstance(processed, list):
+        processed = []
+    seen = set(h for h in processed if isinstance(h, str))
+    already = len(processed)
+
+    new_facts = 0
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        digest = _content_hash(content)
+        if digest in seen:
+            continue
+        seen.add(digest)
+        processed.append(digest)
+        for fact in extract_facts_from_message(content):
+            fact["date"] = datetime.now().isoformat()
+            if fact["type"] == "name":
+                mem["user_name"] = fact["value"]
+            if not any(f.get("value") == fact["value"] for f in mem["facts"]):
+                mem["facts"].append(fact)
+                new_facts += 1
+                if len(mem["facts"]) > MAX_FACTS:
+                    mem["facts"] = mem["facts"][-MAX_FACTS:]
+
+    added = len(processed) - already
+    mem["_processed_hashes"] = processed[-MAX_PROCESSED_HASHES:]
+    if added == 0 and new_facts == 0:
+        return {"processed": 0, "new_facts": 0, "saved": False}
+    save_structured_memory(mem)
+    return {"processed": added, "new_facts": new_facts, "saved": True}
 
 
 def update_memory_from_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:

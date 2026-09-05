@@ -1,7 +1,9 @@
 import logging
 from langchain.tools import tool
 
-from services.limits import MAX_SEARCH_CHARS
+from services.context import get_current_user_id
+from services.limits import MAX_QUERY_CHARS, MAX_SEARCH_CHARS
+from services.ratelimit import get_rate_limiter
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -21,6 +23,17 @@ def web_search(query: str) -> str:
     Returns:
         Search results text, or a graceful fallback message.
     """
+    query = str(query or "")[:MAX_QUERY_CHARS]
+    if not query.strip():
+        return "STATUS=INVALID tool=web_search: empty query."
+    user_id = get_current_user_id()
+    if user_id:
+        verdict = get_rate_limiter().check(user_id, "search")
+        if not verdict.allowed:
+            return (
+                "STATUS=DENIED tool=web_search: search rate limit exceeded, "
+                f"retry in {verdict.retry_after:.0f}s."
+            )
     try:
         from langchain_community.tools import DuckDuckGoSearchRun
 

@@ -1,5 +1,6 @@
 from langchain.tools import tool
 import pandas as pd
+from typing import Optional
 
 from services.context import get_current_user_id
 from services.files import FileStore
@@ -28,7 +29,23 @@ def analyze_csv(upload_id: str) -> str:
     if path is None:
         return "STATUS=DENIED tool=analyze_csv: unknown upload ID or not owned by you."
     try:
-        df: pd.DataFrame = pd.read_csv(str(path), nrows=MAX_CSV_ROWS + 1)
+        frame: Optional[pd.DataFrame] = None
+        last_error: str = ""
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                frame = pd.read_csv(
+                    str(path),
+                    nrows=MAX_CSV_ROWS + 1,
+                    encoding=encoding,
+                    on_bad_lines="skip",
+                )
+                break
+            except UnicodeDecodeError as e:
+                last_error = str(e)[:120]
+                continue
+        if frame is None:
+            return f"STATUS=FAILED tool=analyze_csv: unreadable encoding. {last_error}"
+        df: pd.DataFrame = frame
         truncated = len(df) > MAX_CSV_ROWS
         if truncated:
             df = df.iloc[:MAX_CSV_ROWS]

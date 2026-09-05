@@ -27,7 +27,16 @@ class UserIdentity:
 
     id: str
     email: Optional[str]
-    source: str  # "env" | "oidc" | "link" | "ephemeral"
+    source: str  # "env" | "oidc" | "link" | "ephemeral" | "token"
+
+
+class AuthRequired(Exception):
+    """Raised when private mode has no usable credential for the visitor."""
+
+
+def auth_mode() -> str:
+    """Return 'private' only when explicitly configured, else 'open'."""
+    return "private" if os.getenv("POKA_AUTH_MODE", "open").strip().lower() == "private" else "open"
 
 
 def _env_identity() -> Optional[UserIdentity]:
@@ -71,12 +80,25 @@ def _link_identity() -> Optional[UserIdentity]:
 
 
 def get_current_user() -> UserIdentity:
-    """Resolve the current visitor identity. Always returns an identity.
+    """Resolve the current visitor identity (single entry point).
+
+    In private mode only env identity and logged-in OIDC users are
+    admitted; link tokens and ephemeral IDs raise AuthRequired.
+    In open mode the full chain applies (link/ephemeral allowed).
 
     Raises:
+        AuthRequired: In private mode with no usable credential.
         RuntimeError: Only when running outside any resolvable context
             (no env, no Streamlit runtime at all).
     """
+    if auth_mode() == "private":
+        for provider in (_env_identity, _oidc_identity):
+            identity = provider()
+            if identity is not None:
+                return identity
+        raise AuthRequired(
+            "This app is private. Sign in with an access token to continue."
+        )
     for provider in (_env_identity, _oidc_identity, _link_identity):
         identity = provider()
         if identity is not None:

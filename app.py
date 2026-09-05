@@ -12,9 +12,10 @@ import streamlit.components.v1 as components
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import answer_with_fallback
-from services.context import set_current_user_id
+from services.auth import AuthRequired, authenticate, verify_access_token
+from services.context import get_current_user_id, set_current_user_id
 from services.files import FileStore, FileValidationError
-from services.identity import get_current_user
+from services.ratelimit import get_rate_limiter
 from services.storage import StorageError, UserStore
 import memory_engine
 
@@ -28,9 +29,29 @@ st.set_page_config(
 
 # ============== REQUEST IDENTITY (set fresh on every run) ==============
 try:
-    _identity = get_current_user()
-    set_current_user_id(_identity.id)
-    _USER_ID: str = _identity.id
+    _auth = authenticate()
+    set_current_user_id(_auth.identity.id)
+    _USER_ID: str = _auth.identity.id
+except AuthRequired as _auth_error:
+    set_current_user_id(None)
+    _USER_ID = ""
+    st.markdown(
+        '<div style="text-align:center;padding:48px 20px 12px;">'
+        '<h1 class="brand-title">Poka</h1>'
+        '<p style="color:#8b8b9e;font-size:14px;">This app is private.</p>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(str(_auth_error))
+    _token_input = st.text_input("Access token", type="password", key="auth-token")
+    if st.button("Sign in", key="auth-go"):
+        _verified = verify_access_token(_token_input)
+        if _verified:
+            st.session_state["_auth_user_id"] = _verified
+            st.rerun()
+        else:
+            st.error("Invalid token.")
+    st.stop()
 except Exception:
     set_current_user_id(None)
     _USER_ID = ""
@@ -945,8 +966,23 @@ def run_agent(
 
     The current input must reach the model exactly once, so callers that
     already appended it pass pre-append history explicitly. Defaults build
-    from the session for flows that append after answering.
+    from the session for flows that append after answering. Chat and Deep
+    Mode rate limits are enforced here so no send path can bypass them.
     """
+    uid = get_current_user_id() or "anonymous"
+    chat_verdict = get_rate_limiter().check(uid, "chat")
+    if not chat_verdict.allowed:
+        raise RuntimeError(
+            "Chat rate limit exceeded, "
+            f"retry in {chat_verdict.retry_after:.0f}s."
+        )
+    if bool(st.session_state.get("deep_mode", False)):
+        deep_verdict = get_rate_limiter().check(uid, "deep")
+        if not deep_verdict.allowed:
+            raise RuntimeError(
+                "Deep Mode rate limit exceeded, "
+                f"retry in {deep_verdict.retry_after:.0f}s."
+            )
     result: Dict[str, Any] = answer_with_fallback(
         user_input,
         history if history is not None else build_chat_history(
@@ -1019,6 +1055,15 @@ def _stage_upload(
         and pending.get("mark") == mark
     ):
         return
+
+    if _USER_ID:
+        upload_verdict = get_rate_limiter().check(_USER_ID, "upload")
+        if not upload_verdict.allowed:
+            st.toast(
+                "Upload rate limit exceeded, "
+                f"retry in {upload_verdict.retry_after:.0f}s."
+            )
+            return
 
     try:
         data: bytes = bytes(uploaded.getbuffer())
@@ -1257,8 +1302,6 @@ def render_assistant_response(
             st.error(
                 f"Error: {e}"
             )
-            # Rerun so the standalone Retry button below renders.
-            st.rerun()
 
 
 def _retry_last() -> None:
@@ -1807,14 +1850,6 @@ for idx, msg in enumerate(st.session_state.messages):
                 persist()
                 st.rerun()
 
-if st.session_state.pop("do_retry", False):
-    _retry_last()
-
-if st.session_state.get("last_failed"):
-    if st.button("Retry", key="retry-main"):
-        st.session_state.do_retry = True
-        st.rerun()
-
 
 # ============================================================
 # ATTACHMENT STATUS
@@ -2249,6 +2284,17 @@ if pending_prompt:
     render_assistant_response(
         str(pending_prompt)
     )
+
+
+# Retry lives here (after send processing) so a failure in this same run
+# immediately shows both the error above and the Retry button below.
+if st.session_state.pop("do_retry", False):
+    _retry_last()
+
+if st.session_state.get("last_failed"):
+    if st.button("Retry", key="retry-main"):
+        st.session_state.do_retry = True
+        st.rerun()
 
 
 # ============================================================
