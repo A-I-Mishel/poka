@@ -19,6 +19,10 @@ from services.files import FileStore
 
 VISION_MAX_BYTES: int = 5 * 1024 * 1024
 VISION_MAX_DIM: int = 1568
+# Pixel-count gate read from the image header BEFORE any decode, so a
+# tiny file claiming gigapixel dimensions (decompression bomb) is
+# refused without allocating the bitmap.
+VISION_MAX_PIXELS: int = 25_000_000
 VISION_EXTS = frozenset({"png", "jpg", "jpeg"})
 
 # Tier names known to accept image content blocks. Unknown tiers are
@@ -64,6 +68,12 @@ def prepare_image_data_url(upload_id: str) -> Tuple[Optional[str], Optional[str]
         return None, "STATUS=FAILED vision: image processing unavailable in this deployment."
     try:
         with Image.open(path) as img:
+            pixels = img.width * img.height
+            if pixels > VISION_MAX_PIXELS:
+                return None, (
+                    "STATUS=DENIED vision: image dimensions too large "
+                    f"({img.width}x{img.height})."
+                )
             img = img.convert("RGB")
             img.thumbnail((VISION_MAX_DIM, VISION_MAX_DIM))
             buf = io.BytesIO()
@@ -123,17 +133,7 @@ def resolve_local_image(path_value: str) -> Optional[Path]:
     direct = store.resolve_upload(path_value)
     if direct is not None and direct.suffix.lower().lstrip(".") in VISION_EXTS:
         return direct
-    try:
-        candidate = Path(str(path_value))
-    except Exception:
-        return None
-    for owned_dir in (store.uploads_dir,):
-        try:
-            resolved = candidate.resolve()
-            base = owned_dir.resolve()
-            if resolved == base or base in resolved.parents:
-                if resolved.is_file() and resolved.suffix.lower().lstrip(".") in VISION_EXTS:
-                    return resolved
-        except Exception:
-            continue
+    owned = store.owns_path(path_value)
+    if owned is not None and owned.suffix.lower().lstrip(".") in VISION_EXTS:
+        return owned
     return None

@@ -8,24 +8,38 @@ per-user memory — backed by a cascading multi-model agent.
 ## Architecture
 
 ```
-app.py  (Streamlit UI: chat, composer, sidebar, downloads)
+app.py  (composition root: bootstrap, section order, send flow)
+  |
+  +-- ui/chat.py         (history render, send/edit/retry flows)
+  +-- ui/sidebar.py      (brand, status, chats, memory, files, stats)
+  +-- ui/uploads.py      (attachment chip, plus-menu pickers)
+  +-- ui/composer.py     (input row; returns button clicks)
+  +-- ui/components.py   (formatting, badges, export, page script)
+  +-- ui/theme.py        (visual theme)
+  +-- application/session.py  (stores, agent calls, session bootstrap)
   |
   v
-services/  (identity, auth, storage, files, ratelimit, limits,
-            context_budget, tokens, timeutil, vision)
+agent/  (budget, executor, prompts, providers, cascade, router,
+         toolrun, planning, reflection, vision, runtime)
   |
   v
-agent.py  (4-tier cascade, tool loop, planning, reflection, budgets)
+services/  (auth, identity, storage, files, memory, secrets, limits,
+            ratelimit, context, context_budget, tokens, timeutil, vision)
   |
   v
 tools/  (web_search, read_pdf, read_pdf_page, analyze_csv, csv_inspect,
-         create_pptx, build_presentation, create_docx, build_document)
-memory_engine.py  (structured per-user memory)
-ui/theme.py  (visual theme)
+         create_pptx, build_presentation, create_docx, build_document,
+         gating shared pre-generation gate)
+config.py  (tier construction, temperatures; secrets via services.secrets)
+memory_engine.py  (compat alias of services.memory)
 ```
 
-UI → services → agent → tools/storage. The UI never touches the
-filesystem directly for user data; tools only accept opaque upload IDs.
+Dependency flow: UI → application → agent → services/tools →
+storage/providers. UI sections never touch the filesystem directly;
+tools only accept opaque upload IDs; every model call goes through the
+shared bounded executor; memory and tool output are always labeled
+untrusted data in prompts. `import agent` attribute calls (not
+from-imports) at UI seams keep test doubles effective.
 
 ## Installation
 
@@ -80,9 +94,12 @@ self-reflection at the cost of extra calls.
 File tools accept opaque upload IDs only — never filesystem paths.
 Results carry `STATUS=` markers (`OK/EMPTY/FAILED/INVALID/DENIED/
 DEGRADED`) so failures can't be mistaken for data. PDF reads are
-page-marked and bounded; CSV reads are row-capped with a controlled
-`csv_inspect` op set (no arbitrary code execution); presentations and
-documents are validated by reopening before delivery.
+page-marked and bounded (upload cap re-checked at read time, malformed
+input yields structured failures); CSV reads are byte-, column-, and
+row-capped before pandas runs, with a controlled `csv_inspect` op set
+(no arbitrary code execution); presentations are slide-capped (50) with
+truncation notes and documents are validated by reopening before
+delivery.
 
 ## Storage architecture
 
@@ -91,7 +108,10 @@ Per-user vaults under `data/users/<safe-id>/`: `chats.json`,
 `outputs/` + `outputs.json`. All writes are atomic (unique tmp +
 replace) with per-file locks; corrupt files are quarantined with a
 warning instead of silently resetting. Staged uploads older than 7 days
-and unreferenced by any chat are pruned once per session.
+and unreferenced by any chat are pruned once per session, as are
+generated outputs older than 30 days. Upload quotas (100 files / 1 GiB
+per user) are enforced before writes; permission/infrastructure
+failures raise instead of masquerading as corruption.
 
 ## Security model
 
@@ -110,6 +130,9 @@ and unreferenced by any chat are pruned once per session.
 Streamlit Community Cloud: push `main`, set entry point `app.py`,
 Python 3.12, add secrets. The free tier sleeps when idle and its disk
 is ephemeral (chats/files persist on machines with real disks).
+Public deployments must set `POKA_AUTH_MODE=private` plus
+`POKA_ACCESS_TOKENS`: the default `open` mode is for local/dev/trusted
+use only.
 
 ## Tests
 
@@ -118,8 +141,8 @@ python -m pytest tests/ -q
 ```
 
 All tests use stubbed models and temp directories — no API quota spent.
-GitHub Actions runs compile + pytest on every push (dependency audit is
-advisory).
+GitHub Actions runs compile + pytest on every push; the dependency
+audit (`pip-audit`) is blocking — a known vulnerability fails CI.
 
 ## Known limitations
 
@@ -131,5 +154,9 @@ advisory).
   honest inability note.
 - Link-token identity is shareable by URL by design (open mode only).
 - In-memory rate limiter is per-process (documented; Redis-swappable).
-- Hung provider calls abandon their worker thread after timeout (caller
-  always regains control; documented in `agent._call_bounded`).
+- Provider HTTP calls carry native timeouts; a hung sync SDK call still
+  occupies one shared pool thread until it returns, but callers always
+  regain control at the deadline (see `agent/executor.py`).
+- `st.components.v1.html` (inline composer script) is deprecated upstream
+  with removal after 2026-06-01; migration is intentionally deferred
+  because `st.iframe` only embeds URLs and cannot run the inline script.

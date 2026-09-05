@@ -20,13 +20,12 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
       - name: Compile all Python files
-        run: python -m compileall -q agent.py app.py config.py memory_engine.py store.py services tools ui tests
+        run: python -m compileall -q app.py config.py memory_engine.py store.py services tools ui tests application agent
       - name: Run tests (mocked providers, no API calls)
         run: python -m pytest tests/ -q
 
   audit:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

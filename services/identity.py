@@ -12,11 +12,12 @@ get_current_user() contract and put it first in the chain.
 """
 
 import hashlib
-import os
 import re
 import secrets
 from dataclasses import dataclass
 from typing import Optional
+
+from services.secrets import get_secret
 
 _UID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
@@ -36,11 +37,12 @@ class AuthRequired(Exception):
 
 def auth_mode() -> str:
     """Return 'private' only when explicitly configured, else 'open'."""
-    return "private" if os.getenv("POKA_AUTH_MODE", "open").strip().lower() == "private" else "open"
+    mode = get_secret("POKA_AUTH_MODE", "open") or "open"
+    return "private" if mode.strip().lower() == "private" else "open"
 
 
 def _env_identity() -> Optional[UserIdentity]:
-    raw = os.getenv("POKA_USER_ID", "").strip()
+    raw = (get_secret("POKA_USER_ID", "") or "").strip()
     if not raw:
         return None
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", raw).strip(" .")[:64]

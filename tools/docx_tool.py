@@ -6,10 +6,10 @@ from langchain.tools import tool
 from docx import Document
 from docx.shared import Pt
 
-from services.context import get_current_user_id
 from services.files import FileStore
-from services.ratelimit import get_rate_limiter
+from services.limits import MAX_DOCX_PARAGRAPHS
 from services.storage import StorageError
+from tools.gating import claim_generation_slot
 
 
 @tool
@@ -28,32 +28,32 @@ def create_docx(title: str, content: str) -> str:
         Filename of the saved document (plus its download ID).
     """
     try:
+        # Gate BEFORE expensive work: quota checks must precede generation
+        # so exhausted users cannot trigger repeated builds.
+        user_id, denied = claim_generation_slot("create_docx")
+        if denied is not None:
+            return denied
         doc: Document = Document()
         doc.add_heading(title, level=1)
-        for paragraph in content.strip().split("\n"):
-            if paragraph.strip():
-                doc.add_paragraph(paragraph.strip())
+        paras = [p for p in content.strip().split("\n") if p.strip()]
+        dropped_paras = max(0, len(paras) - MAX_DOCX_PARAGRAPHS)
+        for paragraph in paras[:MAX_DOCX_PARAGRAPHS]:
+            doc.add_paragraph(paragraph.strip())
         filename: str = f"docx_{uuid.uuid4().hex[:8]}.docx"
         buf = io.BytesIO()
         doc.save(buf)
         data: bytes = buf.getvalue()
 
-        user_id = get_current_user_id()
-        if user_id:
-            verdict = get_rate_limiter().check(user_id, "generate")
-            if not verdict.allowed:
-                return (
-                    "STATUS=DENIED tool=create_docx: generation rate limit "
-                    f"exceeded, retry in {verdict.retry_after:.0f}s."
-                )
-            try:
-                meta = FileStore(user_id).register_output(filename, data, "docx")
-                return f"Document saved as {meta.display_name} (file ID: {meta.id})"
-            except StorageError as e:
-                return f"STATUS=FAILED tool=create_docx: {e}"
-        with open(filename, "wb") as f:
-            f.write(data)
-        return f"Document saved as {filename}"
+        try:
+            meta = FileStore(user_id).register_output(filename, data, "docx")
+            note = (
+                f" [Note: limited to the first {MAX_DOCX_PARAGRAPHS} "
+                f"paragraphs ({dropped_paras} dropped).]"
+                if dropped_paras else ""
+            )
+            return f"Document saved as {meta.display_name} (file ID: {meta.id}){note}"
+        except StorageError as e:
+            return f"STATUS=FAILED tool=create_docx: {e}"
     except Exception as e:
         return f"STATUS=FAILED tool=create_docx: {str(e)}"
 
@@ -231,6 +231,11 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
         return "STATUS=INVALID tool=build_document: empty document text."
     if not title or not title.strip():
         return "STATUS=INVALID tool=build_document: empty title."
+    # Gate BEFORE expensive work: quota checks must precede generation
+    # so exhausted users cannot trigger repeated builds.
+    user_id, denied = claim_generation_slot("build_document")
+    if denied is not None:
+        return denied
     try:
         blocks = _docx_parse_blocks(markdown_text)
         if not any(kind in ("para", "bullet", "numbered", "table", "code", "quote", "h2", "h3") for kind, _ in blocks):
@@ -322,21 +327,10 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
             f"{counts.get('bullet', 0) + counts.get('numbered', 0)} lists, "
             f"{counts.get('table', 0)} tables."
         )
-        user_id = get_current_user_id()
-        if user_id:
-            verdict = get_rate_limiter().check(user_id, "generate")
-            if not verdict.allowed:
-                return (
-                    "STATUS=DENIED tool=build_document: generation rate limit "
-                    f"exceeded, retry in {verdict.retry_after:.0f}s."
-                )
-            try:
-                meta = FileStore(user_id).register_output(filename, data, "docx")
-                return f"{summary} (file ID: {meta.id})"
-            except StorageError as e:
-                return f"STATUS=FAILED tool=build_document: {e}"
-        with open(filename, "wb") as f:
-            f.write(data)
-        return summary
+        try:
+            meta = FileStore(user_id).register_output(filename, data, "docx")
+            return f"{summary} (file ID: {meta.id})"
+        except StorageError as e:
+            return f"STATUS=FAILED tool=build_document: {e}"
     except Exception as e:
         return f"STATUS=FAILED tool=build_document: {str(e)[:200]}"

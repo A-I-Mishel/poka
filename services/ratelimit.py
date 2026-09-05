@@ -60,7 +60,7 @@ class MemoryRateLimiter(RateLimiter):
             while queue and queue[0] <= now - window:
                 queue.popleft()
             if len(queue) >= max_calls:
-                retry = max(0.0, queue[0] + window - now)
+                retry = max(0.0, queue[0] + window - now) if queue else window
                 return RateLimitResult(
                     allowed=False,
                     retry_after=retry,

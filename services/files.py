@@ -20,7 +20,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Collection, Dict, List, Optional
 
-from services.limits import ALLOWED_UPLOAD_EXTS, MAX_FILENAME_LEN, MAX_UPLOAD_BYTES, UPLOAD_ID_RE
+from services.limits import (
+    ALLOWED_UPLOAD_EXTS,
+    MAX_FILENAME_LEN,
+    MAX_OUTPUT_AGE_DAYS,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOADS_PER_USER,
+    MAX_USER_BYTES,
+    UPLOAD_ID_RE,
+)
+from services.obs import event as obs_event
 from services.storage import StorageError, atomic_replace, path_lock, user_dir
 
 _ID_RE = re.compile(UPLOAD_ID_RE)
@@ -86,6 +95,32 @@ def kind_for_ext(ext: str) -> str:
     return "image"
 
 
+def _atomic_write_bytes(dest: Path, data: bytes) -> None:
+    """Write bytes atomically: unique tmp in the same dir, fsync, replace.
+
+    Readers never observe a partially written artifact. The tmp name is
+    unique per process+call so concurrent writers cannot collide; it
+    lives beside the destination so os.replace() stays atomic (same
+    filesystem). Tmp leftovers are removed on failure (and swept by
+    FileStore.reconcile() after a crash).
+    """
+    token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    tmp = dest.with_name(f"{dest.name}.{token}.tmp")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        atomic_replace(tmp, dest)
+    except OSError:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex[:16]
 
@@ -119,12 +154,19 @@ class FileStore:
             return data if isinstance(data, dict) else {}
         except FileNotFoundError:
             return {}
-        except (OSError, ValueError):
+        except PermissionError as e:
+            obs_event("storage.read", status="error", reason="permission", file=path.name)
+            raise StorageError(f"Cannot read {path.name}: permission denied.") from e
+        except OSError as e:
+            obs_event("storage.read", status="error", reason="io", file=path.name)
+            raise StorageError(f"Cannot read {path.name}: storage failure ({e}).") from e
+        except ValueError:
             try:
                 backup = path.with_name(f"{path.stem}.corrupt-{int(time.time())}{path.suffix}")
                 os.replace(path, backup)
             except OSError:
                 pass
+            obs_event("storage.quarantine", file=path.name)
             return {}
 
     def _update_registry(self, path: Path, mutate: Any) -> None:
@@ -136,7 +178,11 @@ class FileStore:
                 registry = data if isinstance(data, dict) else {}
             except FileNotFoundError:
                 registry = {}
-            except (OSError, ValueError):
+            except PermissionError as e:
+                raise StorageError(f"Cannot read {path.name}: permission denied.") from e
+            except OSError as e:
+                raise StorageError(f"Cannot read {path.name}: storage failure ({e}).") from e
+            except ValueError:
                 try:
                     backup = path.with_name(
                         f"{path.stem}.corrupt-{int(time.time())}{path.suffix}"
@@ -158,6 +204,7 @@ class FileStore:
                         tmp_path.unlink()
                 except OSError:
                     pass
+                obs_event("storage.write", status="error", file=path.name)
                 raise StorageError(f"Could not update file registry: {e}") from e
 
     # -- uploads --------------------------------------------------
@@ -187,6 +234,19 @@ class FileStore:
     def save_upload(self, data: bytes, original_name: str) -> UploadMeta:
         """Validate, store, and register an upload. Returns its metadata."""
         ext = self.validate_upload(data, original_name)
+        # Quotas BEFORE any write: count and bytes across staged uploads.
+        existing = self.list_uploads()
+        if len(existing) >= MAX_UPLOADS_PER_USER:
+            raise FileValidationError(
+                f"Too many stored uploads (max {MAX_UPLOADS_PER_USER}). "
+                "Delete old files or wait for retention cleanup."
+            )
+        used = sum(m.size for m in existing)
+        if used + len(data) > MAX_USER_BYTES:
+            raise FileValidationError(
+                "Storage quota exceeded. Delete old files or wait for "
+                "retention cleanup."
+            )
         display = sanitize_filename(original_name)
         upload_id = _new_id()
         stored = f"{upload_id}_{sanitize_filename(display)}"
@@ -194,8 +254,7 @@ class FileStore:
         if not self._inside(self.uploads_dir, dest):
             raise FileValidationError("Unsafe filename rejected.")
         try:
-            with open(dest, "wb") as f:
-                f.write(data)
+            _atomic_write_bytes(dest, bytes(data))
         except OSError as e:
             raise FileValidationError(f"Could not store upload: {e}") from e
         meta = UploadMeta(
@@ -239,6 +298,28 @@ class FileStore:
             return None
         return candidate
 
+    def owns_path(self, value: Any) -> Optional[Path]:
+        """Resolve a vault path previously handed out, if owned by this user.
+
+        Accepts absolute or relative paths pointing inside this user's
+        uploads directory. Returns the canonical path, else None (never
+        raises). Centralizes the containment check so callers never
+        reimplement path validation.
+        """
+        try:
+            candidate = Path(str(value))
+        except Exception:
+            return None
+        try:
+            resolved = candidate.resolve()
+            base = self.uploads_dir.resolve()
+        except OSError:
+            return None
+        if resolved == base or base in resolved.parents:
+            if resolved.is_file():
+                return resolved
+        return None
+
     # -- outputs ---------------------------------------------------
     def register_output(self, display_name: str, data: bytes, kind: str) -> OutputMeta:
         """Store generated bytes and register ownership metadata."""
@@ -251,8 +332,7 @@ class FileStore:
         if not self._inside(self.outputs_dir, dest):
             raise StorageError("Unsafe output filename rejected.")
         try:
-            with open(dest, "wb") as f:
-                f.write(data)
+            _atomic_write_bytes(dest, bytes(data))
         except OSError as e:
             raise StorageError(f"Could not store generated file: {e}") from e
         meta = OutputMeta(
@@ -359,6 +439,76 @@ class FileStore:
             if self.delete_output(meta.id):
                 count += 1
         return count
+
+    def prune_stale_outputs(self, max_age_days: int = MAX_OUTPUT_AGE_DAYS) -> int:
+        """Delete generated outputs older than max_age_days. Idempotent.
+
+        Only this user's vault is touched (per-user registry). Running
+        twice is safe: the second pass finds nothing to remove.
+        """
+        cutoff = time.time() - max_age_days * 86400.0
+        removed = 0
+        for meta in self.list_outputs():
+            if meta.created >= cutoff:
+                continue
+            if self.delete_output(meta.id):
+                removed += 1
+        return removed
+
+    def reconcile(self) -> Dict[str, List[str]]:
+        """Report vault inconsistencies; remove only unambiguous leftovers.
+
+        Returns a report with:
+        - "missing_files": registry IDs whose physical file is gone.
+        - "orphan_files": files on disk with no registry entry (kept, not
+          deleted: they may be valid data from an interrupted write).
+        - "bad_records": registry keys whose metadata is malformed.
+        - "removed_tmp": crash-leftover "*.tmp" files that were deleted.
+
+        Conservative by design: ambiguous cases are reported, never
+        destroyed. Tmp files are the only safe auto-removal (a complete
+        artifact is never stored under a .tmp name). Never touches other
+        users (per-user vault throughout).
+        """
+        report: Dict[str, List[str]] = {
+            "missing_files": [],
+            "orphan_files": [],
+            "bad_records": [],
+            "removed_tmp": [],
+        }
+        pairs = (
+            (self.uploads_dir, self.uploads_registry, UploadMeta),
+            (self.outputs_dir, self.outputs_registry, OutputMeta),
+        )
+        for directory, registry_path, model in pairs:
+            registry = self._load_registry(registry_path)
+            known_names = set()
+            for key, record in registry.items():
+                try:
+                    meta = model(**{k: record[k] for k in model.__dataclass_fields__})
+                except (KeyError, TypeError, AttributeError):
+                    report["bad_records"].append(str(key))
+                    continue
+                known_names.add(meta.stored_name)
+                candidate = directory / meta.stored_name
+                if not self._inside(directory, candidate) or not candidate.is_file():
+                    report["missing_files"].append(str(key))
+            try:
+                on_disk = [p.name for p in directory.iterdir() if p.is_file()]
+            except OSError:
+                continue
+            for name in sorted(on_disk):
+                if name.endswith(".tmp"):
+                    candidate = directory / name
+                    if self._inside(directory, candidate):
+                        try:
+                            candidate.unlink()
+                            report["removed_tmp"].append(name)
+                        except OSError:
+                            continue
+                elif name not in known_names:
+                    report["orphan_files"].append(name)
+        return report
 
     def prune_stale_uploads(
         self, max_age_days: int = 7, referenced_ids: Collection[str] = ()

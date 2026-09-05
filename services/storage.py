@@ -21,6 +21,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from services.obs import event as obs_event
+
 MAX_STORED_CHATS: int = 20
 MAX_MSGS_PER_CHAT: int = 100
 ATTACH_KINDS = ("pdf", "csv", "image")
@@ -99,19 +101,35 @@ def atomic_replace(src: Path, dst: Path, attempts: int = 5) -> None:
 
 
 def _read_json(path: Path) -> Tuple[Any, bool]:
-    """Read JSON, returning (data, was_corrupt). Missing file -> (None, False)."""
+    """Read JSON, returning (data, was_corrupt). Missing file -> (None, False).
+
+    Error classes are strictly separated:
+    - FileNotFoundError -> missing state, (None, False).
+    - JSON malformation (ValueError) -> corruption: the file is
+      quarantined next to the original and (None, True) is returned.
+    - PermissionError / other OSError -> infrastructure failure: raised
+      as StorageError (never quarantined, never converted to empty
+      state). Callers must surface this instead of silently resetting.
+    """
     try:
         with path_lock(path):
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f), False
     except FileNotFoundError:
         return None, False
-    except (OSError, ValueError):
+    except PermissionError as e:
+        obs_event("storage.read", status="error", reason="permission", file=path.name)
+        raise StorageError(f"Cannot read {path.name}: permission denied.") from e
+    except OSError as e:
+        obs_event("storage.read", status="error", reason="io", file=path.name)
+        raise StorageError(f"Cannot read {path.name}: storage failure ({e}).") from e
+    except ValueError:
         try:
             backup = path.with_name(f"{path.stem}.corrupt-{int(time.time())}{path.suffix}")
             os.replace(path, backup)
         except OSError:
             pass
+        obs_event("storage.quarantine", file=path.name)
         return None, True
 
 
@@ -130,6 +148,7 @@ def _write_json(path: Path, payload: Any) -> None:
                 tmp_path.unlink()
         except OSError:
             pass
+        obs_event("storage.write", status="error", file=path.name)
         raise StorageError(f"Could not persist {path.name}: {e}") from e
 
 
@@ -201,7 +220,12 @@ class UserStore:
     def load_chats(self) -> Tuple[Dict[str, Any], List[str]]:
         """Return ({"chats": [...], "current": [...]}, warnings)."""
         warnings: List[str] = []
-        data, corrupt = _read_json(self.chats_path)
+        try:
+            data, corrupt = _read_json(self.chats_path)
+        except StorageError as e:
+            # Infrastructure failure (e.g. permissions): report it, keep
+            # the stored data untouched, and run an empty session.
+            return {"chats": [], "current": []}, [f"Chat history unavailable ({e})"]
         if corrupt:
             warnings.append("Chat history was corrupted; a backup copy was kept and history was reset.")
         if not isinstance(data, dict):
@@ -230,8 +254,12 @@ class UserStore:
         try:
             with open(self.memory_path, "r", encoding="utf-8") as f:
                 return f.read()
-        except OSError:
+        except FileNotFoundError:
             return ""
+        except PermissionError as e:
+            raise StorageError(f"Cannot read memory notes: permission denied.") from e
+        except OSError as e:
+            raise StorageError(f"Cannot read memory notes: storage failure ({e}).") from e
 
     def save_notes(self, text: str) -> None:
         self.memory_path.parent.mkdir(parents=True, exist_ok=True)
@@ -252,7 +280,13 @@ class UserStore:
     # -- structured memory --------------------------------------
     def load_structured(self) -> Tuple[Dict[str, Any], List[str]]:
         """Return (memory dict, warnings) with guaranteed default keys."""
-        data, corrupt = _read_json(self.structured_path)
+        try:
+            data, corrupt = _read_json(self.structured_path)
+        except StorageError as e:
+            return (
+                {"preferences": {}, "facts": [], "past_tasks": [], "user_name": None},
+                [f"Structured memory unavailable ({e})"],
+            )
         warnings = (
             ["Structured memory was corrupted; a backup copy was kept."] if corrupt else []
         )
@@ -278,7 +312,10 @@ class UserStore:
         moved = False
         legacy_chats = Path("memory") / "chats.json"
         if legacy_chats.exists():
-            data, _ = _read_json(legacy_chats)
+            try:
+                data, _ = _read_json(legacy_chats)
+            except StorageError:
+                data = None
             if isinstance(data, dict) and (data.get("chats") or data.get("current")):
                 try:
                     self.save_chats(data.get("chats", []), data.get("current", []))
@@ -294,7 +331,10 @@ class UserStore:
                 pass
         legacy_structured = Path("structured_memory.json")
         if legacy_structured.exists():
-            data, _ = _read_json(legacy_structured)
+            try:
+                data, _ = _read_json(legacy_structured)
+            except StorageError:
+                data = None
             if isinstance(data, dict) and data:
                 try:
                     self.save_structured(data)

@@ -238,6 +238,14 @@ def test_rate_limit_users_independent():
     assert limiter.check("u2", "chat").allowed
 
 
+def test_rate_limit_zero_quota_denies_without_crash():
+    from services.ratelimit import MemoryRateLimiter
+
+    limiter = MemoryRateLimiter({"chat": (0, 60.0)})
+    denied = limiter.check("u1", "chat")
+    assert not denied.allowed and denied.retry_after > 0
+
+
 def test_rate_limit_window_expiry():
     from services.ratelimit import MemoryRateLimiter
 
@@ -473,6 +481,101 @@ def test_cascade_attempts_list():
     name, result = agent._run_cascade_step(fail_first, None, tiers, attempts)
     assert (name, result) == ("good", "good-result")
     assert attempts == ["bad", "good"]
+
+
+def test_bounded_call_returns_control_on_timeout():
+    import time
+
+    started = time.time()
+    with pytest.raises(TimeoutError):
+        agent._call_bounded(lambda: time.sleep(30), timeout=0.2, what="slow-op")
+    assert time.time() - started < 10
+
+
+def test_bounded_pool_limits_threads():
+    import threading
+    import time
+
+    workers = [t for t in threading.enumerate() if t.name.startswith("poka-bounded")]
+    assert 1 <= len(workers) <= agent._BOUNDED_MAX_WORKERS
+
+    def hang():
+        # Short hang: workers stay occupied through the burst below but
+        # drain fast so later tests are unaffected.
+        time.sleep(2)
+
+    for _ in range(agent._BOUNDED_MAX_WORKERS + 6):
+        with pytest.raises(TimeoutError):
+            agent._call_bounded(hang, timeout=0.05, what="hang")
+    workers = [t for t in threading.enumerate() if t.name.startswith("poka-bounded")]
+    assert len(workers) <= agent._BOUNDED_MAX_WORKERS
+
+
+def test_bounded_worker_exception_propagates():
+    def boom():
+        raise ValueError("worker blew up")
+
+    # Generous timeout: earlier tests may leave pool workers briefly busy.
+    with pytest.raises(ValueError, match="worker blew up"):
+        agent._call_bounded(boom, timeout=30.0, what="boom")
+    # Pool still serves after a worker exception.
+    assert agent._call_bounded(lambda: "alive", timeout=30.0, what="ping") == "alive"
+
+
+def test_fallback_attempts_consume_llm_budget():
+    import agent as agent_mod
+
+    calls = {"n": 0}
+
+    class AlwaysFail:
+        def invoke(self, messages):
+            calls["n"] += 1
+            raise ConnectionError("down")
+
+    # Both fallback attempts run and are charged...
+    budget = agent_mod.RequestBudget(max_llm=2)
+    with pytest.raises(RuntimeError):
+        agent_mod._run_cascade_step(
+            lambda _name, llm: agent_mod._invoke_bounded(llm, "hi", budget=budget),
+            None,
+            [("t1", AlwaysFail), ("t2", AlwaysFail)],
+        )
+    assert calls["n"] == 2
+    assert budget.llm_calls == 2
+    # ...and once the budget is spent, further fallback is blocked
+    # instead of retrying for free (failures never reset counters).
+    tight = agent_mod.RequestBudget(max_llm=1)
+    with pytest.raises(agent_mod.BudgetExhausted):
+        agent_mod._run_cascade_step(
+            lambda _name, llm: agent_mod._invoke_bounded(llm, "hi", budget=tight),
+            None,
+            [("t1", AlwaysFail), ("t2", AlwaysFail)],
+        )
+    assert calls["n"] == 3
+
+
+def test_tool_failure_still_counts_tool_budget():
+    import agent as agent_mod
+
+    class BadTool:
+        name = "bad-tool"
+
+        def invoke(self, args):
+            raise RuntimeError("tool exploded")
+
+    agent_mod.TOOL_MAP["bad-tool"] = BadTool()
+    try:
+        budget = agent_mod.RequestBudget(max_tools=10)
+        out = agent_mod._execute_tool_call({"name": "bad-tool", "args": {}}, budget)
+        assert out.startswith("STATUS=FAILED")
+        assert budget.tool_calls == 1
+    finally:
+        agent_mod.TOOL_MAP.pop("bad-tool", None)
+
+
+def test_provider_error_classification_preserved():
+    assert agent.classify_provider_error(TimeoutError("Model request timed out after 90s.")) == ("timeout", True)
+    assert agent.classify_provider_error(RuntimeError("429 quota exceeded"))[0] == "rate_limit"
 
 
 # -- PDF / CSV / SEARCH CONTROLS ----------------------------------------------------------

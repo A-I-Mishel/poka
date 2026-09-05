@@ -324,6 +324,284 @@ def test_env_identity_override(monkeypatch):
     assert ident.id == "operator-1" and ident.source == "env"
 
 
+# -- centralized secrets (Streamlit Secrets + env) -------------------------------
+
+class _StubSecrets:
+    """Minimal stand-in for streamlit.secrets (load_if_toml_exists + get)."""
+
+    def __init__(self, values, loaded=True):
+        self._values = dict(values)
+        self._loaded = loaded
+
+    def load_if_toml_exists(self):
+        return self._loaded
+
+    def get(self, name, default=None):
+        return self._values.get(name, default)
+
+
+def _stub_secrets(monkeypatch, values, loaded=True):
+    import streamlit
+
+    monkeypatch.setattr(streamlit, "secrets", _StubSecrets(values, loaded))
+
+
+def test_secrets_env_tokens_accepted(monkeypatch):
+    from services.auth import verify_access_token
+
+    monkeypatch.setenv("POKA_ACCESS_TOKENS", "alpha-secret, beta-secret")
+    uid = verify_access_token("alpha-secret")
+    assert uid and uid.startswith("token-")
+    assert verify_access_token("beta-secret") == verify_access_token("beta-secret")
+    assert verify_access_token("wrong-token") is None
+    assert verify_access_token("") is None
+
+
+def test_secrets_streamlit_tokens_accepted(monkeypatch):
+    from services.auth import verify_access_token
+
+    monkeypatch.delenv("POKA_ACCESS_TOKENS", raising=False)
+    _stub_secrets(monkeypatch, {"POKA_ACCESS_TOKENS": "cloud-one, cloud-two"})
+    uid = verify_access_token("cloud-one")
+    assert uid and uid.startswith("token-")
+    assert verify_access_token("cloud-two") is not None
+    assert verify_access_token("wrong-token") is None
+    assert verify_access_token("") is None
+
+
+def test_secrets_take_precedence_over_env(monkeypatch):
+    from services.auth import verify_access_token
+    from services.secrets import get_secret
+
+    monkeypatch.setenv("POKA_ACCESS_TOKENS", "env-token")
+    _stub_secrets(monkeypatch, {"POKA_ACCESS_TOKENS": "cloud-token"})
+    assert get_secret("POKA_ACCESS_TOKENS") == "cloud-token"
+    assert verify_access_token("cloud-token") is not None
+    # First source wins: a stale env token must not authenticate.
+    assert verify_access_token("env-token") is None
+
+
+def test_secrets_missing_keeps_auth_enforced(monkeypatch):
+    from services.auth import AuthRequired, authenticate, verify_access_token
+    from services.identity import auth_mode
+
+    monkeypatch.setenv("POKA_AUTH_MODE", "private")
+    monkeypatch.delenv("POKA_USER_ID", raising=False)
+    monkeypatch.delenv("POKA_ACCESS_TOKENS", raising=False)
+    # Secrets file present but empty: per-name env fallback still applies,
+    # and absent credentials must NOT open the gate.
+    _stub_secrets(monkeypatch, {})
+    assert auth_mode() == "private"
+    assert verify_access_token("anything") is None
+    with pytest.raises(AuthRequired):
+        authenticate()
+
+
+def test_secrets_auth_mode_and_identity(monkeypatch):
+    from services.identity import auth_mode, get_current_user
+
+    monkeypatch.delenv("POKA_AUTH_MODE", raising=False)
+    monkeypatch.delenv("POKA_USER_ID", raising=False)
+    _stub_secrets(monkeypatch, {"POKA_AUTH_MODE": "private", "POKA_USER_ID": "cloud-user"})
+    assert auth_mode() == "private"
+    ident = get_current_user()
+    assert ident.id == "cloud-user" and ident.source == "env"
+
+
+def test_secrets_config_keys_use_central_seam(monkeypatch):
+    import config
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    _stub_secrets(monkeypatch, {"GEMINI_API_KEY": "gem-secret", "OPENCODE_API_KEY": "oc-secret"})
+    assert config._get_secret("GEMINI_API_KEY") == "gem-secret"
+    assert config._get_secret("OPENCODE_API_KEY") == "oc-secret"
+    assert config._get_secret("MISSING_KEY_XYZ") is None
+
+
+# -- observability redaction ---------------------------------------------------
+
+def test_obs_drops_credential_fields(caplog):
+    import logging
+
+    from services import obs as obs_mod
+
+    with caplog.at_level(logging.INFO, logger="poka.obs"):
+        obs_mod.event(
+            "request.end", status="ok", request_id="abc123",
+            api_key="sk-live-should-never-appear",
+            access_token="tok-should-never-appear",
+            password="pw-should-never-appear",
+            tier="Muse Spark 1.3",
+        )
+    text = caplog.text
+    assert "sk-live-should-never-appear" not in text
+    assert "tok-should-never-appear" not in text
+    assert "pw-should-never-appear" not in text
+    assert "abc123" in text and "Muse Spark 1.3" in text
+
+
+def test_obs_timed_marks_error_and_reraises(caplog):
+    import logging
+
+    from services import obs as obs_mod
+
+    with caplog.at_level(logging.INFO, logger="poka.obs"):
+        with obs_mod.timed("tool.test_op") as rec:
+            rec["status"] = "denied"
+    assert "status=denied" in caplog.text
+    with caplog.at_level(logging.INFO, logger="poka.obs"):
+        with obs_mod.timed("tool.test_op") as rec:
+            assert rec["status"] == "ok"
+    assert "status=ok" in caplog.text
+
+
+# -- provider client cache isolation ---------------------------------------------
+
+def test_provider_clients_reused_per_tier_temp(monkeypatch):
+    import config
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "dummy-cache-key")
+    config._CLIENT_CACHE.clear()
+    try:
+        default = config.get_tier1_llm()
+        assert default is not None and default.temperature == config.TEMPERATURE
+        assert config.get_tier1_llm() is default
+        cool = config.get_tier1_llm(temperature=0.2)
+        assert cool is not default and cool.temperature == 0.2
+        # Fetching another temperature never mutates shared instances.
+        assert config.get_tier1_llm().temperature == config.TEMPERATURE
+        assert config.get_tier_llm("Muse Spark 1.3", temperature=0.2) is cool
+        assert config.get_tier_llm("no-such-tier") is None
+    finally:
+        config._CLIENT_CACHE.clear()
+
+
+def test_provider_client_cache_rotates_on_key_change(monkeypatch):
+    import config
+
+    config._CLIENT_CACHE.clear()
+    try:
+        monkeypatch.setenv("OPENCODE_API_KEY", "cache-key-one")
+        first = config.get_tier1_llm()
+        assert first is not None
+        monkeypatch.setenv("OPENCODE_API_KEY", "cache-key-two")
+        second = config.get_tier1_llm()
+        assert second is not None and second is not first
+        # Only hashes are retained for rotation checks, never raw keys.
+        stored = config._CLIENT_CACHE[("Muse Spark 1.3", float(config.TEMPERATURE))]
+        assert "cache-key-two" not in stored[0]
+        assert stored[1] is second
+    finally:
+        config._CLIENT_CACHE.clear()
+
+def test_provider_client_cache_bounded(monkeypatch):
+    import config
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "dummy-cache-key")
+    config._CLIENT_CACHE.clear()
+    try:
+        for i in range(config._MAX_CACHED_CLIENTS + 10):
+            config.get_tier1_llm(temperature=0.1 + i * 0.01)
+        assert len(config._CLIENT_CACHE) <= config._MAX_CACHED_CLIENTS
+    finally:
+        config._CLIENT_CACHE.clear()
+
+
+def test_custom_tiers_never_swapped_for_real_clients(monkeypatch):
+    # A caller-supplied tiers table owns its instances: even a real tier
+    # name must resolve to the provided fake, never a network client.
+    monkeypatch.setenv("OPENCODE_API_KEY", "dummy-no-network-key")
+
+    class Fake:
+        def bind_tools(self, tools):
+            return self
+
+        def invoke(self, messages):
+            class R:
+                content = "fake answer"
+                tool_calls = []
+
+            return R()
+
+    out = agent.answer_with_fallback(
+        "write an essay please",
+        tiers=[("Muse Spark 1.3", Fake)],
+        raw_messages=[],
+    )
+    assert out["output"] == "fake answer"
+    assert out["active_tier"] == "Muse Spark 1.3"
+
+
+def test_failure_modes_emit_no_secrets_or_content(data_dir, monkeypatch, caplog):
+    import logging
+
+    import agent as agent_mod
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "RT-SENTINEL-KEY-9f8e")
+    monkeypatch.setenv("GEMINI_API_KEY", "RT-SENTINEL-GEM-7d6c")
+    monkeypatch.setenv("POKA_ACCESS_TOKENS", "RT-SENTINEL-TOK-5b4a")
+    secret_user_text = "RT-SENTINEL-USERMSG-3c2b says hello"
+
+    class FailLLM:
+        def invoke(self, messages):
+            raise ConnectionError("provider unreachable")
+
+    with caplog.at_level(logging.DEBUG, logger="poka.obs"):
+        with caplog.at_level(logging.DEBUG):
+            try:
+                agent_mod.answer_with_fallback(
+                    secret_user_text,
+                    tiers=[("down", FailLLM)],
+                    raw_messages=[],
+                )
+            except RuntimeError:
+                pass
+            store = FileStore("user-a")
+            try:
+                store.save_upload(b"", "empty.pdf")
+            except Exception:  # noqa: BLE001 - exercising the failure path
+                pass
+            FileStore("user-a").save_upload(_pdf_bytes(), "doc.pdf")
+    text = caplog.text
+    for sentinel in (
+        "RT-SENTINEL-KEY-9f8e",
+        "RT-SENTINEL-GEM-7d6c",
+        "RT-SENTINEL-TOK-5b4a",
+        "RT-SENTINEL-USERMSG-3c2b",
+    ):
+        assert sentinel not in text
+
+
+def test_non_string_secret_value_accepted(monkeypatch):
+    from services.auth import verify_access_token
+
+    monkeypatch.delenv("POKA_ACCESS_TOKENS", raising=False)
+    _stub_secrets(monkeypatch, {"POKA_ACCESS_TOKENS": 12345})
+    assert verify_access_token("12345") is not None
+    assert verify_access_token("wrong") is None
+
+
+def test_reflection_single_shot_always_improve():
+    import agent as agent_mod
+
+    class AlwaysImprove:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            class R:
+                content = "[IMPROVE] better"
+
+            return R()
+
+    fake = AlwaysImprove()
+    out = agent_mod.reflect_and_improve(fake, "q", "draft", [], agent_mod.RequestBudget())
+    assert out == "better" and fake.calls == 1
+
+
 def test_symlink_upload_cannot_escape(data_dir):
     outside = data_dir.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
@@ -411,6 +689,47 @@ def test_generation_failure_is_structured(data_dir, monkeypatch):
     assert docx_tool.create_docx.invoke(
         {"title": "T", "content": "Hello"}
     ).startswith("STATUS=FAILED")
+
+
+def test_generate_rate_limit_checked_before_work(data_dir, monkeypatch, tmp_path):
+    import tools.pptx_tool as pptx_tool
+    from services.files import FileStore
+    from services.ratelimit import MemoryRateLimiter, configure_rate_limiter
+
+    ctx.set_current_user_id("user-a")
+    configure_rate_limiter(MemoryRateLimiter({"generate": (1, 3600.0)}))
+    try:
+        first = pptx_tool.create_pptx.invoke({"topic": "T", "content": "S1\n- a"})
+        assert "file ID" in first
+        assert len(FileStore("user-a").list_outputs()) == 1
+
+        def _bomb(*a, **k):
+            raise AssertionError("expensive generation must not run when quota exhausted")
+
+        monkeypatch.setattr(pptx_tool, "Presentation", _bomb)
+        second = pptx_tool.create_pptx.invoke({"topic": "T", "content": "S1\n- a"})
+        assert second.startswith("STATUS=DENIED")
+        # Rejected request performed no work and persisted nothing.
+        assert len(FileStore("user-a").list_outputs()) == 1
+        assert list(tmp_path.glob("pptx_*.pptx")) == []
+    finally:
+        configure_rate_limiter(MemoryRateLimiter())
+
+
+def test_generate_without_user_context_denied(tmp_path):
+    import tools.pptx_tool as pptx_tool
+    import tools.docx_tool as docx_tool
+
+    ctx.set_current_user_id(None)
+    assert pptx_tool.create_pptx.invoke(
+        {"topic": "T", "content": "S1\n- a"}
+    ).startswith("STATUS=DENIED")
+    assert docx_tool.create_docx.invoke(
+        {"title": "T", "content": "Hello"}
+    ).startswith("STATUS=DENIED")
+    # No unowned artifacts may escape to the working directory.
+    assert list(tmp_path.glob("pptx_*.pptx")) == []
+    assert list(tmp_path.glob("docx_*.docx")) == []
 
 
 def test_cooldown_shared_by_classify_and_answer():
@@ -546,6 +865,149 @@ def test_corrupt_storage_recovered_with_warning(data_dir):
     assert warnings, "expected a corruption warning"
     backups = list(store.root.glob("chats.corrupt-*"))
     assert backups, "expected a quarantined backup file"
+
+
+def test_storage_permission_failure_is_not_corruption(data_dir, monkeypatch):
+    store = UserStore("user-a")
+    store.save_chats([], [{"role": "user", "content": "hi", "time": "t"}])
+    before = store.chats_path.stat().st_size
+
+    def _deny(*a, **k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("builtins.open", _deny)
+    data, warnings = store.load_chats()
+    assert data == {"chats": [], "current": []}
+    assert warnings and "permission" in warnings[0].lower()
+    monkeypatch.undo()
+    # Infrastructure failure must not quarantine or destroy stored data.
+    assert store.chats_path.stat().st_size == before
+    assert list(store.root.glob("chats.corrupt-*")) == []
+    data, warnings = store.load_chats()
+    assert data["current"][0]["content"] == "hi" and not warnings
+
+
+def test_registry_permission_failure_raises(data_dir, monkeypatch):
+    store = FileStore("user-a")
+    meta = store.save_upload(_pdf_bytes(), "doc.pdf")
+
+    def _deny(*a, **k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("builtins.open", _deny)
+    # Unreadable registry surfaces instead of silently denying as unknown.
+    with pytest.raises(StorageError):
+        store.get_upload(meta.id)
+
+
+def test_failed_atomic_write_cleans_tmp(data_dir, monkeypatch):
+    import services.files as files_mod
+
+    store = FileStore("user-a")
+
+    def _boom_replace(src, dst):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(files_mod, "atomic_replace", _boom_replace)
+    with pytest.raises(FileValidationError):
+        store.save_upload(_pdf_bytes(), "doc.pdf")
+    leftovers = [p for p in store.uploads_dir.iterdir() if p.suffix == ".tmp"]
+    assert leftovers == []
+    assert list(store.uploads_dir.iterdir()) == []
+    assert store.list_uploads() == []
+
+
+def test_failed_json_write_keeps_original(data_dir, monkeypatch):
+    import services.storage as storage_mod
+
+    store = UserStore("user-a")
+    store.save_chats([], [{"role": "user", "content": "keep me", "time": "t"}])
+    before = store.chats_path.read_bytes()
+
+    def _boom_replace(src, dst):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(storage_mod, "atomic_replace", _boom_replace)
+    with pytest.raises(StorageError):
+        store.save_chats([], [{"role": "user", "content": "new", "time": "t"}])
+    assert store.chats_path.read_bytes() == before
+    data, warnings = store.load_chats()
+    assert data["current"][0]["content"] == "keep me" and not warnings
+
+
+def test_structured_corruption_warns(data_dir):
+    store = UserStore("user-a")
+    store.structured_path.parent.mkdir(parents=True, exist_ok=True)
+    store.structured_path.write_text("{not json", encoding="utf-8")
+    mem, warnings = store.load_structured()
+    assert mem["facts"] == [] and warnings
+    assert list(store.root.glob("structured.corrupt-*"))
+
+
+def test_upload_count_quota_enforced(data_dir, monkeypatch):
+    from services import files as files_mod
+
+    monkeypatch.setattr(files_mod, "MAX_UPLOADS_PER_USER", 2)
+    FileStore("user-a").save_upload(_pdf_bytes(), "a.pdf")
+    FileStore("user-a").save_upload(_pdf_bytes(), "b.pdf")
+    with pytest.raises(FileValidationError):
+        FileStore("user-a").save_upload(_pdf_bytes(), "c.pdf")
+
+
+def test_upload_bytes_quota_enforced(data_dir, monkeypatch):
+    from services import files as files_mod
+
+    monkeypatch.setattr(files_mod, "MAX_USER_BYTES", 10)
+    with pytest.raises(FileValidationError):
+        FileStore("user-a").save_upload(_pdf_bytes(), "big.pdf")
+
+
+def test_output_retention_idempotent_and_bounded(data_dir):
+    import json
+    import time
+
+    store = FileStore("user-a")
+    old = store.register_output("old.pptx", b"data-bytes", "pptx")
+    new = store.register_output("new.pptx", b"data-bytes", "pptx")
+    reg = json.loads(store.outputs_registry.read_text(encoding="utf-8"))
+    reg[old.id]["created"] = time.time() - 40 * 86400.0
+    store.outputs_registry.write_text(json.dumps(reg), encoding="utf-8")
+    assert store.prune_stale_outputs(30) == 1
+    assert store.get_output(old.id) is None
+    assert store.get_output(new.id) is not None
+    assert store.prune_stale_outputs(30) == 0
+    # Retention never crosses user boundaries.
+    other = FileStore("user-b").register_output("o.pptx", b"x", "pptx")
+    oreg = json.loads(FileStore("user-b").outputs_registry.read_text(encoding="utf-8"))
+    oreg[other.id]["created"] = time.time() - 40 * 86400.0
+    FileStore("user-b").outputs_registry.write_text(json.dumps(oreg), encoding="utf-8")
+    assert FileStore("user-a").prune_stale_outputs(30) == 0
+    assert FileStore("user-b").resolve_upload(other.id) is None
+    assert FileStore("user-b").get_output(other.id) is not None
+
+
+def test_reconcile_reports_and_cleans_tmp(data_dir):
+    import json
+
+    store = FileStore("user-a")
+    meta = store.save_upload(_pdf_bytes(), "doc.pdf")
+    (store.uploads_dir / "deadbeefcafe1234_orphan.pdf").write_bytes(b"%PDF-1.4\n%%EOF")
+    (store.uploads_dir / "stale.123.abcdef12.tmp").write_bytes(b"partial")
+    (store.uploads_dir / meta.stored_name).unlink()
+    reg = json.loads(store.uploads_registry.read_text(encoding="utf-8"))
+    reg["badkey"] = [1, 2, 3]
+    store.uploads_registry.write_text(json.dumps(reg), encoding="utf-8")
+
+    report = store.reconcile()
+    assert meta.id in report["missing_files"]
+    assert "deadbeefcafe1234_orphan.pdf" in report["orphan_files"]
+    assert "badkey" in report["bad_records"]
+    assert report["removed_tmp"] == ["stale.123.abcdef12.tmp"]
+    assert not (store.uploads_dir / "stale.123.abcdef12.tmp").exists()
+    # Conservative: orphans are reported but kept; dangling records kept.
+    assert (store.uploads_dir / "deadbeefcafe1234_orphan.pdf").exists()
+    assert store.get_upload(meta.id) is not None
+    assert store.reconcile()["removed_tmp"] == []
 
 
 # -- 1/13/14. app flows (no network: stubbed agent) -------------------------------------

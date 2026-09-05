@@ -6,6 +6,7 @@ from langchain.tools import tool
 
 from services.context import get_current_user_id
 from services.limits import MAX_QUERY_CHARS, MAX_SEARCH_CHARS
+from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -146,6 +147,10 @@ def web_search(query: str) -> str:
     if user_id:
         verdict = get_rate_limiter().check(user_id, "search")
         if not verdict.allowed:
+            obs_event(
+                "ratelimit.deny", action="search", user=user_id,
+                retry_after_s=round(verdict.retry_after, 1),
+            )
             return (
                 "STATUS=DENIED tool=web_search: search rate limit exceeded, "
                 f"retry in {verdict.retry_after:.0f}s."

@@ -20,12 +20,12 @@ UserIdentity, so nothing downstream changes.
 """
 
 import hashlib
-import os
 import secrets
 from dataclasses import dataclass
 from typing import Optional
 
 from services.identity import AuthRequired, UserIdentity, auth_mode, get_current_user
+from services.secrets import get_secret
 
 
 @dataclass(frozen=True)
@@ -38,8 +38,12 @@ class AuthResult:
 
 
 def _configured_tokens() -> list:
-    """Parse configured access tokens (never logged, never echoed)."""
-    raw = os.getenv("POKA_ACCESS_TOKENS", "")
+    """Parse configured access tokens (never logged, never echoed).
+
+    Read through the central secret seam so tokens work identically
+    via Streamlit Secrets and environment variables.
+    """
+    raw = get_secret("POKA_ACCESS_TOKENS", "") or ""
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
@@ -56,7 +60,9 @@ def verify_access_token(token: object) -> Optional[str]:
             if secrets.compare_digest(token, configured):
                 digest = hashlib.sha256(configured.encode()).hexdigest()[:32]
                 return f"token-{digest}"
-        except Exception:
+        except TypeError:
+            # Non-comparable pair (defensive: both sides are str here).
+            # Anything else propagates instead of silently skipping.
             continue
     return None
 

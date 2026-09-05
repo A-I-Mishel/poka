@@ -5,10 +5,10 @@ from langchain.tools import tool
 from pptx import Presentation
 from pptx.util import Inches
 
-from services.context import get_current_user_id
 from services.files import FileStore
-from services.ratelimit import get_rate_limiter
+from services.limits import MAX_PPTX_BULLETS_PER_SLIDE, MAX_PPTX_SLIDES
 from services.storage import StorageError
+from tools.gating import claim_generation_slot
 
 
 @tool
@@ -28,12 +28,29 @@ def create_pptx(topic: str, content: str) -> str:
         Filename of the saved presentation (plus its download ID).
     """
     try:
+        # Gate BEFORE expensive work: quota checks must precede generation
+        # so exhausted users cannot trigger repeated builds.
+        user_id, denied = claim_generation_slot("create_pptx")
+        if denied is not None:
+            return denied
+        # Slide cap BEFORE expensive work: count derived slides first so
+        # enormous requests are truncated, never fully built.
+        blocks: list[str] = [b for b in content.strip().split("\n\n") if b.strip()]
+        total_slides = 1 + len(blocks)
+        overflow_note = ""
+        if total_slides > MAX_PPTX_SLIDES:
+            blocks = blocks[: MAX_PPTX_SLIDES - 1]
+            overflow_note = (
+                f" [Note: limited to the first {MAX_PPTX_SLIDES} slides "
+                f"({total_slides} requested).]"
+            )
         prs: Presentation = Presentation()
 
         title_slide = prs.slides.add_slide(prs.slide_layouts[0])
         title_slide.shapes.title.text = topic
 
-        slides_content: list[str] = content.strip().split("\n\n")
+        slides_content: list[str] = blocks
+        dropped_bullets = 0
         for slide_text in slides_content:
             if not slide_text.strip():
                 continue
@@ -41,6 +58,9 @@ def create_pptx(topic: str, content: str) -> str:
             lines: list[str] = slide_text.strip().split("\n")
             slide.shapes.title.text = lines[0].lstrip("- ").strip() if lines else "Slide"
             bullets: list[str] = [ln.lstrip("- ").strip() for ln in lines[1:] if ln.strip()]
+            if len(bullets) > MAX_PPTX_BULLETS_PER_SLIDE:
+                dropped_bullets += len(bullets) - MAX_PPTX_BULLETS_PER_SLIDE
+                bullets = bullets[:MAX_PPTX_BULLETS_PER_SLIDE]
             if not bullets:
                 continue
             try:
@@ -69,22 +89,19 @@ def create_pptx(topic: str, content: str) -> str:
         prs.save(buf)
         data: bytes = buf.getvalue()
 
-        user_id = get_current_user_id()
-        if user_id:
-            verdict = get_rate_limiter().check(user_id, "generate")
-            if not verdict.allowed:
-                return (
-                    "STATUS=DENIED tool=create_pptx: generation rate limit "
-                    f"exceeded, retry in {verdict.retry_after:.0f}s."
+        try:
+            meta = FileStore(user_id).register_output(filename, data, "pptx")
+            if dropped_bullets:
+                overflow_note += (
+                    f" [{dropped_bullets} bullet lines dropped "
+                    f"(max {MAX_PPTX_BULLETS_PER_SLIDE} per slide).]"
                 )
-            try:
-                meta = FileStore(user_id).register_output(filename, data, "pptx")
-                return f"Presentation saved as {meta.display_name} (file ID: {meta.id})"
-            except StorageError as e:
-                return f"STATUS=FAILED tool=create_pptx: {e}"
-        with open(filename, "wb") as f:
-            f.write(data)
-        return f"Presentation saved as {filename}"
+            return (
+                f"Presentation saved as {meta.display_name} "
+                f"(file ID: {meta.id}){overflow_note}"
+            )
+        except StorageError as e:
+            return f"STATUS=FAILED tool=create_pptx: {e}"
     except Exception as e:
         return f"STATUS=FAILED tool=create_pptx: {str(e)}"
 
@@ -188,6 +205,12 @@ def build_presentation(spec_json: str) -> str:
                 f"bad type (allowed: {', '.join(_PPTX_SLIDE_TYPES)})."
             )
 
+    # Gate BEFORE expensive work: quota checks must precede generation
+    # so exhausted users cannot trigger repeated builds.
+    user_id, denied = claim_generation_slot("build_presentation")
+    if denied is not None:
+        return denied
+
     from pptx.util import Pt
     from pptx.dml.color import RGBColor
 
@@ -215,6 +238,11 @@ def build_presentation(spec_json: str) -> str:
         built = 1
 
         for s in raw_slides:
+            if built >= MAX_PPTX_SLIDES:
+                overflow_notes.append(
+                    f"Stopped at {MAX_PPTX_SLIDES} slides (limit)."
+                )
+                break
             stype = s.get("type", "bullets")
             stitle = str(s.get("title", "") or "Slide")[:_PPTX_MAX_TITLE]
             notes = str(s.get("notes", ""))
@@ -296,7 +324,13 @@ def build_presentation(spec_json: str) -> str:
                     continue
                 chunks = [bullets[i:i + _PPTX_MAX_BULLETS]
                           for i in range(0, len(bullets), _PPTX_MAX_BULLETS)]
-                for k, chunk in enumerate(chunks):
+                # Total slide cap: never expand past the limit.
+                allowed = chunks[: max(0, MAX_PPTX_SLIDES - built)]
+                if len(allowed) < len(chunks):
+                    overflow_notes.append(
+                        f"Slide '{stitle}' truncated at {MAX_PPTX_SLIDES} slides (limit)."
+                    )
+                for k, chunk in enumerate(allowed):
                     name = stitle if k == 0 else f"{stitle} (cont.)"
                     slide = _new_content_slide(name)
                     try:
@@ -310,9 +344,9 @@ def build_presentation(spec_json: str) -> str:
                     except (IndexError, KeyError, AttributeError):
                         _pptx_set_textbox(slide, Inches(0.8), Inches(1.6), Inches(8.4), Inches(4.6), name, chunk)
                     _pptx_add_notes(slide, notes if k == 0 else "")
-                if len(chunks) > 1:
+                if len(allowed) > 1:
                     overflow_notes.append(
-                        f"Slide '{stitle}' split into {len(chunks)} slides (content overflow)."
+                        f"Slide '{stitle}' split into {len(allowed)} slides (content overflow)."
                     )
 
         if built < 2:
@@ -357,24 +391,13 @@ def build_presentation(spec_json: str) -> str:
         except Exception as e:
             return f"STATUS=FAILED tool=build_presentation: output unreadable ({str(e)[:120]})."
 
-        user_id = get_current_user_id()
         summary = f"Presentation saved as {filename} with {built} slides."
         if overflow_notes:
             summary += " " + " ".join(overflow_notes)
-        if user_id:
-            verdict = get_rate_limiter().check(user_id, "generate")
-            if not verdict.allowed:
-                return (
-                    "STATUS=DENIED tool=build_presentation: generation rate limit "
-                    f"exceeded, retry in {verdict.retry_after:.0f}s."
-                )
-            try:
-                meta = FileStore(user_id).register_output(filename, data, "pptx")
-                return f"{summary} (file ID: {meta.id})"
-            except StorageError as e:
-                return f"STATUS=FAILED tool=build_presentation: {e}"
-        with open(filename, "wb") as f:
-            f.write(data)
-        return summary
+        try:
+            meta = FileStore(user_id).register_output(filename, data, "pptx")
+            return f"{summary} (file ID: {meta.id})"
+        except StorageError as e:
+            return f"STATUS=FAILED tool=build_presentation: {e}"
     except Exception as e:
         return f"STATUS=FAILED tool=build_presentation: {str(e)[:200]}"

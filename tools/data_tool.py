@@ -1,10 +1,15 @@
 from langchain.tools import tool
+import csv
+import io
 import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.context import get_current_user_id
 from services.files import FileStore
-from services.limits import MAX_CSV_ROWS
+from services.limits import MAX_CSV_COLUMNS, MAX_CSV_PARSE_BYTES, MAX_CSV_ROWS, MAX_UPLOAD_BYTES
+from services.obs import timed as obs_timed
+
+_CSV_SNIFF_BYTES: int = 65536
 
 _CSV_OPS = (
     "overview", "describe", "missing", "unique", "groupby",
@@ -28,22 +33,57 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional[pd.DataFrame], Optional[st
     path = FileStore(user_id).resolve_upload(upload_id)
     if path is None:
         return None, "STATUS=DENIED tool=csv: unknown upload ID or not owned by you.", False
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        return None, f"STATUS=FAILED tool=csv: cannot stat upload ({e}).", False
+    # Size gates BEFORE the parser: never feed pandas an unbounded stream.
+    if size > MAX_UPLOAD_BYTES:
+        return None, "STATUS=DENIED tool=csv: upload exceeds the size limit.", False
+    if size > MAX_CSV_PARSE_BYTES:
+        return None, (
+            "STATUS=DENIED tool=csv: file too large to analyze "
+            f"(limit {MAX_CSV_PARSE_BYTES // (1024 * 1024)} MB)."
+        ), False
+    # Header sniff BEFORE pandas: bound column count and reject absurd
+    # single-line blobs without parsing the whole file.
+    try:
+        with open(path, "rb") as f:
+            head = f.read(_CSV_SNIFF_BYTES + 1)
+    except OSError as e:
+        return None, f"STATUS=FAILED tool=csv: cannot read upload ({e}).", False
+    if b"\n" not in head and size > len(head):
+        return None, "STATUS=DENIED tool=csv: no header row within budget.", False
+    try:
+        first_line = head.split(b"\n", 1)[0].decode("utf-8-sig", errors="replace")
+        columns = next(csv.reader(io.StringIO(first_line)))
+    except Exception:
+        columns = []
+    if len(columns) > MAX_CSV_COLUMNS:
+        return None, (
+            f"STATUS=DENIED tool=csv: too many columns "
+            f"({len(columns)} > {MAX_CSV_COLUMNS})."
+        ), False
     frame: Optional[pd.DataFrame] = None
     last_error: str = ""
-    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
-        try:
-            frame = pd.read_csv(
-                str(path),
-                nrows=MAX_CSV_ROWS + 1,
-                encoding=encoding,
-                on_bad_lines="skip",
-            )
-            break
-        except UnicodeDecodeError as e:
-            last_error = str(e)[:120]
-            continue
-        except Exception as e:
-            return None, f"STATUS=FAILED tool=csv: {str(e)[:200]}", False
+    with obs_timed("csv.parse") as rec:
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                frame = pd.read_csv(
+                    str(path),
+                    nrows=MAX_CSV_ROWS + 1,
+                    encoding=encoding,
+                    on_bad_lines="skip",
+                )
+                break
+            except UnicodeDecodeError as e:
+                last_error = str(e)[:120]
+                continue
+            except Exception as e:
+                rec["status"] = "failed"
+                return None, f"STATUS=FAILED tool=csv: {str(e)[:200]}", False
+        if frame is None:
+            rec["status"] = "failed"
     if frame is None:
         return None, f"STATUS=FAILED tool=csv: unreadable encoding. {last_error}", False
     truncated = len(frame) > MAX_CSV_ROWS

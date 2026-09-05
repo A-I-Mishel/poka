@@ -9,6 +9,22 @@ these values.
 MAX_UPLOAD_BYTES: int = 200 * 1024 * 1024
 ALLOWED_UPLOAD_EXTS: frozenset = frozenset({"pdf", "csv", "png", "jpg", "jpeg"})
 
+# Per-user storage exhaustion controls (checked BEFORE writes/parsing).
+MAX_UPLOADS_PER_USER: int = 100
+MAX_USER_BYTES: int = 1024 * 1024 * 1024
+MAX_OUTPUT_AGE_DAYS: int = 30
+
+# CSV parse guards (all checked BEFORE pandas runs).
+MAX_CSV_COLUMNS: int = 1000
+MAX_CSV_PARSE_BYTES: int = 25 * 1024 * 1024
+
+# Presentation generation guard (checked BEFORE expensive building).
+MAX_PPTX_SLIDES: int = 50
+MAX_PPTX_BULLETS_PER_SLIDE: int = 200
+
+# Document generation guard (checked BEFORE expensive building).
+MAX_DOCX_PARAGRAPHS: int = 1000
+
 # Tool input/output caps
 MAX_PDF_PAGES: int = 200
 MAX_PDF_CHARS: int = 12000

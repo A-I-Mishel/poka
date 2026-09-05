@@ -4,7 +4,8 @@ from typing import List, Optional, Tuple
 
 from services.context import get_current_user_id
 from services.files import FileStore
-from services.limits import MAX_PDF_CHARS, MAX_PDF_PAGES
+from services.limits import MAX_PDF_CHARS, MAX_PDF_PAGES, MAX_UPLOAD_BYTES
+from services.obs import timed as obs_timed
 
 OCR_SCAN_PAGES: int = 5
 
@@ -17,6 +18,14 @@ def _resolve_reader(upload_id: str) -> Tuple[Optional[PdfReader], int, Optional[
     path = FileStore(user_id).resolve_upload(upload_id)
     if path is None:
         return None, 0, "STATUS=DENIED tool=read_pdf: unknown upload ID or not owned by you."
+    try:
+        # Re-check size at read time: the file may predate current limits
+        # or the registry may have been tampered with; never feed an
+        # unbounded byte stream to the parser.
+        if path.stat().st_size > MAX_UPLOAD_BYTES:
+            return None, 0, "STATUS=DENIED tool=read_pdf: upload exceeds the size limit."
+    except OSError as e:
+        return None, 0, f"STATUS=FAILED tool=read_pdf: cannot stat upload ({e})."
     try:
         reader: PdfReader = PdfReader(str(path))
         return reader, len(reader.pages), None
@@ -60,9 +69,11 @@ def read_pdf(upload_id: str) -> str:
         Extracted text, or a STATUS= error marker on failure.
     """
     try:
-        reader, total_pages, error = _resolve_reader(upload_id)
-        if error is not None:
-            return error
+        with obs_timed("pdf.parse") as rec:
+            reader, total_pages, error = _resolve_reader(upload_id)
+            if error is not None:
+                rec["status"] = "denied" if "DENIED" in error else "failed"
+                return error
         assert reader is not None
         parts: List[str] = []
         used_chars = 0
@@ -123,10 +134,12 @@ def read_pdf_page(upload_id: str, page: int) -> str:
     except Exception:
         return "STATUS=INVALID tool=read_pdf_page: page must be a number."
     try:
-        reader, total_pages, error = _resolve_reader(upload_id)
-        if error is not None:
-            return error.replace("tool=read_pdf:", "tool=read_pdf_page:", 1) \
-                if error.startswith("STATUS=") else error
+        with obs_timed("pdf.parse") as rec:
+            reader, total_pages, error = _resolve_reader(upload_id)
+            if error is not None:
+                rec["status"] = "denied" if "DENIED" in error else "failed"
+                return error.replace("tool=read_pdf:", "tool=read_pdf_page:", 1) \
+                    if error.startswith("STATUS=") else error
         assert reader is not None
         if page_num < 1 or page_num > total_pages:
             return (
