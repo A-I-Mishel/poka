@@ -368,40 +368,31 @@ div[data-testid="stDownloadButton"] > button:hover {
 
 
 /* ============================================================
-   CUSTOM CHAT COMPOSER — V3
+   CUSTOM CHAT COMPOSER — V4
    ============================================================ */
-
-/*
-   Design goal:
-   One unified AI composer surface.
-
-   Important:
-   - No nested gray input box
-   - Existing Streamlit controls remain intact
-   - Existing plus/send functionality remains intact
-*/
 
 .st-key-composer {
     position: fixed !important;
     left: 50% !important;
     transform: translateX(-50%) !important;
+
     bottom: 22px !important;
 
-    width: min(820px, calc(100vw - 48px)) !important;
+    width: min(800px, calc(100vw - 48px)) !important;
 
-    background: #17171f !important;
+    background: #15151b !important;
+    background-color: #15151b !important;
 
-    border: 1px solid #2b2b35 !important;
-    border-radius: 20px !important;
+    border: 1px solid #30303a !important;
+    border-radius: 22px !important;
 
-    padding: 8px 9px !important;
+    padding: 8px 10px !important;
 
-    z-index: 9999 !important;
     box-sizing: border-box !important;
+    z-index: 9999 !important;
 
     box-shadow:
-        0 12px 32px rgba(0, 0, 0, 0.28),
-        0 2px 8px rgba(0, 0, 0, 0.18) !important;
+        0 14px 36px rgba(0, 0, 0, 0.30) !important;
 
     transition:
         border-color 0.18s ease,
@@ -409,98 +400,118 @@ div[data-testid="stDownloadButton"] > button:hover {
 }
 
 .st-key-composer:focus-within {
-    border-color: #353542 !important;
+    border-color: #3a3a46 !important;
     box-shadow:
-        0 12px 32px rgba(0, 0, 0, 0.30),
-        0 0 0 3px rgba(99, 102, 241, 0.07) !important;
+        0 14px 36px rgba(0, 0, 0, 0.32),
+        0 0 0 3px rgba(99, 102, 241, 0.06) !important;
 }
+
+/* ============================================================
+   STREAMLIT LAYOUT RESET INSIDE COMPOSER
+   ============================================================ */
 
 .st-key-composer [data-testid="stVerticalBlock"] {
     gap: 0 !important;
 }
 
-.st-key-composer
-div[data-testid="stHorizontalBlock"] {
-    gap: 6px !important;
-    align-items: center !important;
+.st-key-composer [data-testid="stHorizontalBlock"] {
     width: 100% !important;
     margin: 0 !important;
+    padding: 0 !important;
+
+    gap: 5px !important;
+    align-items: center !important;
 }
 
-.st-key-composer
-div[data-testid="column"] {
-    padding: 0 !important;
+.st-key-composer [data-testid="column"] {
     min-width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
 }
 
-/* Message input */
-.st-key-composer
-div[data-testid="stTextInput"] {
+/* ============================================================
+   TEXT INPUT — HARD RESET ALL STREAMLIT / BASEWEB SURFACES
+   ============================================================ */
+
+.st-key-composer [data-testid="stTextInput"] {
+    width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
-    width: 100% !important;
 }
 
-.st-key-composer
-div[data-testid="stTextInput"] > label {
+.st-key-composer [data-testid="stTextInput"] label {
     display: none !important;
 }
 
-.st-key-composer
-div[data-testid="stTextInput"] > div,
-.st-key-composer
-div[data-testid="stTextInput"] [data-baseweb="input"],
-.st-key-composer
-div[data-testid="stTextInput"] [data-baseweb="base-input"] {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    outline: none !important;
-    border-radius: 0 !important;
-}
-
-.st-key-composer
-div[data-testid="stTextInput"] [data-baseweb="input"] {
-    min-height: 42px !important;
-}
-
-.st-key-composer
-div[data-testid="stTextInput"] input {
-    width: 100% !important;
+/*
+   Streamlit's text_input uses several nested BaseWeb elements.
+   Reset the complete subtree so there is NO inner rounded box.
+*/
+.st-key-composer [data-testid="stTextInput"] div,
+.st-key-composer [data-testid="stTextInput"] span,
+.st-key-composer [data-testid="stTextInput"] input,
+.st-key-composer [data-testid="stTextInput"] [data-baseweb],
+.st-key-composer [data-testid="stTextInput"] [data-baseweb="input"],
+.st-key-composer [data-testid="stTextInput"] [data-baseweb="base-input"] {
     background: transparent !important;
     background-color: transparent !important;
+    background-image: none !important;
 
     border: 0 !important;
     border-width: 0 !important;
+    border-style: none !important;
+    border-color: transparent !important;
     border-radius: 0 !important;
 
-    box-shadow: none !important;
     outline: none !important;
 
-    color: #f1f1f4 !important;
+    box-shadow: none !important;
+}
 
-    font-family: 'Inter', system-ui, -apple-system,
-        'Segoe UI', sans-serif !important;
+/* Keep the input readable and vertically centered. */
+.st-key-composer [data-testid="stTextInput"] input {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+
+    width: 100% !important;
+
+    color: #f1f1f4 !important;
+    -webkit-text-fill-color: #f1f1f4 !important;
+
+    font-family:
+        'Inter',
+        system-ui,
+        -apple-system,
+        'Segoe UI',
+        sans-serif !important;
 
     font-size: 15px !important;
     font-weight: 400 !important;
-    line-height: 1.45 !important;
+    line-height: 1.4 !important;
 
-    padding: 10px 8px !important;
+    padding: 11px 8px !important;
+    margin: 0 !important;
+
     min-height: 42px !important;
+    height: 42px !important;
 
-    caret-color: #a5a5ff !important;
+    caret-color: #9c9eff !important;
 }
 
-.st-key-composer
-div[data-testid="stTextInput"] input:hover,
-.st-key-composer
-div[data-testid="stTextInput"] input:focus,
-.st-key-composer
-div[data-testid="stTextInput"] input:active {
+.st-key-composer [data-testid="stTextInput"] input::placeholder {
+    color: #787884 !important;
+    -webkit-text-fill-color: #787884 !important;
+    opacity: 1 !important;
+}
+
+/* Remove any focus treatment generated by BaseWeb. */
+.st-key-composer [data-testid="stTextInput"] *:focus,
+.st-key-composer [data-testid="stTextInput"] *:focus-visible,
+.st-key-composer [data-testid="stTextInput"] *:focus-within {
     background: transparent !important;
     background-color: transparent !important;
     border: 0 !important;
@@ -508,34 +519,13 @@ div[data-testid="stTextInput"] input:active {
     outline: none !important;
 }
 
-.st-key-composer
-div[data-testid="stTextInput"] input::placeholder {
-    color: #777783 !important;
-    opacity: 1 !important;
-}
-
-/* Prevent any focus ring generated by BaseWeb from showing inside. */
-.st-key-composer [data-testid="stTextInput"] [data-baseweb="input"]:focus-within {
-    border: 0 !important;
-    box-shadow: none !important;
-    outline: none !important;
-}
-
-/* ------------------------------------------------------------
-   PLUS BUTTON
-   ------------------------------------------------------------ */
+/* ============================================================
+   BUTTON BASE
+   ============================================================ */
 
 .st-key-composer button {
-    font-family: 'Inter', system-ui, -apple-system,
-        'Segoe UI', sans-serif !important;
-
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-
     width: 40px !important;
     height: 40px !important;
-
     min-width: 40px !important;
     max-width: 40px !important;
 
@@ -543,73 +533,104 @@ div[data-testid="stTextInput"] input::placeholder {
     margin: 0 !important;
 
     border-radius: 50% !important;
-    border: 1px solid transparent !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+
+    font-family:
+        'Inter',
+        system-ui,
+        -apple-system,
+        'Segoe UI',
+        sans-serif !important;
+
+    font-size: 19px !important;
+    font-weight: 400 !important;
+    line-height: 1 !important;
 
     box-shadow: none !important;
 
-    line-height: 1 !important;
-    font-size: 19px !important;
-    font-weight: 400 !important;
-
     transition:
-        background-color 0.18s ease,
-        color 0.18s ease,
-        border-color 0.18s ease,
-        transform 0.18s ease !important;
+        background-color 0.16s ease,
+        border-color 0.16s ease,
+        color 0.16s ease,
+        transform 0.16s ease,
+        box-shadow 0.16s ease !important;
 }
 
-/* First column = plus button */
+/* ============================================================
+   PLUS BUTTON
+   ============================================================ */
+
 .st-key-composer [data-testid="column"]:first-child button {
     background: transparent !important;
-    color: #9696a3 !important;
+    background-color: transparent !important;
+
+    border: 1px solid transparent !important;
+
+    color: #9a9aa5 !important;
 }
 
 .st-key-composer [data-testid="column"]:first-child button:hover {
-    background: #22222b !important;
-    border-color: #30303a !important;
-    color: #eeeeF4 !important;
-    transform: translateY(-1px) !important;
+    background: #23232c !important;
+    background-color: #23232c !important;
+
+    border-color: #30303b !important;
+
+    color: #f1f1f4 !important;
+
+    transform: scale(1.03) !important;
 }
 
 .st-key-composer [data-testid="column"]:first-child button:active {
-    transform: scale(0.96) !important;
+    transform: scale(0.95) !important;
 }
 
-/* ------------------------------------------------------------
+/* ============================================================
    SEND BUTTON
-   ------------------------------------------------------------ */
+   ============================================================ */
 
-/* Last column = send button */
 .st-key-composer [data-testid="column"]:last-child button {
     background: #6366f1 !important;
-    color: #ffffff !important;
+    background-color: #6366f1 !important;
 
-    border-color: #6366f1 !important;
+    border: 1px solid #6366f1 !important;
+
+    color: #ffffff !important;
 
     font-size: 18px !important;
     font-weight: 500 !important;
 }
 
 .st-key-composer [data-testid="column"]:last-child button:hover {
-    background: #7477f4 !important;
-    border-color: #7477f4 !important;
+    background: #7679f5 !important;
+    background-color: #7679f5 !important;
+
+    border-color: #7679f5 !important;
+
+    color: #ffffff !important;
+
+    transform: scale(1.04) !important;
 
     box-shadow:
-        0 4px 14px rgba(99, 102, 241, 0.22) !important;
-
-    transform: translateY(-1px) !important;
+        0 5px 16px rgba(99, 102, 241, 0.24) !important;
 }
 
 .st-key-composer [data-testid="column"]:last-child button:active {
-    background: #5a5dd9 !important;
-    border-color: #5a5dd9 !important;
+    background: #595bd5 !important;
+    background-color: #595bd5 !important;
+
+    border-color: #595bd5 !important;
+
     transform: scale(0.95) !important;
+
     box-shadow: none !important;
 }
 
-/* ------------------------------------------------------------
+/* ============================================================
    MOBILE
-   ------------------------------------------------------------ */
+   ============================================================ */
 
 @media (max-width: 700px) {
 
@@ -618,7 +639,6 @@ div[data-testid="stTextInput"] input::placeholder {
         bottom: 10px !important;
 
         padding: 7px 8px !important;
-
         border-radius: 18px !important;
     }
 
@@ -629,7 +649,6 @@ div[data-testid="stTextInput"] input::placeholder {
     .st-key-composer button {
         width: 36px !important;
         height: 36px !important;
-
         min-width: 36px !important;
         max-width: 36px !important;
     }
@@ -637,6 +656,7 @@ div[data-testid="stTextInput"] input::placeholder {
     .st-key-composer [data-testid="stTextInput"] input {
         font-size: 14px !important;
         min-height: 38px !important;
+        height: 38px !important;
         padding: 9px 6px !important;
     }
 }
