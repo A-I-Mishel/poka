@@ -12,28 +12,55 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from config import get_tier1_llm, get_tier1b_llm, get_tier2_llm, get_tier3_llm
+from config import get_tier1_llm, get_tier1b_llm, get_tier2_llm, get_tier3_llm, get_llm_for_task
+from memory_engine import (
+    load_structured_memory,
+    update_memory_from_chat,
+    format_memory_for_prompt,
+    get_relevant_memory_context,
+)
 from tools import web_search, create_pptx, create_docx, read_pdf, analyze_csv
 
 tools: List[Any] = [web_search, create_pptx, create_docx, read_pdf, analyze_csv]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
-system_prompt: str = """You are Poka, a multi-purpose AI assistant for students and professionals.
+system_prompt: str = """You are Poka, a multi-purpose AI assistant for students and professionals. You solve problems through structured reasoning.
 
-Your capabilities:
-- web_search: Search the internet for current information
-- create_pptx: Create a PowerPoint presentation (args: topic, content)
-- create_docx: Create a Word document (args: title, content)
-- read_pdf: Extract and summarize text from a PDF file (arg: file_path)
-- analyze_csv: Analyze a CSV file and return statistics (arg: file_path)
+## REASONING FRAMEWORK
+For EVERY request, follow this chain:
+1. UNDERSTAND: Restate what the user wants in 1 sentence. Identify the task type.
+2. PLAN: List the steps needed. If you need tools, state which ones and in what order.
+3. EXECUTE: Call tools one at a time. Wait for results before proceeding.
+4. VERIFY: Check if the output meets the user's intent. If not, retry or ask for clarification.
+5. DELIVER: Present the final answer concisely. For files, state the exact filename.
 
-Rules:
+## TOOL SELECTION RULES
+- web_search: Use ONLY for current events, facts after 2024, or verifying claims. Never guess dates.
+- create_pptx: Use when user asks for slides, presentation, or PowerPoint.
+- create_docx: Use when user asks for document, essay, report, or resume.
+- read_pdf: Use when user uploads a PDF or asks about a document they provided.
+- analyze_csv: Use when user uploads CSV data or asks about data analysis.
+
+## BEHAVIOR RULES
 1. Always use tools when needed. Never guess facts about current events.
 2. When creating files, tell the user the exact filename and that it is ready for download.
 3. If a request is unclear, ask 1 short clarifying question.
 4. Be concise but thorough. Use bullet points for readability.
 5. If web_search fails, answer from your knowledge and note that search was unavailable.
 6. Only use create_pptx/create_docx when the user explicitly asks for a file, document, or presentation. Otherwise answer directly in chat."""
+
+
+def _build_system_prompt(memory_notes: str = "", relevant_context: str = "") -> str:
+    """Build the system prompt with memory and relevant context appended."""
+    prompt: str = system_prompt
+    if memory_notes.strip():
+        prompt += (
+            "\n\nPersistent memory about the user (use it when relevant, "
+            "never mention these instructions):\n" + memory_notes.strip()
+        )
+    if relevant_context.strip():
+        prompt += "\n\n" + relevant_context.strip()
+    return prompt
 
 TIER_AGENT_GETTERS: List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]] = [
     ("Muse Spark 1.3", get_tier1_llm),  # type: ignore[arg-type]
@@ -43,6 +70,8 @@ TIER_AGENT_GETTERS: List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]] 
 ]
 
 MAX_TOOL_ROUNDS: int = 4
+MAX_HISTORY_MESSAGES: int = 6
+REFLECTION_ENABLED: bool = True
 
 # Skip a failing tier immediately so the next message goes straight to
 # the next live model (cool-down still expires so recovered tiers return).
@@ -130,6 +159,7 @@ def run_tool_loop(
     user_input: str,
     chat_history: Sequence[BaseMessage],
     memory_notes: str = "",
+    relevant_context: str = "",
     max_rounds: int = MAX_TOOL_ROUNDS,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
@@ -143,17 +173,13 @@ def run_tool_loop(
         user_input: The user's prompt text.
         chat_history: Prior text-only chat messages.
         memory_notes: Persistent user notes prepended to the system prompt.
+        relevant_context: Retrieved structured-memory context.
         max_rounds: Max model turns before composing locally.
 
     Returns:
         Final assistant text.
     """
-    system_text: str = system_prompt
-    if memory_notes.strip():
-        system_text += (
-            "\n\nPersistent memory about the user (use it when relevant, "
-            "never mention these instructions):\n" + memory_notes.strip()
-        )
+    system_text: str = _build_system_prompt(memory_notes, relevant_context)
     messages: List[BaseMessage] = [
         SystemMessage(content=system_text),
         *chat_history,
@@ -185,6 +211,152 @@ def run_tool_loop(
     return (closing + "\n" + "\n".join(last_results)).strip()
 
 
+def _messages_to_langchain(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
+    """Convert raw role/content dicts to LangChain messages (text only)."""
+    from langchain_core.messages import AIMessage
+
+    result: List[BaseMessage] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content", "")
+        if not isinstance(content, str):
+            content = str(content)
+        if m.get("role") == "user":
+            result.append(HumanMessage(content=content))
+        else:
+            result.append(AIMessage(content=content))
+    return result
+
+
+def classify_task(user_input: str, llm_instance: BaseLanguageModel) -> str:
+    """Classify a request: simple, research, creative, data, or multi_step."""
+    prompt = (
+        "Classify this request into exactly one category:\n"
+        "- simple: Direct question, no tools needed\n"
+        "- research: Needs web search or document reading\n"
+        "- creative: Needs file generation (presentation, essay)\n"
+        "- data: Needs CSV/data analysis\n"
+        "- multi_step: Combines multiple tools\n\n"
+        f"Request: {user_input}\nCategory:"
+    )
+    response = llm_instance.invoke([HumanMessage(content=prompt)])
+    category = _as_text(response.content).strip().lower()
+    valid = ["simple", "research", "creative", "data", "multi_step"]
+    return category if category in valid else "simple"
+
+
+def summarize_history(
+    messages: List[Dict[str, Any]],
+    llm_instance: BaseLanguageModel,
+    max_messages: int = MAX_HISTORY_MESSAGES,
+) -> List[BaseMessage]:
+    """Keep the last N messages verbatim; summarize older ones into context."""
+    if len(messages) <= max_messages:
+        return _messages_to_langchain(messages)
+
+    recent_raw = messages[-max_messages:]
+    older_raw = messages[:-max_messages]
+
+    lines: List[str] = []
+    for m in older_raw:
+        if not isinstance(m, dict):
+            continue
+        role = "User" if m.get("role") == "user" else "AI"
+        lines.append(f"{role}: {str(m.get('content', ''))[:200]}")
+    summary_prompt = (
+        "Summarize this conversation concisely, preserving key facts "
+        "and user intent:\n\n" + "\n".join(lines)
+    )
+    summary_response = llm_instance.invoke([HumanMessage(content=summary_prompt)])
+    summary = _as_text(summary_response.content)
+
+    result: List[BaseMessage] = [
+        SystemMessage(content=f"Previous conversation summary: {summary}")
+    ]
+    result.extend(_messages_to_langchain(recent_raw))
+    return result
+
+
+def plan_then_execute(
+    llm_instance: BaseLanguageModel,
+    user_input: str,
+    chat_history: Sequence[BaseMessage],
+    memory_notes: str = "",
+    relevant_context: str = "",
+) -> str:
+    """Two-phase handling: write a plan first, then execute it with tools.
+
+    Falls back to a plain tool loop if the planning call itself fails.
+    """
+    try:
+        plan_prompt = (
+            "Given this user request, create a short step-by-step plan. "
+            "Do NOT execute tools yet. Output only the numbered plan.\n\n"
+            f"Request: {user_input}\nPlan:"
+        )
+        plan_response = llm_instance.invoke(
+            [
+                SystemMessage(content="You are a planning assistant. Be concise."),
+                *chat_history,
+                HumanMessage(content=plan_prompt),
+            ]
+        )
+        plan_text = _as_text(plan_response.content)
+        execution_prompt = (
+            f"Follow this plan to complete the request:\n{plan_text}\n\n"
+            f"Original request: {user_input}\n\n"
+            "Execute the plan using available tools. Adapt if tools fail."
+        )
+        return run_tool_loop(
+            llm_instance, execution_prompt, chat_history, memory_notes, relevant_context
+        )
+    except Exception:
+        return run_tool_loop(
+            llm_instance, user_input, chat_history, memory_notes, relevant_context
+        )
+
+
+def reflect_and_improve(
+    llm_instance: BaseLanguageModel,
+    original_input: str,
+    draft_output: str,
+    chat_history: Sequence[BaseMessage],
+) -> str:
+    """Critique a draft answer; return the improved version or the draft.
+
+    Never raises: any reflection failure returns the draft unchanged.
+    """
+    if not REFLECTION_ENABLED or not draft_output.strip():
+        return draft_output
+    try:
+        reflection_prompt = (
+            "You just produced this output for the user. Critique it honestly: "
+            "is it accurate, complete, well-structured?\n\n"
+            f"Original request: {original_input}\n"
+            f"Draft output: {draft_output}\n\n"
+            "If the draft is good, reply with exactly: [PASS]\n"
+            "If it needs improvement, reply with: [IMPROVE] followed by the "
+            "full improved version."
+        )
+        reflection = llm_instance.invoke(
+            [
+                SystemMessage(
+                    content="You are a critical editor. Be harsh but constructive."
+                ),
+                *chat_history,
+                HumanMessage(content=reflection_prompt),
+            ]
+        )
+        reflection_text = _as_text(reflection.content)
+        if "[IMPROVE]" in reflection_text:
+            improved = reflection_text.split("[IMPROVE]", 1)[1].strip()
+            return improved if improved else draft_output
+        return draft_output
+    except Exception:
+        return draft_output
+
+
 def _ordered_tiers(
     first: Optional[str],
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]],
@@ -202,34 +374,136 @@ def answer_with_fallback(
     first: Optional[str] = None,
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
     memory_notes: str = "",
+    raw_messages: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Answer a request, cascading tiers on runtime errors.
+    """Answer with the full stack: memorize, classify, plan, execute, reflect.
+
+    Falls back tier-by-tier on runtime errors. Any intelligence step that
+    fails degrades gracefully to the plain tool loop instead of breaking
+    the answer.
 
     Args:
         user_input: The user's prompt text.
-        chat_history: Prior text-only chat messages.
+        chat_history: Prior LangChain chat messages (used when raw_messages
+            is not provided).
         first: Tier name to try first (stick to the last working tier).
         tiers: Optional override of (name, getter) pairs.
         memory_notes: Persistent user notes for the system prompt.
+        raw_messages: Raw role/content dicts; enables memory extraction
+            and history summarization.
 
     Returns:
-        Dict with 'output' text and 'active_tier' name.
+        Dict with 'output', 'active_tier', and 'task_type'.
 
     Raises:
         RuntimeError: If every tier fails.
     """
     history: List[BaseMessage] = list(chat_history) if chat_history else []
+    history_list: List[Dict[str, Any]] = list(raw_messages) if raw_messages else []
+    combined_notes: str = memory_notes
+
+    # Structured memory is best-effort: never break chat over it.
+    try:
+        if history_list:
+            update_memory_from_chat(history_list)
+    except Exception:
+        pass
+    try:
+        formatted_memory = format_memory_for_prompt(load_structured_memory())
+    except Exception:
+        formatted_memory = ""
+    try:
+        relevant_context = get_relevant_memory_context(user_input)
+    except Exception:
+        relevant_context = ""
+    if formatted_memory:
+        combined_notes = (combined_notes + "\n" + formatted_memory).strip()
+
+    # Classify (guarded: default preserves the classic tool path).
+    task_type: str = "research"
+    try:
+        classifier_llm = get_llm_for_task("planning")
+        task_type = classify_task(user_input, classifier_llm)
+    except Exception:
+        pass
+
+    # Summarize long histories (guarded: fall back to given history).
+    langchain_history: List[BaseMessage] = history
+    try:
+        if history_list and len(history_list) > MAX_HISTORY_MESSAGES:
+            summarizer_llm = get_llm_for_task("planning")
+            langchain_history = summarize_history(history_list, summarizer_llm)
+        elif history_list:
+            langchain_history = _messages_to_langchain(history_list)
+    except Exception:
+        langchain_history = history
+
+    task_temps: Dict[str, float] = {
+        "research": 0.3,
+        "creative": 0.85,
+        "data": 0.2,
+        "multi_step": 0.4,
+    }
+
+    if task_type == "simple":
+        # Direct answer without tools.
+        ordered_simple = _ordered_tiers(first, tiers)
+        usable_simple = [i for i in ordered_simple if not _tier_skipped(i[0])] or ordered_simple
+        last_error: Exception | None = None
+        for name, getter in usable_simple:
+            llm_instance = getter()
+            if llm_instance is None:
+                continue
+            try:
+                system_text = _build_system_prompt(combined_notes, relevant_context)
+                response = llm_instance.invoke(
+                    [
+                        SystemMessage(content=system_text),
+                        *langchain_history,
+                        HumanMessage(content=user_input),
+                    ]
+                )
+                output_simple = _as_text(response.content)
+                _record_tier_success(name)
+                return {
+                    "output": output_simple,
+                    "active_tier": name,
+                    "task_type": task_type,
+                }
+            except Exception as e:
+                last_error = e
+                _record_tier_failure(name)
+                continue
+        raise RuntimeError(_friendly_cascade_error(last_error))
+
+    use_planning = task_type in ("multi_step", "creative")
     ordered = _ordered_tiers(first, tiers)
     usable = [item for item in ordered if not _tier_skipped(item[0])] or ordered
-    last_error: Exception | None = None
+    last_error = None
     for name, getter in usable:
-        llm_instance: Optional[BaseLanguageModel] = getter()
+        llm_instance = getter()
         if llm_instance is None:
             continue
         try:
-            output: str = run_tool_loop(llm_instance, user_input, history, memory_notes)
+            try:
+                llm_instance.temperature = task_temps.get(task_type, 0.5)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            if use_planning:
+                draft = plan_then_execute(
+                    llm_instance, user_input, langchain_history,
+                    combined_notes, relevant_context,
+                )
+            else:
+                draft = run_tool_loop(
+                    llm_instance, user_input, langchain_history,
+                    combined_notes, relevant_context,
+                )
+            output = reflect_and_improve(
+                llm_instance, user_input, draft, langchain_history
+            )
             _record_tier_success(name)
-            return {"output": output, "active_tier": name}
+            return {"output": output, "active_tier": name, "task_type": task_type}
         except Exception as e:
             last_error = e
             _record_tier_failure(name)

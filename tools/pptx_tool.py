@@ -6,10 +6,14 @@ from pptx.util import Inches
 
 @tool
 def create_pptx(topic: str, content: str) -> str:
-    """Create a PowerPoint presentation.
+    """Create a PowerPoint presentation (.pptx file).
+
+    Use ONLY when the user explicitly asks for a presentation, slides,
+    PowerPoint, or visual deck. Do NOT use for general questions,
+    text-only responses, or "tell me about" without mentioning slides.
 
     Args:
-        topic: Presentation title shown on the title slide.
+        topic: Presentation title shown on the title slide (concise).
         content: Slide text separated by double newlines. Each block's first
             line is the slide title, remaining lines are bullet points.
 

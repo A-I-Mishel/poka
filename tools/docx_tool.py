@@ -5,7 +5,11 @@ from docx import Document
 
 @tool
 def create_docx(title: str, content: str) -> str:
-    """Create a Word document with title and body content.
+    """Create a Word document (.docx file).
+
+    Use ONLY when the user explicitly asks for a document, essay, report,
+    resume, or Word file. Do NOT use for chat responses, quick answers,
+    or when the user just wants information.
 
     Args:
         title: Document heading.

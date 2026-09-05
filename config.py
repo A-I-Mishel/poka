@@ -1,7 +1,7 @@
 """Multi-tier LLM cascade: Muse Spark 1.3 -> Nemotron 3.5 (OpenCode free) -> Gemini 3.6 -> Gemini 3.5."""
 
 import os
-from typing import Callable, Optional, Union
+from typing import Callable, Dict, Optional, Union
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -114,3 +114,33 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
 ]
+
+
+TASK_TEMPERATURES: Dict[str, float] = {
+    "simple": 0.5,
+    "research": 0.3,
+    "creative": 0.85,
+    "data": 0.2,
+    "multi_step": 0.4,
+}
+
+
+def get_llm_for_task(
+    task_type: str = "research",
+) -> Union[ChatOpenAI, ChatGoogleGenerativeAI]:
+    """Get the first available LLM with temperature tuned for the task.
+
+    Task types (from classify_task): simple, research, creative, data,
+    multi_step. Unknown types fall back to 0.5. Raises if no tier is
+    configured; callers must handle runtime failures via the cascade.
+    """
+    temperature: float = TASK_TEMPERATURES.get(task_type, 0.5)
+    for _name, getter in TIER_GETTERS:
+        llm_instance = getter()
+        if llm_instance is not None:
+            try:
+                llm_instance.temperature = temperature  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            return llm_instance
+    raise RuntimeError("No LLM available. Check API keys in .env")

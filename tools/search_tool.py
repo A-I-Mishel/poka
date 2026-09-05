@@ -6,10 +6,15 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 @tool
 def web_search(query: str) -> str:
-    """Search the web using DuckDuckGo. Falls back to knowledge if rate-limited.
+    """Search the web using DuckDuckGo for current information.
+
+    Use ONLY when the user asks about events after 2024, "latest"/"recent"/
+    "current" news or data, verifying an unsure factual claim, or specific
+    real-world entities (companies, people, laws). Do NOT use for general
+    knowledge, definitions, creative writing, or opinions.
 
     Args:
-        query: The search query string.
+        query: Specific search query (5-10 words). Be precise.
 
     Returns:
         Search results text, or a graceful fallback message.

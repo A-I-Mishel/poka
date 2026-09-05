@@ -914,6 +914,9 @@ def run_agent(user_input: str) -> str:
             "memory_notes",
             "",
         ),
+        raw_messages=[
+            dict(m) for m in st.session_state.messages if isinstance(m, dict)
+        ],
     )
 
     st.session_state.active_tier = str(

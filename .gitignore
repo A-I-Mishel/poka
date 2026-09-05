@@ -14,3 +14,4 @@ memory/chroma_db/
 memory/chats.json
 memory/chats.json.tmp
 memory/memory.md
+structured_memory.json
