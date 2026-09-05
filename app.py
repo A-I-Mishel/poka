@@ -4,7 +4,7 @@ import glob
 import html
 import os
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -177,6 +177,56 @@ div[data-testid="stChatMessage"] {
     background: transparent;
     border: none;
     padding: 0.4rem 0;
+    position: relative;
+}
+
+/* Copy button injected on assistant messages (hover to reveal) */
+.poka-copy {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    background: #27273a;
+    color: #f1f1f4;
+    border: 1px solid #34344a;
+    border-radius: 8px;
+    font-size: 11px;
+    padding: 3px 10px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 3;
+}
+div[data-testid="stChatMessage"]:hover .poka-copy {
+    opacity: 1;
+}
+@media (hover: none) {
+    .poka-copy {
+        opacity: 1;
+    }
+}
+
+/* Edit button row under the latest user message */
+.st-key-edit-row {
+    display: flex;
+    justify-content: flex-end;
+}
+.st-key-edit-row div[data-testid="stBaseButton-secondary"] > button,
+.st-key-edit-row .stButton > button {
+    width: auto;
+    background: transparent;
+    border: 1px solid #27273a;
+    color: #8b8b9e;
+    font-size: 12px;
+    border-radius: 999px;
+    padding: 4px 16px;
+    text-align: center;
+}
+.st-key-edit-row div[data-testid="stBaseButton-secondary"] > button:hover,
+.st-key-edit-row .stButton > button:hover {
+    color: #FFFFFF;
+    border-color: #6366f1;
+    background: transparent;
+    transform: none;
 }
 
 div[data-testid="stChatMessage"]:has(
@@ -1489,12 +1539,26 @@ for msg in st.session_state.messages:
 # ATTACHMENT STATUS
 # ============================================================
 
+last_user_idx: Optional[int] = None
+for _i, _m in enumerate(st.session_state.messages):
+    if isinstance(_m, dict) and _m.get("role") == "user":
+        last_user_idx = _i
+if last_user_idx is not None:
+    with st.container(key="edit-row"):
+        if st.button("Edit", key=f"edit-{last_user_idx}"):
+            old_text: str = str(
+                st.session_state.messages[last_user_idx].get("content", "")
+            )
+            st.session_state.messages = st.session_state.messages[:last_user_idx]
+            st.session_state[f"composer_input_{st.session_state.composer_key}"] = old_text
+            persist()
+            st.rerun()
+
 pending = st.session_state.get(
     "pending_attach"
 )
 
 if isinstance(pending, dict):
-
     chip_text, chip_x = st.columns(
         [5, 1]
     )
@@ -1628,50 +1692,113 @@ components.html(
     if (doc.__pokaScrollBound) return;
     doc.__pokaScrollBound = true;
 
-    function getScroller() {
-        const candidates = [
-            doc.querySelector('section[data-testid="stMain"]'),
-            doc.scrollingElement,
-            doc.documentElement,
-            doc.body,
-        ];
-        for (const el of candidates) {
+    function pageScroller() {
+        const docEl = doc.scrollingElement || doc.documentElement;
+        const section = doc.querySelector('section[data-testid="stMain"]');
+        const cands = [docEl, doc.body, section];
+        for (const el of cands) {
             if (el && el.scrollHeight > el.clientHeight + 10) return el;
         }
-        return null;
+        return docEl || doc.body;
     }
     function nearBottom() {
-        const el = getScroller();
+        try {
+            const y = win.scrollY || win.pageYOffset || 0;
+            const h = doc.body ? doc.body.scrollHeight : 0;
+            if (h > win.innerHeight + 10) {
+                return h - y - win.innerHeight < 180;
+            }
+        } catch (err) { /* fall through to element check */ }
+        const el = pageScroller();
         if (!el) return true;
-        return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 180;
     }
     function goBottom(smooth) {
-        const el = getScroller();
-        if (el) {
-            if (smooth && el.scrollTo) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-            else el.scrollTop = el.scrollHeight;
-        }
+        const el = pageScroller();
+        if (!el) return;
+        try {
+            if (smooth && el.scrollTo) {
+                el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+                return;
+            }
+        } catch (err) { /* fall through */ }
+        el.scrollTop = el.scrollHeight;
     }
 
     let wasNear = true;
-    win.addEventListener("scroll", function () { wasNear = nearBottom(); }, true);
-    setTimeout(function () { goBottom(false); }, 350);
+    try {
+        win.addEventListener("scroll", function () { wasNear = nearBottom(); }, true);
+    } catch (err) { /* ignore */ }
+    setTimeout(function () { goBottom(false); }, 400);
 
-    const target = doc.querySelector('section[data-testid="stMain"]') || doc.body;
     new MutationObserver(function (muts) {
         let hasChat = false;
         for (const m of muts) {
-            for (const n of m.addedNodes) {
-                if (n.nodeType === 1 && (n.matches('[data-testid="stChatMessage"]') || n.querySelector('[data-testid="stChatMessage"]'))) {
-                    hasChat = true;
-                    break;
-                }
+            const nodes = m.addedNodes || [];
+            for (const n of nodes) {
+                if (n.nodeType !== 1) continue;
+                try {
+                    if (n.matches('[data-testid="stChatMessage"]') || n.querySelector('[data-testid="stChatMessage"]')) {
+                        hasChat = true;
+                        break;
+                    }
+                } catch (err) { /* ignore */ }
             }
             if (hasChat) break;
         }
-        if (hasChat && wasNear) goBottom(true);
-        wasNear = nearBottom();
-    }).observe(target, { childList: true, subtree: true });
+        if (hasChat && wasNear) {
+            goBottom(true);
+            setTimeout(function () { goBottom(false); }, 450);
+        }
+        try { wasNear = nearBottom(); } catch (err) { /* ignore */ }
+    }).observe(doc.body, { childList: true, subtree: true });
+
+    /* --- Copy buttons on assistant messages (hover to reveal) --- */
+    function armCopyButtons() {
+        const nodes = doc.querySelectorAll('div[data-testid="stChatMessage"]');
+        for (const node of nodes) {
+            if (node.dataset.pokaActions) continue;
+            if (!node.querySelector('div[data-testid="stChatMessageAvatarAssistant"]')) continue;
+            const content = node.querySelector('div[data-testid="stChatMessageContent"]');
+            if (!content) continue;
+            node.dataset.pokaActions = "1";
+            const btn = doc.createElement("button");
+            btn.textContent = "Copy";
+            btn.className = "poka-copy";
+            btn.type = "button";
+            btn.addEventListener("click", function (ev) {
+                ev.stopPropagation();
+                const text = content.innerText || content.textContent || "";
+                const done = function () {
+                    btn.textContent = "Copied";
+                    setTimeout(function () { btn.textContent = "Copy"; }, 1200);
+                };
+                const fallbackCopy = function () {
+                    try {
+                        const ta = doc.createElement("textarea");
+                        ta.value = text;
+                        ta.style.position = "fixed";
+                        ta.style.opacity = "0";
+                        doc.body.appendChild(ta);
+                        ta.select();
+                        doc.execCommand("copy");
+                        doc.body.removeChild(ta);
+                        done();
+                    } catch (err) {
+                        btn.textContent = "Failed";
+                    }
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(done, fallbackCopy);
+                } else {
+                    fallbackCopy();
+                }
+            });
+            node.appendChild(btn);
+        }
+    }
+    armCopyButtons();
+    new MutationObserver(function () { armCopyButtons(); }).observe(doc.body, { childList: true, subtree: true });
 })();
 </script>
 """,
