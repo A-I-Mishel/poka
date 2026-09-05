@@ -279,26 +279,42 @@ div[data-testid="stDownloadButton"] > button:hover {
 }
 
 /* ---- composer plus menu + attachment chip ---- */
-/* ---- composer + button (own small row above the input) ---- */
+/* ---- + button overlaid inside the input, bottom-left ----
+   (st.chat_input is a closed widget, so the + sits over its
+   bottom-left corner via positioning; text is padded clear of it) */
+div[data-testid="stPopover"] {
+    width: fit-content;
+    margin-top: -52px;
+    margin-left: 12px;
+    position: relative;
+    z-index: 5;
+    pointer-events: none;
+}
 div[data-testid="stPopover"] > button,
 .stPopover > button {
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    border: 1px solid #27273a;
-    background: #1a1a2e;
+    border: none;
+    background: transparent;
     color: #8b8b9e;
-    font-size: 20px;
+    font-size: 22px;
     line-height: 1;
     padding: 0;
     box-shadow: none;
+    pointer-events: auto;
 }
 div[data-testid="stPopover"] > button:hover,
 .stPopover > button:hover {
-    border-color: #6366f1;
     background: rgba(99, 102, 241, 0.15);
     color: #FFFFFF;
     box-shadow: none;
+}
+div[data-testid="stPopover"] > button svg {
+    display: none;
+}
+div[data-testid="stChatInput"] textarea {
+    padding-left: 52px !important;
 }
 div[data-testid="stPopoverBody"] {
     background: #1a1a2e;
@@ -704,6 +720,8 @@ if isinstance(pending, dict):
 elif st.session_state.get("force_search"):
     st.caption("Web search will be used for the next message.")
 
+prompt = st.chat_input("Type your message...")
+
 with st.popover("+"):
     if "attach_menu" not in st.session_state:
         st.session_state.attach_menu = None
@@ -736,8 +754,6 @@ with st.popover("+"):
     if st.button(("✓ " if search_on else "") + "Web search", key="m-search"):
         st.session_state.force_search = not search_on
         st.rerun()
-
-prompt = st.chat_input("Type your message...")
 
 if prompt:
     render_assistant_response(prompt)
