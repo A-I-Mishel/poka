@@ -535,18 +535,27 @@ def test_search_query_capped(monkeypatch):
 
     seen = {}
 
-    class FakeSearch:
-        def invoke(self, query):
+    class FakeDDGS:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def text(self, query, max_results=5):
             seen["query"] = query
-            return "some results here"
+            return [{"title": "T", "href": "https://example.com/a", "body": "snip"}]
 
-        def run(self, query):
-            return self.invoke(query)
+        def news(self, query, max_results=5):
+            return self.text(query, max_results)
 
-    monkeypatch.setattr("langchain_community.tools.DuckDuckGoSearchRun", lambda: FakeSearch())
+    monkeypatch.setattr("duckduckgo_search.DDGS", FakeDDGS)
     out = search_tool.web_search.invoke({"query": "x" * 500})
     assert seen["query"] is not None and len(seen["query"]) <= 300
-    assert out == "some results here"
+    assert "[1]" in out and "https://example.com/a" in out
 
 
 # -- MEMORY EFFICIENCY ----------------------------------------------------------

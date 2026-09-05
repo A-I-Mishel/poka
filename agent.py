@@ -34,6 +34,13 @@ from memory_engine import (
 )
 from services.context import get_current_user_id, set_current_user_id
 from services.context_budget import CTX_HISTORY_TOKENS, CTX_MEMORY_TOKENS, CTX_SUMMARY_TOKENS, fit_history, fit_text
+from services.vision import (
+    build_vision_messages,
+    prepare_image_data_url,
+    resolve_local_image,
+    vision_supported_tier,
+    vision_trust_preamble,
+)
 from services.limits import (
     MAX_EXTERNAL_TOKENS,
     MAX_LLM_CALLS_PER_REQUEST,
@@ -48,11 +55,12 @@ from services.limits import (
     TOOL_TIMEOUT_SECONDS,
 )
 from services.tokens import count_tokens, truncate_tokens
-from tools import web_search, create_pptx, create_docx, read_pdf, analyze_csv
+from tools import web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect
+from tools.search_tool import extract_cited_sources
 
 logger = logging.getLogger(__name__)
 
-tools: List[Any] = [web_search, create_pptx, create_docx, read_pdf, analyze_csv]
+tools: List[Any] = [web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
 system_prompt: str = """You are Poka, a multi-purpose AI assistant for students and professionals. You solve problems through structured reasoning.
@@ -68,9 +76,13 @@ For EVERY request, follow this chain:
 ## TOOL SELECTION RULES
 - web_search: Use ONLY for current events, facts after 2024, or verifying claims. Never guess dates.
 - create_pptx: Use when user asks for slides, presentation, or PowerPoint.
+- build_presentation: Use for designed decks (pass a JSON spec with slide types).
 - create_docx: Use when user asks for document, essay, report, or resume.
+- build_document: Use for structured documents (pass lightweight markdown).
 - read_pdf: Use when the user references an attached PDF by its upload ID.
+- read_pdf_page: Use when the user asks about a specific page number.
 - analyze_csv: Use when the user references an attached CSV by its upload ID.
+- csv_inspect: Use for focused follow-ups (grouping, filtering, correlation, outliers) on an already-attached CSV.
 
 ## BEHAVIOR RULES
 1. Always use tools when needed. Never guess facts about current events.
@@ -547,6 +559,34 @@ def run_tool_loop(
         SystemMessage(content=system_text),
         *fitted_history,
     ]
+    search_blob_texts: List[str] = []
+
+    def _note_search(result_text: str) -> None:
+        if result_text.startswith("[web_search] STATUS=OK"):
+            search_blob_texts.append(result_text)
+
+    def _with_sources(final_text: str) -> str:
+        """Append only sources actually returned this request. Never invents."""
+        sources: List[Dict[str, str]] = []
+        seen_urls = set()
+        for blob in search_blob_texts:
+            for s in extract_cited_sources(blob):
+                if s["url"] and s["url"] in seen_urls:
+                    continue
+                seen_urls.add(s["url"])
+                sources.append(s)
+        sources = sources[:6]
+        if not sources:
+            return final_text
+        lines = ["", "Sources consulted:"]
+        for i, s in enumerate(sources, start=1):
+            label = s["title"] or s["domain"]
+            if s["url"]:
+                lines.append(f"[{i}] {label} — {s['url']}")
+            else:
+                lines.append(f"[{i}] {label}")
+        return final_text.rstrip() + "\n" + "\n".join(lines) + "\n"
+
     if force_web_search:
         try:
             forced = _execute_tool_call(
@@ -557,6 +597,7 @@ def run_tool_loop(
             forced = "STATUS=FAILED tool=web_search: search budget exhausted."
         except Exception as e:
             forced = f"STATUS=FAILED tool=web_search: {e}"
+        _note_search(forced)
         messages.append(
             HumanMessage(
                 content=(
@@ -578,7 +619,7 @@ def run_tool_loop(
             last_text = text
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
         if not tool_calls:
-            return text if text else "I couldn't generate a response. Please try again."
+            return _with_sources(text if text else "I couldn't generate a response. Please try again.")
         try:
             last_results = [_execute_tool_call(tc, budget) for tc in tool_calls]
         except BudgetExhausted:
@@ -587,6 +628,8 @@ def run_tool_loop(
                 "Synthesize from results so far."
             )
             break
+        for result_text in last_results:
+            _note_search(result_text)
         if budget.external_tokens > MAX_EXTERNAL_TOKENS:
             last_results.append(
                 "[budget] External content budget exhausted; "
@@ -624,10 +667,10 @@ def run_tool_loop(
         )
         text = _as_text(final.content).strip()
         if text:
-            return text
+            return _with_sources(text)
     except Exception:
         pass
-    return (
+    return _with_sources(
         "I gathered partial results but couldn't finish composing the answer. "
         "Please try again or simplify the request."
     )
@@ -798,6 +841,73 @@ def _run_cascade_step(
     raise RuntimeError(_friendly_cascade_error(last_error))
 
 
+def _try_vision_answer(
+    request_id: str,
+    user_input: str,
+    image_upload_ids: List[str],
+    budget: RequestBudget,
+    first: Optional[str],
+    tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]],
+) -> Optional[Dict[str, Any]]:
+    """Attempt a vision-grounded answer on a vision-capable tier.
+
+    Returns the result dict on success, None when no capable tier is
+    configured or all vision attempts fail (caller falls back to the
+    normal text cascade). Vision failures never cool tiers for text use.
+    """
+    data_urls: List[str] = []
+    for ref in (image_upload_ids or [])[:3]:
+        url, err = prepare_image_data_url(ref)
+        if url:
+            data_urls.append(url)
+        else:
+            logger.info("req=%s vision skipped upload %s: %s", request_id, ref, err)
+    # Legacy staged paths (pre-ID attachments) resolve through the vault too.
+    if not data_urls:
+        for ref in (image_upload_ids or [])[:3]:
+            resolved = resolve_local_image(ref)
+            if resolved is None:
+                continue
+            url, err = prepare_image_data_url(ref)
+            if url:
+                data_urls.append(url)
+    if not data_urls:
+        return None
+    prompt = vision_trust_preamble() + "\n\nUser request:\n" + user_input
+    payload = build_vision_messages(prompt, data_urls)
+    for name, getter in _usable_tiers(first, tiers):
+        if not vision_supported_tier(name):
+            continue
+        try:
+            llm_instance = getter()
+        except Exception:
+            continue
+        if llm_instance is None:
+            continue
+        try:
+            try:
+                budget.count_llm()
+            except BudgetExhausted:
+                return None  # let the normal cascade produce the budget message
+            response = _invoke_bounded(
+                llm_instance, [HumanMessage(content=payload)], budget=None
+            )
+            text = _as_text(response.content).strip()
+            if not text:
+                continue
+            logger.info("req=%s tier=%s vision ok", request_id, name)
+            return {
+                "output": text,
+                "active_tier": name,
+                "task_type": "vision",
+                "request_id": request_id,
+            }
+        except Exception as e:
+            logger.info("req=%s tier=%s vision failed: %s", request_id, name, e)
+            continue
+    return None
+
+
 def answer_with_fallback(
     user_input: str,
     chat_history: Optional[Sequence[BaseMessage]] = None,
@@ -807,6 +917,7 @@ def answer_with_fallback(
     raw_messages: Optional[List[Dict[str, Any]]] = None,
     deep_mode: bool = False,
     force_web_search: bool = False,
+    image_upload_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Answer with the full stack: memorize, classify, plan, execute, reflect.
 
@@ -828,6 +939,8 @@ def answer_with_fallback(
         deep_mode: When True, run planning + reflection (more calls).
         force_web_search: When True, execute a web search first (policy,
             not just a prompt hint).
+        image_upload_ids: Upload IDs of attached images to analyze with a
+            vision-capable tier when one is configured.
 
     Returns:
         Dict with 'output', 'active_tier', 'task_type', 'request_id'.
@@ -839,6 +952,23 @@ def answer_with_fallback(
     started_at: float = time.time()
     user_id = get_current_user_id()
     budget = RequestBudget()
+
+    # Vision fast-path: attached images go to a vision-capable tier with
+    # real image content (never a "you cannot view images" dead end when
+    # such a tier is configured). Falls through to the normal cascade
+    # otherwise — never claims analysis that did not happen.
+    if image_upload_ids:
+        vision_hit = _try_vision_answer(
+            request_id, user_input, image_upload_ids, budget, first, tiers
+        )
+        if vision_hit is not None:
+            return vision_hit
+        user_input = (
+            user_input
+            + "\n\n[Note: attached images could not be analyzed on any "
+            "configured vision-capable model. Tell the user plainly instead "
+            "of guessing at image contents.]"
+        )
     history: List[BaseMessage] = list(chat_history) if chat_history else []
     history_list: List[Dict[str, Any]] = list(raw_messages) if raw_messages else []
     combined_notes: str = memory_notes

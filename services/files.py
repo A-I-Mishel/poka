@@ -18,7 +18,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional
 
 from services.limits import ALLOWED_UPLOAD_EXTS, MAX_FILENAME_LEN, MAX_UPLOAD_BYTES, UPLOAD_ID_RE
 from services.storage import StorageError, atomic_replace, path_lock, user_dir
@@ -336,6 +336,22 @@ class FileStore:
             return False
         return True
 
+    def list_uploads(self) -> List[UploadMeta]:
+        """List this user's staged uploads, newest first."""
+        registry = self._load_registry(self.uploads_registry)
+        metas: List[UploadMeta] = []
+        for record in registry.values():
+            if not isinstance(record, dict):
+                continue
+            try:
+                metas.append(
+                    UploadMeta(**{k: record[k] for k in UploadMeta.__dataclass_fields__})
+                )
+            except (KeyError, TypeError):
+                continue
+        metas.sort(key=lambda m: m.created, reverse=True)
+        return metas
+
     def delete_all_outputs(self) -> int:
         """Delete every output owned by this user. Returns count removed."""
         count = 0
@@ -343,3 +359,35 @@ class FileStore:
             if self.delete_output(meta.id):
                 count += 1
         return count
+
+    def prune_stale_uploads(
+        self, max_age_days: int = 7, referenced_ids: Collection[str] = ()
+    ) -> int:
+        """Delete old, unreferenced staged uploads. Returns count removed.
+
+        Only uploads older than max_age_days AND absent from referenced_ids
+        (upload IDs still cited by the user's chats) are removed. The
+        per-user registry guarantees other users are never affected.
+        """
+        cutoff = time.time() - max_age_days * 86400.0
+        referenced = set(referenced_ids or ())
+        removed = 0
+        for meta in self.list_uploads():
+            if meta.id in referenced or meta.created >= cutoff:
+                continue
+            candidate = self.uploads_dir / meta.stored_name
+            if self._inside(self.uploads_dir, candidate):
+                try:
+                    if candidate.is_file():
+                        candidate.unlink()
+                except OSError:
+                    continue
+            def _drop(registry: Dict[str, Any], _mid: str = meta.id) -> None:
+                registry.pop(_mid, None)
+
+            try:
+                self._update_registry(self.uploads_registry, _drop)
+                removed += 1
+            except StorageError:
+                continue
+        return removed
