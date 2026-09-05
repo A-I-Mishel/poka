@@ -1,5 +1,5 @@
 from langchain.tools import tool
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from typing import List, Optional, Tuple
 
 from services.context import get_current_user_id

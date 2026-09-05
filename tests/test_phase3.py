@@ -258,7 +258,7 @@ def test_pdf_page_retrieval(data_dir):
 
 
 def test_scanned_pdf_path(data_dir):
-    from PyPDF2 import PdfReader, PdfWriter
+    from pypdf import PdfReader, PdfWriter
     from tools.pdf_tool import read_pdf
     from services.files import FileStore
 

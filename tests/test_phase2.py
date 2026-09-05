@@ -479,7 +479,7 @@ def test_cascade_attempts_list():
 
 def test_pdf_page_markers_and_cap(data_dir, monkeypatch):
     import tools.pdf_tool as pdf_tool
-    from PyPDF2 import PdfReader, PdfWriter
+    from pypdf import PdfReader, PdfWriter
 
     monkeypatch.setattr(pdf_tool, "MAX_PDF_PAGES", 1)
     writer = PdfWriter()

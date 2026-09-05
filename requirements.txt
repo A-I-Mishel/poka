@@ -9,6 +9,6 @@ python-pptx
 python-docx
 pillow
 pandas
-PyPDF2
+pypdf>=6,<7
 python-dotenv
 # chromadb==0.5.5  # optional -- needs C++ build tools on Windows; app runs without it

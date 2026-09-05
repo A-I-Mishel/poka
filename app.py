@@ -673,11 +673,20 @@ if "active_tier" not in st.session_state:
             "then rerun the app."
         )
 
-        st.stop()
+        # No provider credentials (e.g. CI/test runs without keys):
+        # keep rendering with an explicit offline tier instead of
+        # stopping, so the UI stays testable. Any send attempt then
+        # fails gracefully through the normal cascade error path.
+        # The cascade self-corrects active_tier on first success.
+        st.session_state.active_tier = (
+            "No LLM configured"
+        )
 
-    st.session_state.active_tier = (
-        configured[0]
-    )
+    else:
+
+        st.session_state.active_tier = (
+            configured[0]
+        )
 
 
 # ============================================================
