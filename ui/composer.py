@@ -12,7 +12,9 @@ import streamlit as st
 def render_composer() -> Tuple[bool, bool]:
     """Render the composer row. Returns (plus_clicked, send_clicked)."""
 
-    with st.container():
+    # Keyed container gives the shell a stable wrapper class
+    # (st-key-composer) for positioning; widget keys below are unchanged.
+    with st.container(key="composer"):
 
         col_plus, col_input, col_send = st.columns(
             [0.7, 8.3, 0.8],
@@ -65,6 +67,7 @@ def render_composer() -> Tuple[bool, bool]:
             send_clicked = st.button(
                 "↑",
                 key="composer_send",
+                help="Send message",
             )
 
     return plus_clicked, send_clicked

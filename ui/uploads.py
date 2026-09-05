@@ -11,6 +11,51 @@ import streamlit as st
 from application.session import _stage_upload
 
 
+_DOC_SVG: str = (
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+    '<path d="M3 1h5l4 4v10H3z" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    '<path d="M8 1v4h4" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    "</svg>"
+)
+
+_TABLE_SVG: str = (
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+    '<rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    '<path d="M2 6.5h12M7 6.5v7" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    "</svg>"
+)
+
+_IMAGE_SVG: str = (
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+    '<rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    '<circle cx="5.5" cy="6.5" r="1.3" fill="currentColor"/>'
+    '<path d="M2.5 12.5l3.5-3.5 2.5 2.5 2-2 3 3" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    "</svg>"
+)
+
+_SPARK_SVG: str = (
+    '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
+    '<path d="M8 0l1.8 5.6L15 7l-4 3.6L12.2 16 8 12.8 3.8 16 '
+    '5 10.6 1 7l5.2-1.4z"/>'
+    "</svg>"
+)
+
+
+def _kind_icon(kind: str) -> str:
+    """File-type icon for the chip (visual only; kind logic unchanged)."""
+    if kind == "pdf":
+        return _DOC_SVG
+    if kind == "csv":
+        return _TABLE_SVG
+    return _IMAGE_SVG
+
+
 def render_attachment_chip() -> None:
     """Show (or clear) the pending-attachment chip and search notice."""
     pending = st.session_state.get(
@@ -19,12 +64,17 @@ def render_attachment_chip() -> None:
 
     if isinstance(pending, dict):
         chip_text, chip_x = st.columns(
-            [5, 1]
+            [5, 1],
+            vertical_alignment="center",
         )
 
         chip_text.markdown(
-            '<div class="attach-chip">'
-            'Attached: '
+            '<div class="poka-chips">'
+            '<div class="poka-chip">'
+            '<span class="poka-chip-icon" aria-hidden="true">'
+            + _kind_icon(str(pending.get("kind", "image")))
+            + "</span>"
+            '<span class="poka-chip-name">'
             + html.escape(
                 str(
                     pending.get(
@@ -33,13 +83,16 @@ def render_attachment_chip() -> None:
                     )
                 )
             )
-            + '</div>',
+            + "</span>"
+            "</div>"
+            "</div>",
             unsafe_allow_html=True,
         )
 
         if chip_x.button(
             "x",
             key="rm-attach",
+            help="Remove attachment",
         ):
 
             st.session_state.pending_attach = None
@@ -50,8 +103,16 @@ def render_attachment_chip() -> None:
         "force_search"
     ):
 
-        st.caption(
-            "Web search will be used for the next message."
+        st.markdown(
+            '<div class="poka-chips">'
+            '<span class="poka-search-pill">'
+            '<span class="poka-search-mark" aria-hidden="true">'
+            + _SPARK_SVG
+            + "</span>"
+            "Web search will be used"
+            "</span>"
+            "</div>",
+            unsafe_allow_html=True,
         )
 
 
@@ -62,7 +123,9 @@ def render_attachment_menu() -> None:
         False,
     ):
 
-        with st.container():
+        # Keyed container gives the menu a stable wrapper class
+        # (st-key-attachment-menu) for anchoring; widget keys unchanged.
+        with st.container(key="attachment-menu"):
 
             if st.button(
                 "Add files or photos",

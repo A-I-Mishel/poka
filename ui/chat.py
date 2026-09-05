@@ -5,6 +5,7 @@ application.session.run_agent (rate-limited) and persistence through
 application.session.persist. No direct service construction here.
 """
 
+import html
 import os
 import time
 from typing import Any, Dict, List
@@ -23,12 +24,43 @@ from services.timeutil import utcnow_iso
 from ui.components import _format_time, _highlight_query, _show_typing
 
 
+_POKA_MARK_SVG: str = (
+    '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
+    '<path d="M8 0l1.8 5.6L15 7l-4 3.6L12.2 16 8 12.8 3.8 16 '
+    '5 10.6 1 7l5.2-1.4z"/>'
+    "</svg>"
+)
+
+_POKA_ASSISTANT_ID: str = (
+    '<div class="poka-assistant-id">'
+    f'<span class="poka-assistant-mark">{_POKA_MARK_SVG}</span>'
+    "<span>Poka</span>"
+    "</div>"
+)
+
+
+def _meta_row(msg_time: str) -> str:
+    """Subtle metadata row (time only; actions are existing widgets)."""
+    if not msg_time:
+        return ""
+    return (
+        '<div class="poka-meta">'
+        f'<span class="poka-time">{html.escape(msg_time)}</span>'
+        "</div>"
+    )
+
+
 def render_history() -> None:
     """Render the conversation with search highlighting and edit buttons."""
     search_text: str = str(st.session_state.get("chat-search", "") or "")
     for idx, msg in enumerate(st.session_state.messages):
 
+        is_user: bool = isinstance(msg, dict) and msg.get("role") == "user"
+
         with st.chat_message(msg["role"]):
+
+            if msg.get("role") == "assistant":
+                st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
 
             if (
                 msg.get("image")
@@ -38,39 +70,62 @@ def render_history() -> None:
             ):
                 st.image(
                     str(msg["image"]),
-                    width=280,
+                    width=320,
                 )
 
             st.markdown(
                 _highlight_query(str(msg.get("content", "")), search_text)
             )
             msg_time: str = _format_time(str(msg.get("time", "")))
-            if msg_time:
-                st.caption(msg_time)
+            meta_html: str = _meta_row(msg_time)
 
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            with st.container():
-                if st.button("Edit", key=f"edit-{idx}"):
-                    old_text: str = str(msg.get("content", ""))
-                    old_atts = msg.get("attachments")
-                    restored = None
-                    if isinstance(old_atts, list):
-                        for candidate in old_atts:
-                            if isinstance(candidate, dict) and candidate.get("id"):
-                                restored = {
-                                    "upload_id": str(candidate["id"]),
-                                    "kind": str(candidate.get("kind", "image")),
-                                    "name": str(candidate.get("name", "file")),
-                                    "mark": ["restored", str(candidate["id"])],
-                                }
-                                break
-                    st.session_state.messages = st.session_state.messages[:idx]
-                    st.session_state[
-                        f"composer_input_{st.session_state.composer_key}"
-                    ] = old_text
-                    st.session_state.pending_attach = restored
-                    persist()
-                    st.rerun()
+            if is_user:
+                # Time + Edit share one action row inside the user
+                # bubble so Edit reads as a message action.
+                meta_col, edit_col = st.columns(
+                    [4, 1],
+                    vertical_alignment="center",
+                )
+                with meta_col:
+                    if meta_html:
+                        st.markdown(meta_html, unsafe_allow_html=True)
+                with edit_col:
+                    if st.button(
+                        "Edit", key=f"edit-{idx}", help="Edit message"
+                    ):
+                        old_text: str = str(msg.get("content", ""))
+                        old_atts = msg.get("attachments")
+                        restored = None
+                        if isinstance(old_atts, list):
+                            for candidate in old_atts:
+                                if isinstance(candidate, dict) and candidate.get(
+                                    "id"
+                                ):
+                                    restored = {
+                                        "upload_id": str(candidate["id"]),
+                                        "kind": str(
+                                            candidate.get("kind", "image")
+                                        ),
+                                        "name": str(
+                                            candidate.get("name", "file")
+                                        ),
+                                        "mark": [
+                                            "restored",
+                                            str(candidate["id"]),
+                                        ],
+                                    }
+                                    break
+                        st.session_state.messages = st.session_state.messages[
+                            :idx
+                        ]
+                        st.session_state[
+                            f"composer_input_{st.session_state.composer_key}"
+                        ] = old_text
+                        st.session_state.pending_attach = restored
+                        persist()
+                        st.rerun()
+            elif meta_html:
+                st.markdown(meta_html, unsafe_allow_html=True)
 
 
 def render_assistant_response(
@@ -167,12 +222,14 @@ def render_assistant_response(
         ):
             st.image(
                 str(image_path),
-                width=280,
+                width=320,
             )
 
         st.markdown(user_text)
 
     with st.chat_message("assistant"):
+
+        st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
 
         typing_box = _show_typing()
 
@@ -233,9 +290,7 @@ def render_assistant_response(
 
             st.session_state.last_failed = send_text
 
-            st.error(
-                f"Error: {e}"
-            )
+            st.error(f"Error: {e}")
 
 
 def _retry_last() -> None:
@@ -249,6 +304,7 @@ def _retry_last() -> None:
         dict(m) for m in (prior[:-1] if prior else []) if isinstance(m, dict)
     ]
     with st.chat_message("assistant"):
+        st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
         typing_box = _show_typing()
         try:
             output: str = run_agent(

@@ -43,7 +43,7 @@ except AuthRequired as _auth_error:
     st.markdown(
         '<div style="text-align:center;padding:48px 20px 12px;">'
         '<h1 class="brand-title">Poka</h1>'
-        '<p style="color:#8b8b9e;font-size:14px;">This app is private.</p>'
+        '<p style="color:var(--text-2);font-size:14px;">This app is private.</p>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -97,15 +97,62 @@ model_name = render_sidebar()
 if not st.session_state.messages:
 
     st.markdown(
-        '<div class="hero">'
-        '<h1>What can I help you with?</h1>'
-        '<p>'
-        'Presentations, documents, research, '
-        'data analysis — just ask.'
-        '</p>'
-        '</div>',
+        '<div class="poka-home">'
+        '<span class="poka-home-mark" aria-hidden="true">'
+        '<svg viewBox="0 0 16 16" width="20" height="20">'
+        '<path d="M8 0l1.8 5.6L15 7l-4 3.6L12.2 16 8 12.8 3.8 16 '
+        '5 10.6 1 7l5.2-1.4z"/>'
+        "</svg>"
+        "</span>"
+        "<h1>What can I help with?</h1>"
+        "<p>"
+        "Ask Poka to research, draft documents and presentations, "
+        "analyze PDFs and data, or remember what matters to you."
+        "</p>"
+        "</div>",
         unsafe_allow_html=True,
     )
+
+    _suggestions = (
+        (
+            "Draft a presentation",
+            "Turn a topic into slides",
+            "Draft a short presentation about "
+            "the future of renewable energy",
+        ),
+        (
+            "Analyze a file",
+            "PDFs, CSVs, and photos",
+            "I will upload a file — help me "
+            "analyze and summarize it",
+        ),
+        (
+            "Research a topic",
+            "Get answers with sources",
+            "Research the latest developments in "
+            "artificial intelligence and cite your sources",
+        ),
+        (
+            "Explain a concept",
+            "Break down something difficult",
+            "Explain quantum computing in simple terms",
+        ),
+    )
+
+    # Suggestion cards fill the existing composer input (same pattern
+    # as Edit restore); sending still goes through the normal flow.
+    with st.container(key="home"):
+        _home_left, _home_right = st.columns(2)
+        for _idx, (_title, _hint, _prompt) in enumerate(_suggestions):
+            with _home_left if _idx % 2 == 0 else _home_right:
+                with st.container(border=True):
+                    if st.button(_title, key=f"suggest-{_idx}"):
+                        st.session_state[
+                            f"composer_input_"
+                            f"{st.session_state.composer_key}"
+                        ] = _prompt
+                        st.rerun()
+                    st.caption(_hint)
 
 
 # Render conversation
@@ -206,18 +253,3 @@ if st.session_state.get("last_failed"):
     if st.button("Retry", key="retry-main"):
         st.session_state.do_retry = True
         st.rerun()
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.markdown(
-    f'<div style="text-align: center; '
-    f'padding: 24px; color: #555; '
-    f'font-size: 12px;">'
-    f'<p>Poka v1.0 — Powered by '
-    f'{model_name}</p>'
-    f'</div>',
-    unsafe_allow_html=True,
-)

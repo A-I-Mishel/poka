@@ -194,7 +194,10 @@ COMPOSER_SCRIPT: str = """
         try { wasNear = nearBottom(); } catch (err) { /* ignore */ }
     }).observe(doc.body, { childList: true, subtree: true });
 
-    /* --- Copy buttons on assistant messages (hover to reveal) --- */
+    /* --- Copy buttons (hover to reveal) ---
+       Placed inside the message meta row when present (time + Copy side
+       by side), otherwise directly after the message content. Copy text
+       source and clipboard behavior are unchanged. */
     function armCopyButtons() {
         const nodes = doc.querySelectorAll('div[data-testid="stChatMessage"]');
         for (const node of nodes) {
@@ -234,7 +237,14 @@ COMPOSER_SCRIPT: str = """
                     fallbackCopy();
                 }
             });
-            node.appendChild(btn);
+            const meta = node.querySelector('.poka-meta');
+            if (meta) {
+                meta.appendChild(btn);
+            } else if (content.nextSibling) {
+                content.parentNode.insertBefore(btn, content.nextSibling);
+            } else {
+                content.parentNode.appendChild(btn);
+            }
         }
     }
     armCopyButtons();

@@ -5,6 +5,8 @@ application.session, memory facts from services.memory. Returns the
 active model name for the page footer.
 """
 
+import html
+
 import streamlit as st
 
 from application.session import (
@@ -16,7 +18,27 @@ from application.session import (
 from services.memory import delete_memory_fact
 from services.storage import StorageError
 from services.timeutil import utcnow_stamp
-from ui.components import _export_chat_to_markdown, tier_status
+from ui.components import _export_chat_to_markdown
+
+
+def _active_model_name() -> str:
+    """Read the existing active-model source of truth.
+
+    Single reader for the sidebar: ``st.session_state.active_tier`` is
+    initialized in ``application.session.ensure_session_defaults`` (from
+    ``config.TIER_GETTERS``) and updated in ``run_agent`` from
+    ``agent.answer_with_fallback``. No selection logic lives here.
+    """
+    return str(st.session_state.get("active_tier", "") or "")
+
+
+def _model_is_live(model_name: str) -> bool:
+    """Provider-agnostic liveness: only the known empty states are offline."""
+    return model_name.strip().lower() not in (
+        "",
+        "no llm configured",
+        "no user identity",
+    )
 
 
 def render_sidebar() -> str:
@@ -24,49 +46,38 @@ def render_sidebar() -> str:
 
     with st.sidebar:
 
+        # ---- Brand (left aligned, quiet) ----
         st.markdown(
-            '<div style="text-align: center; '
-            'padding: 24px 0 16px;">'
-            '<h1 class="brand-title">Poka</h1>'
-            '<p style="color: #8b8b9e; '
-            'font-size: 13px; margin-top: 6px;">'
-            'Multi-purpose AI Assistant'
-            '</p>'
-            '</div>',
+            '<div class="poka-brand">'
+            '<span class="poka-mark" aria-hidden="true">'
+            '<svg viewBox="0 0 16 16" width="16" height="16">'
+            '<path d="M8 0l1.8 5.6L15 7l-4 3.6L12.2 16 8 12.8 3.8 16 '
+            '5 10.6 1 7l5.2-1.4z"/>'
+            "</svg>"
+            "</span>"
+            '<span class="poka-brand-text">'
+            '<span class="poka-word">Poka</span>'
+            '<span class="poka-sub">AI assistant</span>'
+            "</span>"
+            "</div>",
             unsafe_allow_html=True,
         )
 
-        model_name: str = str(
-            st.session_state.active_tier
-        )
-
-        status_class, status_icon = tier_status(
-            model_name
-        )
-
+        # ---- Active model (dynamic, subtle) ----
+        model_name: str = _active_model_name()
+        model_live: bool = _model_is_live(model_name)
+        dot_class: str = "poka-dot-online" if model_live else "poka-dot-offline"
         st.markdown(
-            '<div style="text-align: center; '
-            'margin-bottom: 24px;">'
-            f'<span class="status-badge '
-            f'status-{status_class}">'
-            f'{status_icon} {model_name}'
-            '</span>'
-            '</div>',
+            '<div class="poka-model">'
+            f'<span class="poka-dot {dot_class}" aria-hidden="true"></span>'
+            f'<span class="poka-model-name">{html.escape(model_name)}</span>'
+            "</div>",
             unsafe_allow_html=True,
         )
 
-        st.markdown("<hr style='border-color:#27273a;margin:16px 0;'>", unsafe_allow_html=True)
-        st.markdown('<p class="section-label">Mode</p>', unsafe_allow_html=True)
-        st.toggle("Deep Mode", key="deep-mode")
-        mode_color = "#6366f1" if st.session_state.deep_mode else "#8b8b9e"
-        mode_label = "Deep" if st.session_state.deep_mode else "Fast"
-        st.markdown(
-            f'<p style="color:{mode_color};font-size:12px;'
-            'font-weight:600;text-align:center;">'
-            f"{mode_label} Mode Active</p>",
-            unsafe_allow_html=True,
-        )
+        st.markdown('<div class="poka-divider"></div>', unsafe_allow_html=True)
 
+        # ---- New chat (key + behavior unchanged) ----
         if st.button(
             "+ New chat",
             type="primary",
@@ -81,10 +92,10 @@ def render_sidebar() -> str:
 
             st.rerun()
 
-
+        # ---- Search (key + behavior unchanged) ----
         search_q: str = st.text_input(
             "Search chat",
-            placeholder="Find in conversation...",
+            placeholder="Search...",
             label_visibility="collapsed",
             key="chat-search",
         )
@@ -94,14 +105,18 @@ def render_sidebar() -> str:
                 for m in st.session_state.messages
                 if search_q.lower() in str(m.get("content", "")).lower()
             )
-            st.caption(f"{match_count} matches")
-
-        if st.session_state.chats:
-
             st.markdown(
-                '<p class="section-label">Chats</p>',
+                f'<p class="poka-match">{match_count} matches</p>',
                 unsafe_allow_html=True,
             )
+
+        # ---- Recents ----
+        st.markdown(
+            '<p class="section-label">Recents</p>',
+            unsafe_allow_html=True,
+        )
+
+        if st.session_state.chats:
 
             for i, chat in enumerate(
                 list(st.session_state.chats)
@@ -135,7 +150,11 @@ def render_sidebar() -> str:
 
                         st.rerun()
                 with pencil_col:
-                    if st.button("✎", key=f"rename-{i}"):
+                    if st.button(
+                        "⋯",
+                        key=f"rename-{i}",
+                        help="Rename chat",
+                    ):
                         st.session_state.renaming_idx = i
                         st.rerun()
 
@@ -157,11 +176,49 @@ def render_sidebar() -> str:
                         st.session_state.renaming_idx = None
                         st.rerun()
 
+        else:
+            st.markdown(
+                '<p class="poka-empty">No recent conversations</p>',
+                unsafe_allow_html=True,
+            )
 
-        with st.expander("Memory"):
+        st.markdown('<div class="poka-divider"></div>', unsafe_allow_html=True)
 
-            st.caption(
-                "Things Poka should always remember."
+        # ---- Mode (single segmented control, same deep_mode state) ----
+        # The active segment is disabled so it reads as selected; the
+        # other segment switches mode. No second state is introduced.
+        st.markdown('<p class="section-label">Mode</p>', unsafe_allow_html=True)
+        is_deep: bool = bool(st.session_state.get("deep_mode", False))
+        fast_col, deep_col = st.columns(2, gap="small")
+        with fast_col:
+            if st.button(
+                "Fast",
+                key="mode-fast",
+                help="Fast mode",
+                disabled=not is_deep,
+            ):
+                st.session_state.deep_mode = False
+                st.rerun()
+        with deep_col:
+            if st.button(
+                "Deep",
+                key="mode-deep",
+                help="Deep mode",
+                disabled=is_deep,
+            ):
+                st.session_state.deep_mode = True
+                st.rerun()
+
+        # ---- Memory (keys + logic unchanged, card instead of expander) ----
+        st.markdown(
+            '<p class="section-label">Memory</p>',
+            unsafe_allow_html=True,
+        )
+        with st.container(border=True):
+
+            st.markdown(
+                '<p class="poka-card-sub">Saved context</p>',
+                unsafe_allow_html=True,
             )
 
             notes_in = st.text_area(
@@ -170,7 +227,7 @@ def render_sidebar() -> str:
                     "memory_notes",
                     "",
                 ),
-                height=120,
+                height=80,
                 label_visibility="collapsed",
                 key="memory-box",
             )
@@ -207,18 +264,13 @@ def render_sidebar() -> str:
                     st.toast("Nothing matched that.")
                 st.rerun()
 
+        # ---- Files & stats (keys + logic unchanged, cards not expander) ----
+        st.markdown(
+            '<p class="section-label">Files</p>',
+            unsafe_allow_html=True,
+        )
 
-        with st.expander(
-            "Files & stats",
-            expanded=False,
-        ):
-
-            st.markdown(
-                '<p class="section-label">'
-                'Generated Files'
-                '</p>',
-                unsafe_allow_html=True,
-            )
+        with st.container(border=True):
 
             try:
                 owned_files = _file_store().list_outputs()
@@ -229,10 +281,19 @@ def render_sidebar() -> str:
 
                 for meta in owned_files[:5]:
 
+                    safe_name: str = html.escape(meta.display_name)
                     st.markdown(
-                        f'<div class="file-card">'
-                        f'{meta.display_name}'
-                        f'</div>',
+                        '<div class="poka-file-row">'
+                        '<span class="poka-file-icon" aria-hidden="true">'
+                        '<svg viewBox="0 0 16 16" width="14" height="14">'
+                        '<path d="M3 1h5l4 4v10H3z" fill="none" '
+                        'stroke="currentColor" stroke-width="1.3"/>'
+                        '<path d="M8 1v4h4" fill="none" '
+                        'stroke="currentColor" stroke-width="1.3"/>'
+                        "</svg>"
+                        "</span>"
+                        f'<span class="poka-file-name">{safe_name}</span>'
+                        "</div>",
                         unsafe_allow_html=True,
                     )
 
@@ -243,7 +304,7 @@ def render_sidebar() -> str:
                         file_bytes = None
                     if file_bytes is not None:
                         st.download_button(
-                            "Get file",
+                            "Download file",
                             file_bytes,
                             file_name=meta.display_name,
                             key=f"side-dl-{meta.id}",
@@ -252,53 +313,38 @@ def render_sidebar() -> str:
             else:
 
                 st.markdown(
-                    '<p style="color: #555; '
-                    'font-size: 12px; '
-                    'text-align: center;">'
-                    'No files yet'
-                    '</p>',
+                    '<p class="poka-empty">No files yet</p>',
                     unsafe_allow_html=True,
                 )
 
+        st.markdown(
+            '<p class="section-label">Stats</p>',
+            unsafe_allow_html=True,
+        )
 
-            st.markdown(
-                '<p class="section-label">Stats</p>',
-                unsafe_allow_html=True,
-            )
+        with st.container(border=True):
 
             st.markdown(
                 '<div class="stats-box">'
-                '<div style="display: flex; '
-                'justify-content: space-between; '
-                'margin-bottom: 10px;">'
-                '<span style="color: #8b8b9e; '
-                'font-size: 13px;">Messages</span>'
-                f'<span style="color: #f1f1f4; '
-                f'font-weight: 600;">'
+                '<div class="poka-stat-row">'
+                '<span class="poka-stat-key">Messages</span>'
+                f'<span class="poka-stat-val">'
                 f'{len(st.session_state.messages)}'
-                '</span>'
-                '</div>'
-                '<div style="display: flex; '
-                'justify-content: space-between; '
-                'margin-bottom: 10px;">'
-                '<span style="color: #8b8b9e; '
-                'font-size: 13px;">Files</span>'
-                f'<span style="color: #f1f1f4; '
-                f'font-weight: 600;">'
+                "</span>"
+                "</div>"
+                '<div class="poka-stat-row">'
+                '<span class="poka-stat-key">Files</span>'
+                f'<span class="poka-stat-val">'
                 f'{len(owned_files)}'
-                '</span>'
-                '</div>'
-                '<div style="display: flex; '
-                'justify-content: space-between;">'
-                '<span style="color: #8b8b9e; '
-                'font-size: 13px;">Active</span>'
-                f'<span style="color: #6366f1; '
-                f'font-weight: 600; '
-                f'font-size: 12px;">'
-                f'{model_name}'
-                '</span>'
-                '</div>'
-                '</div>',
+                "</span>"
+                "</div>"
+                '<div class="poka-stat-row">'
+                '<span class="poka-stat-key">Active</span>'
+                f'<span class="poka-stat-active">'
+                f'{html.escape(model_name)}'
+                "</span>"
+                "</div>"
+                "</div>",
                 unsafe_allow_html=True,
             )
 
@@ -328,5 +374,15 @@ def render_sidebar() -> str:
                 if no_col.button("Cancel", key="clean-no"):
                     st.session_state.confirm_clean = False
                     st.rerun()
+
+        # ---- Quiet footer (same dynamic source, no new state) ----
+        st.markdown('<div class="poka-divider"></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="poka-model poka-footer">'
+            f'<span class="poka-dot {dot_class}" aria-hidden="true"></span>'
+            f'<span class="poka-model-name">{html.escape(model_name)}</span>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
     return model_name
