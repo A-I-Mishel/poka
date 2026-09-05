@@ -917,6 +917,7 @@ def run_agent(user_input: str) -> str:
         raw_messages=[
             dict(m) for m in st.session_state.messages if isinstance(m, dict)
         ],
+        deep_mode=bool(st.session_state.get("deep_mode", False)),
     )
 
     st.session_state.active_tier = str(
@@ -1332,6 +1333,9 @@ if "pending_attach" not in st.session_state:
 if "force_search" not in st.session_state:
     st.session_state.force_search = False
 
+if "deep_mode" not in st.session_state:
+    st.session_state.deep_mode = False
+
 if "confirm_clean" not in st.session_state:
     st.session_state.confirm_clean = False
 
@@ -1425,6 +1429,18 @@ with st.sidebar:
         f'{status_icon} {model_name}'
         '</span>'
         '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<hr style='border-color:#27273a;margin:16px 0;'>", unsafe_allow_html=True)
+    st.markdown('<p class="section-label">Mode</p>', unsafe_allow_html=True)
+    st.toggle("Deep Mode", key="deep-mode")
+    mode_color = "#6366f1" if st.session_state.deep_mode else "#8b8b9e"
+    mode_label = "Deep" if st.session_state.deep_mode else "Fast"
+    st.markdown(
+        f'<p style="color:{mode_color};font-size:12px;'
+        'font-weight:600;text-align:center;">'
+        f"{mode_label} Mode Active</p>",
         unsafe_allow_html=True,
     )
 

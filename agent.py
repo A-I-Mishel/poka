@@ -317,6 +317,39 @@ def plan_then_execute(
         )
 
 
+def should_reflect(
+    task_type: str,
+    draft_output: str,
+    user_input: str,
+    deep_mode: bool = False,
+) -> bool:
+    """Decide whether self-critique is worth an extra model call.
+
+    Args:
+        task_type: Classified task (simple/research/creative/data/multi_step).
+        draft_output: The draft answer to potentially critique.
+        user_input: The original request (unused for now, kept for tuning).
+        deep_mode: User-enabled quality mode. Off skips reflection always.
+
+    Returns:
+        True when reflection should run.
+    """
+    if not REFLECTION_ENABLED:
+        return False
+    if not deep_mode:
+        return False
+    if task_type == "simple":
+        return False
+    if task_type in ("creative", "multi_step"):
+        return True
+    if len(draft_output.strip()) < 80:
+        return True
+    lowered = draft_output.lower()
+    if any(kw in lowered for kw in ["error", "failed", "unable to", "could not"]):
+        return True
+    return False
+
+
 def reflect_and_improve(
     llm_instance: BaseLanguageModel,
     original_input: str,
@@ -375,6 +408,7 @@ def answer_with_fallback(
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
     memory_notes: str = "",
     raw_messages: Optional[List[Dict[str, Any]]] = None,
+    deep_mode: bool = False,
 ) -> Dict[str, Any]:
     """Answer with the full stack: memorize, classify, plan, execute, reflect.
 
@@ -391,6 +425,7 @@ def answer_with_fallback(
         memory_notes: Persistent user notes for the system prompt.
         raw_messages: Raw role/content dicts; enables memory extraction
             and history summarization.
+        deep_mode: When True, run planning + reflection (more calls).
 
     Returns:
         Dict with 'output', 'active_tier', and 'task_type'.
@@ -476,7 +511,7 @@ def answer_with_fallback(
                 continue
         raise RuntimeError(_friendly_cascade_error(last_error))
 
-    use_planning = task_type in ("multi_step", "creative")
+    use_planning = deep_mode and task_type in ("multi_step", "creative")
     ordered = _ordered_tiers(first, tiers)
     usable = [item for item in ordered if not _tier_skipped(item[0])] or ordered
     last_error = None
@@ -499,9 +534,13 @@ def answer_with_fallback(
                     llm_instance, user_input, langchain_history,
                     combined_notes, relevant_context,
                 )
-            output = reflect_and_improve(
-                llm_instance, user_input, draft, langchain_history
-            )
+            # Conditional reflection (skipped unless worth the extra call).
+            if should_reflect(task_type, draft, user_input, deep_mode):
+                output = reflect_and_improve(
+                    llm_instance, user_input, draft, langchain_history
+                )
+            else:
+                output = draft
             _record_tier_success(name)
             return {"output": output, "active_tier": name, "task_type": task_type}
         except Exception as e:
