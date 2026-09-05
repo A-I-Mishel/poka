@@ -1593,24 +1593,79 @@ with st.container(
 
 # Enter key inside the composer input clicks Send (text_input alone
 # only commits its value on Enter without submitting anything).
+# Also keeps the chat pinned to the bottom while new messages arrive.
 components.html(
     """
 <script>
 (function () {
-    const doc = window.parent.document;
+    const win = window.parent;
+    const doc = win.document;
+
+    /* --- Enter-to-send (bound once per composer node) --- */
     const scope = doc.querySelector(".st-key-composer");
-    if (!scope || scope.dataset.enterBound) return;
-    scope.dataset.enterBound = "1";
-    const input = scope.querySelector('div[data-testid="stTextInput"] input');
-    if (!input) return;
-    input.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-            e.preventDefault();
-            const btns = scope.querySelectorAll("button");
-            const send = btns[btns.length - 1];
-            if (send) send.click();
+    if (scope && !scope.dataset.enterBound) {
+        scope.dataset.enterBound = "1";
+        const input = scope.querySelector('div[data-testid="stTextInput"] input');
+        if (input) {
+            input.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+                    e.preventDefault();
+                    const btns = scope.querySelectorAll("button");
+                    const send = btns[btns.length - 1];
+                    if (send) send.click();
+                }
+            });
         }
-    });
+    }
+
+    /* --- auto-scroll follower (bound once per page) --- */
+    if (doc.__pokaScrollBound) return;
+    doc.__pokaScrollBound = true;
+
+    function getScroller() {
+        const candidates = [
+            doc.querySelector('section[data-testid="stMain"]'),
+            doc.scrollingElement,
+            doc.documentElement,
+            doc.body,
+        ];
+        for (const el of candidates) {
+            if (el && el.scrollHeight > el.clientHeight + 10) return el;
+        }
+        return null;
+    }
+    function nearBottom() {
+        const el = getScroller();
+        if (!el) return true;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    }
+    function goBottom(smooth) {
+        const el = getScroller();
+        if (el) {
+            if (smooth && el.scrollTo) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+            else el.scrollTop = el.scrollHeight;
+        }
+    }
+
+    let wasNear = true;
+    win.addEventListener("scroll", function () { wasNear = nearBottom(); }, true);
+    setTimeout(function () { goBottom(false); }, 350);
+
+    const target = doc.querySelector('section[data-testid="stMain"]') || doc.body;
+    new MutationObserver(function (muts) {
+        let hasChat = false;
+        for (const m of muts) {
+            for (const n of m.addedNodes) {
+                if (n.nodeType === 1 && (n.matches('[data-testid="stChatMessage"]') || n.querySelector('[data-testid="stChatMessage"]'))) {
+                    hasChat = true;
+                    break;
+                }
+            }
+            if (hasChat) break;
+        }
+        if (hasChat && wasNear) goBottom(true);
+        wasNear = nearBottom();
+    }).observe(target, { childList: true, subtree: true });
 })();
 </script>
 """,
