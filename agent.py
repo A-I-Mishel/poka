@@ -37,7 +37,7 @@ Rules:
 
 TIER_AGENT_GETTERS: List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]] = [
     ("Muse Spark 1.3", get_tier1_llm),  # type: ignore[arg-type]
-    ("Ling 3.0 Flash", get_tier1b_llm),  # type: ignore[arg-type]
+    ("Nemotron 3.5", get_tier1b_llm),  # type: ignore[arg-type]
     ("Gemini 3.6 Flash", get_tier2_llm),  # type: ignore[arg-type]
     ("Gemini 3.5 Flash", get_tier3_llm),  # type: ignore[arg-type]
 ]
@@ -240,7 +240,7 @@ def answer_with_fallback(
 def probe_live_tier(timeout: float = 20.0) -> str:
     """Return the name of the first tier answering a minimal prompt.
 
-    Tries tiers in order (Muse -> Ling -> Gemini 3.6 -> Gemini 3.5) so the
+    Tries tiers in order (Muse -> Nemotron -> Gemini 3.6 -> Gemini 3.5) so the
     preferred model is automatically picked again once it recovers.
 
     Args:

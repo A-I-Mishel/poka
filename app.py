@@ -1129,7 +1129,7 @@ def tier_status(
 
     if (
         tier_name.startswith("Gemini")
-        or tier_name.startswith("Ling")
+        or tier_name.startswith("Nemotron")
     ):
         return (
             "fallback",
