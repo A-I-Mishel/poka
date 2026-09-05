@@ -76,18 +76,37 @@ def get_tier1b_llm() -> Optional[ChatOpenAI]:
         return None
 
 
+def _make_gemini(model: str, key: str, temperature: float):
+    """Build ChatGoogleGenerativeAI across langchain-google-genai versions.
+
+    Older releases accept convert_system_message_to_human; newer ones
+    (4.x, consolidated google-genai SDK) deprecated/removed it.
+    """
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    try:
+        return ChatGoogleGenerativeAI(
+            model=model,
+            api_key=key,  # type: ignore[arg-type]
+            temperature=temperature,
+            convert_system_message_to_human=True,  # type: ignore[call-arg]
+        )
+    except TypeError:
+        return ChatGoogleGenerativeAI(
+            model=model,
+            api_key=key,  # type: ignore[arg-type]
+            temperature=temperature,
+        )
+
+
 def get_tier2_llm() -> Optional[ChatGoogleGenerativeAI]:
     """TIER 2: Gemini 3.6 Flash -- latest stable free tier (Sept 2026)."""
     key: Optional[str] = _get_secret("GEMINI_API_KEY")
     if _is_placeholder(key, "your_gemini_key_here"):
         return None
     try:
-        return ChatGoogleGenerativeAI(
-            model=GEMINI_36_MODEL,
-            api_key=key,  # type: ignore[arg-type]
-            temperature=TEMPERATURE,
-            convert_system_message_to_human=True,
-        )
+        assert key is not None
+        return _make_gemini(GEMINI_36_MODEL, key, TEMPERATURE)
     except Exception:
         return None
 
@@ -98,12 +117,8 @@ def get_tier3_llm() -> Optional[ChatGoogleGenerativeAI]:
     if _is_placeholder(key, "your_gemini_key_here"):
         return None
     try:
-        return ChatGoogleGenerativeAI(
-            model=GEMINI_35_MODEL,
-            api_key=key,  # type: ignore[arg-type]
-            temperature=TEMPERATURE,
-            convert_system_message_to_human=True,
-        )
+        assert key is not None
+        return _make_gemini(GEMINI_35_MODEL, key, TEMPERATURE)
     except Exception:
         return None
 

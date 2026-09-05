@@ -1031,7 +1031,7 @@ for idx, msg in enumerate(st.session_state.messages):
             st.caption(msg_time)
 
     if isinstance(msg, dict) and msg.get("role") == "user":
-        with st.container(key=f"msgrow-{idx}"):
+        with st.container():
             if st.button("Edit", key=f"edit-{idx}"):
                 old_text: str = str(msg.get("content", ""))
                 old_atts = msg.get("attachments")
@@ -1105,9 +1105,7 @@ elif st.session_state.get(
 # CUSTOM COMPOSER
 # ============================================================
 
-with st.container(
-    key="composer"
-):
+with st.container():
 
     col_plus, col_input, col_send = st.columns(
         [0.7, 8.3, 0.8],
@@ -1331,9 +1329,7 @@ if st.session_state.get(
     False,
 ):
 
-    with st.container(
-        key="attachment-menu"
-    ):
+    with st.container():
 
         if st.button(
             "Add files or photos",

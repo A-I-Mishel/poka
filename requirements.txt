@@ -1,14 +1,14 @@
-streamlit==1.63.0
-langchain==0.3.0
-langchain-core==0.3.0
-langchain-community==0.3.0
-langchain-google-genai==2.0.0
-langchain-openai==0.2.0
-duckduckgo-search==3.9.6
-python-pptx==1.0.2
-python-docx==1.1.2
-pillow==10.4.0
-pandas==2.2.2
-PyPDF2==3.0.1
-python-dotenv==1.0.1
+streamlit>=1.38,<2
+langchain>=0.3.27
+langchain-core>=0.3.75,<2
+langchain-community>=0.3.27
+langchain-google-genai>=2.1.12
+langchain-openai>=0.2.0
+duckduckgo-search>=3.9.6
+python-pptx
+python-docx
+pillow
+pandas
+PyPDF2
+python-dotenv
 # chromadb==0.5.5  # optional -- needs C++ build tools on Windows; app runs without it
