@@ -205,13 +205,14 @@ div[data-testid="stChatMessage"]:hover .poka-copy {
     }
 }
 
-/* Edit button row under the latest user message */
-.st-key-edit-row {
+/* Edit button row under each user message (keyed containers render
+   st-key-msgrow-N classes, matched here by substring) */
+div[class*="st-key-msgrow-"] {
     display: flex;
     justify-content: flex-end;
 }
-.st-key-edit-row div[data-testid="stBaseButton-secondary"] > button,
-.st-key-edit-row .stButton > button {
+div[class*="st-key-msgrow-"] div[data-testid="stBaseButton-secondary"] > button,
+div[class*="st-key-msgrow-"] .stButton > button {
     width: auto;
     background: transparent;
     border: 1px solid #27273a;
@@ -221,8 +222,8 @@ div[data-testid="stChatMessage"]:hover .poka-copy {
     padding: 4px 16px;
     text-align: center;
 }
-.st-key-edit-row div[data-testid="stBaseButton-secondary"] > button:hover,
-.st-key-edit-row .stButton > button:hover {
+div[class*="st-key-msgrow-"] div[data-testid="stBaseButton-secondary"] > button:hover,
+div[class*="st-key-msgrow-"] .stButton > button:hover {
     color: #FFFFFF;
     border-color: #6366f1;
     background: transparent;
@@ -1539,21 +1540,6 @@ for msg in st.session_state.messages:
 # ATTACHMENT STATUS
 # ============================================================
 
-last_user_idx: Optional[int] = None
-for _i, _m in enumerate(st.session_state.messages):
-    if isinstance(_m, dict) and _m.get("role") == "user":
-        last_user_idx = _i
-if last_user_idx is not None:
-    with st.container(key="edit-row"):
-        if st.button("Edit", key=f"edit-{last_user_idx}"):
-            old_text: str = str(
-                st.session_state.messages[last_user_idx].get("content", "")
-            )
-            st.session_state.messages = st.session_state.messages[:last_user_idx]
-            st.session_state[f"composer_input_{st.session_state.composer_key}"] = old_text
-            persist()
-            st.rerun()
-
 pending = st.session_state.get(
     "pending_attach"
 )
@@ -1758,7 +1744,6 @@ components.html(
         const nodes = doc.querySelectorAll('div[data-testid="stChatMessage"]');
         for (const node of nodes) {
             if (node.dataset.pokaActions) continue;
-            if (!node.querySelector('div[data-testid="stChatMessageAvatarAssistant"]')) continue;
             const content = node.querySelector('div[data-testid="stChatMessageContent"]');
             if (!content) continue;
             node.dataset.pokaActions = "1";
