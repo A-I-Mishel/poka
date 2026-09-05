@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict, List
 
 import streamlit as st
+import streamlit.components.v1 as components
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import answer_with_fallback, probe_live_tier
@@ -1588,6 +1589,33 @@ with st.container(
             "↑",
             key="composer_send",
         )
+
+
+# Enter key inside the composer input clicks Send (text_input alone
+# only commits its value on Enter without submitting anything).
+components.html(
+    """
+<script>
+(function () {
+    const doc = window.parent.document;
+    const scope = doc.querySelector(".st-key-composer");
+    if (!scope || scope.dataset.enterBound) return;
+    scope.dataset.enterBound = "1";
+    const input = scope.querySelector('div[data-testid="stTextInput"] input');
+    if (!input) return;
+    input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+            e.preventDefault();
+            const btns = scope.querySelectorAll("button");
+            const send = btns[btns.length - 1];
+            if (send) send.click();
+        }
+    });
+})();
+</script>
+""",
+    height=0,
+)
 
 
 # ============================================================
