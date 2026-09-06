@@ -263,7 +263,7 @@ def test_C_research_launch(apptest_env, monkeypatch):
     _use_user(monkeypatch, "v7c")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     assert not at.exception
     assert "What would you like to research?" in _all_text(at)
@@ -274,7 +274,7 @@ def test_D_docs_launch(apptest_env, monkeypatch):
     _use_user(monkeypatch, "v7d")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-docs").click().run(timeout=120)
     assert not at.exception
     assert "No files attached" in _all_text(at)
@@ -290,7 +290,7 @@ def test_E_research_workspace(apptest_env, monkeypatch):
     bid = UserStore("v7e").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     assert not at.exception
     assert "mars news?" in _md(at)
@@ -301,7 +301,7 @@ def test_F_gallery(apptest_env, monkeypatch):
     FileStore("v7f").register_output("Old.docx", b"PK\x03\x04x", "docx")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert "Old.docx" in _md(at)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)
 
@@ -310,7 +310,7 @@ def test_G_memory_controls(apptest_env, monkeypatch):
     _use_user(monkeypatch, "v7g")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-memory").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-memory").click().run(timeout=120)
     at.text_area(key="memory-box").set_value("Prefers concise answers").run(timeout=60)
     at.button(key="save-memory").click().run(timeout=120)
     assert not at.exception

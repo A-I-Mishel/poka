@@ -259,7 +259,7 @@ def test_case_b_gallery_lists_artifact(art_env, monkeypatch):
     at.text_input(key="composer_input_0").set_value("make slides").run(timeout=60)
     at.button(key="composer_send").click().run(timeout=120)
     assert not at.exception, f"send failed: {at.exception}"
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     body = _md(at)
     assert "Artifacts" in body
@@ -277,7 +277,7 @@ def test_case_c_legacy_renders_without_linkage(art_env, monkeypatch):
     ]
     at.run(timeout=120)
     assert not at.exception
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     body = _md(at)
     assert "Old.docx" in body  # gallery shows registry metadata
     assert 'class="poka-art-expired"' not in body
@@ -305,7 +305,7 @@ def test_case_e_gallery_isolated(art_env, monkeypatch):
     _use_user(monkeypatch, "art-bob")
     _stub_app_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     body = _md(at)
     assert "Alice.pptx" not in body
     assert "No generated files yet." in body
@@ -332,7 +332,7 @@ def test_files_section_lists_uploads(art_env, monkeypatch):
     FileStore("art-files").save_upload(b"a,b\n1,2\n", "data.csv")
     _stub_app_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     body = _md(at)
     assert "data.csv" in body
     assert "No uploaded files yet" not in body

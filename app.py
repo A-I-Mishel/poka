@@ -124,8 +124,8 @@ if not _workspace_active and not st.session_state.messages:
         "Welcome back — continue where you left off, "
         "or start something new below."
         if st.session_state.get("chats")
-        else "Ask Poka to research, draft documents and presentations, "
-        "analyze PDFs and data, or remember what matters to you."
+        else         "Research, draft documents, analyze files, "
+        "and remember what matters to you."
     )
 
     st.markdown(

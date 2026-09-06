@@ -766,7 +766,7 @@ def test_A_user_switch_isolation(apptest_env, monkeypatch):
     at.session_state.active_project_id = alice_pid
     at.session_state.messages = [{"role": "user", "content": "alice chat"}]
     at.run(timeout=60)
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{alice_bid}").click().run(timeout=120)
     assert "shh" in _md(at)
     # Switch to Bob with NO manual clearing — session binding must reset.
@@ -778,7 +778,7 @@ def test_A_user_switch_isolation(apptest_env, monkeypatch):
     assert list(at.session_state["messages"]) == []
     assert list(at.session_state["chats"]) == []
     assert at.session_state["sidebar_view"] is None
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     body, keys = _md(at), _buttons(at)
     assert "alice secret?" not in body and "AliceProj" not in body and "Alice.docx" not in body
     assert "shh" not in body  # selected brief content gone
@@ -787,7 +787,7 @@ def test_A_user_switch_isolation(apptest_env, monkeypatch):
     # Switch back to Alice restores her vault (Personal scope first).
     _use_user(monkeypatch, "alice-A")
     at.run(timeout=120)
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     assert f"research-open-{alice_bid}" not in _buttons(at)  # project brief, not Personal
     at.session_state.active_project_id = alice_pid
     at.run(timeout=60)
@@ -803,7 +803,7 @@ def test_B_stale_selection(apptest_env, monkeypatch):
     at = _run_app()
     at.session_state.active_project_id = pa
     at.run(timeout=60)
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{ba}").click().run(timeout=120)
     assert "secret-A" in _md(at)
     at.session_state.active_project_id = pb
@@ -835,7 +835,7 @@ def test_D_generate_quota_failure(apptest_env, monkeypatch):
     bid = UserStore("d-user").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     at.button(key=f"research-generate-{bid}").click().run(timeout=120)
     assert len(FileStore("d-user").list_outputs()) == 1
@@ -862,7 +862,7 @@ def test_E_regenerate_integrity(apptest_env, monkeypatch):
     at.run(timeout=60)
     oid = FileStore("e-user").list_outputs()[0].id
     old_bytes = FileStore("e-user").read_output(oid)
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.button(key=f"regen-side-{oid}").click().run(timeout=120)
     outs = FileStore("e-user").list_outputs()
     assert len(outs) == 2 and FileStore("e-user").read_output(oid) == old_bytes
@@ -875,7 +875,7 @@ def test_F_project_isolation(apptest_env, monkeypatch):
     ba = s.create_brief("in A?", [dict(SRC)], "e", pa)["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.session_state.active_project_id = pa
     at.run(timeout=60)
     assert f"research-open-{ba}" in _buttons(at)
@@ -891,7 +891,7 @@ def test_G_personal_isolation(apptest_env, monkeypatch):
     bp = s.create_brief("personal?", [dict(SRC)], "e")["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.run(timeout=60)
     assert f"research-open-{bp}" in _buttons(at)
     at.session_state.active_project_id = pa
@@ -905,7 +905,7 @@ def test_H_legacy(apptest_env, monkeypatch):
     oid = FileStore("h-user").list_outputs()[0].id
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     assert f"regen-side-{oid}" not in _buttons(at)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)

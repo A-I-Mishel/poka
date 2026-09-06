@@ -317,10 +317,10 @@ def test_A_default_nav_first(apptest_env, monkeypatch):
     at = _run_app()
     keys = _buttons(at)
     for key in ("new-chat", "nav-research", "nav-workflows",
-                "project-personal", "nav-memory", "nav-files",
-                "nav-artifacts", "nav-sources", "nav-stats"):
+                "project-personal", "more-toggle"):
         assert key in keys, key
-    # No destination bodies by default.
+    # No destination bodies by default; secondary nav hides behind More.
+    assert "nav-memory" not in keys
     assert "memory-box" not in keys
     assert "research-open-" not in " ".join(keys)
 
@@ -329,7 +329,7 @@ def test_B_more_destinations(apptest_env, monkeypatch):
     _use_user(monkeypatch, "f7b")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-memory").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-memory").click().run(timeout=120)
     assert not at.exception
     assert at.session_state["sidebar_view"] == "memory"
     assert "memory-box" in {str(e.key) for e in at.text_area}
@@ -347,7 +347,7 @@ def test_C_research_in_main(apptest_env, monkeypatch):
     bid = UserStore("f7c").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     assert not at.exception
     assert f"research-open-{bid}" in _buttons(at)
     # Research renders in the main workspace, not the sidebar.
@@ -361,7 +361,7 @@ def test_D_workflows_in_main(apptest_env, monkeypatch):
     _use_user(monkeypatch, "f7d")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     assert "workflow-select-research" in _buttons(at)
     assert "workflow-select-research" in {str(b.key) for b in at.main.button}
     at.button(key="workflow-select-research").click().run(timeout=120)
@@ -372,7 +372,7 @@ def test_E_memory_in_main(apptest_env, monkeypatch):
     _use_user(monkeypatch, "f7e")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-memory").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-memory").click().run(timeout=120)
     assert "memory-box" in {str(e.key) for e in at.main.text_area}
     at.main.text_area(key="memory-box").set_value("Lives in Lisbon").run(timeout=60)
     at.main.button(key="save-memory").click().run(timeout=120)
@@ -385,7 +385,7 @@ def test_F_files_in_main(apptest_env, monkeypatch):
     FileStore("f7f").save_upload(PDF_BYTES, "field.pdf")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert "field.pdf" in _main_md(at)
 
 
@@ -394,7 +394,7 @@ def test_G_artifacts_in_main(apptest_env, monkeypatch):
     FileStore("f7g").register_output("Gallery.docx", b"PK\x03\x04x", "docx")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert "Gallery.docx" in _main_md(at)
     assert any(str(b.key).startswith("side-dl-") for b in at.main.download_button)
 
@@ -406,7 +406,7 @@ def test_H_project_switching(apptest_env, monkeypatch):
     ba = s.create_brief("in A?", [], "e", pa)["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.session_state.active_project_id = pa
     at.run(timeout=60)
     assert f"research-open-{ba}" in _buttons(at)
@@ -421,7 +421,7 @@ def test_I_back_to_chat(apptest_env, monkeypatch):
     at = _run_app()
     at.session_state.messages = [{"role": "user", "content": "keep me"}]
     at.run(timeout=60)
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert at.session_state["sidebar_view"] == "files"
     at.button(key="back-to-chat").click().run(timeout=120)
     assert at.session_state["sidebar_view"] is None

@@ -575,6 +575,9 @@ def ensure_session_defaults() -> None:
     if "sidebar_view" not in st.session_state:
         st.session_state.sidebar_view = None
 
+    if "more_open" not in st.session_state:
+        st.session_state.more_open = False
+
     if "selected_workflow" not in st.session_state:
         st.session_state.selected_workflow = None
 

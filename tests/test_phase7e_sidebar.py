@@ -325,8 +325,9 @@ def test_A_default_sidebar(apptest_env, monkeypatch):
     # 7F: destinations render in the main workspace only when selected —
     # default sidebar carries navigation rows, not detail bodies.
     for key in ("memory-box", "workflow-select-research",
-                "workflow-select-docs"):
+                "workflow-select-docs", "nav-memory"):
         assert key not in keys, key
+    assert "more-toggle" in keys
     assert len(at.expander) == 0
 
 
@@ -334,6 +335,7 @@ def test_B_more_reveals(apptest_env, monkeypatch):
     _use_user(monkeypatch, "n7b")
     _stub_agent(monkeypatch)
     at = _run_app()
+    at.button(key="more-toggle").click().run(timeout=120)
     keys = _buttons(at)
     for key in ("nav-memory", "nav-files", "nav-artifacts", "nav-sources", "nav-stats"):
         assert key in keys, key
@@ -346,7 +348,7 @@ def test_C_memory(apptest_env, monkeypatch):
     _use_user(monkeypatch, "n7c")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-memory").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-memory").click().run(timeout=120)
     at.text_area(key="memory-box").set_value("Prefers concise answers").run(timeout=60)
     at.button(key="save-memory").click().run(timeout=120)
     assert not at.exception
@@ -363,7 +365,7 @@ def test_D_research(apptest_env, monkeypatch):
     bid = UserStore("n7d").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     assert not at.exception
     assert "mars news?" in _md(at)
@@ -373,7 +375,7 @@ def test_E_workflows(apptest_env, monkeypatch):
     _use_user(monkeypatch, "n7e")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     assert at.session_state["selected_workflow"] == "research"
     at.button(key="workflow-exit").click().run(timeout=120)
@@ -422,7 +424,7 @@ def test_I_chat(apptest_env, monkeypatch):
     _use_user(monkeypatch, "n7i")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     at.text_input(key="composer_input_0").set_value("hello").run(timeout=60)
     at.button(key="composer_send").click().run(timeout=120)
     assert not at.exception

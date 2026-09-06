@@ -18,6 +18,7 @@ from application.session import (
     ensure_current_chat_id,
     persist,
 )
+from services.context import get_current_user_id
 from application import workflows as workflow_svc
 from services.memory import (
     delete_memory_fact,
@@ -593,7 +594,13 @@ def render_sidebar() -> str:
         # ---- Conversation: explicit move for the open chat only.
         # Assignment never happens implicitly (project-row clicks only
         # switch context). Shown only while a conversation is open.
-        if st.session_state.get("messages", []):
+        # Conversation actions appear only when a move target can exist:
+        # an open conversation plus at least one project (or a conversation
+        # already carrying a project). Otherwise the control is noise.
+        _conv_pid = st.session_state.get("current_project_id", None)
+        _move_targets = bool(_project_list) or (
+            isinstance(_conv_pid, str) and bool(_conv_pid))
+        if st.session_state.get("messages", []) and _move_targets:
             st.markdown(
                 '<p class="section-label">Conversation</p>',
                 unsafe_allow_html=True,
@@ -705,6 +712,7 @@ def render_sidebar() -> str:
                 st.session_state.sidebar_view = (
                     None if st.session_state.get("sidebar_view", None) == "research"
                     else "research")
+                st.session_state.more_open = False
             except Exception:
                 pass
             st.rerun()
@@ -718,29 +726,51 @@ def render_sidebar() -> str:
                 st.session_state.sidebar_view = (
                     None if st.session_state.get("sidebar_view", None) == "workflows"
                     else "workflows")
+                st.session_state.more_open = False
             except Exception:
                 pass
             st.rerun()
 
-        # ---- More: compact secondary navigation (7F).
-        # Destination bodies render in the main workspace; Fast/Deep
-        # lives with the composer. Keys and behavior unchanged.
+        # ---- More: secondary navigation, closed by default (7G).
+        # Only the toggle is permanently visible; destination rows
+        # appear on demand and open the main workspace. Selecting a
+        # destination closes More again. Keys and behavior unchanged.
         st.markdown('<p class="section-label">More</p>', unsafe_allow_html=True)
-        for _nav_key, _nav_label, _nav_tip in (
-            ("nav-memory", "Memory", "Saved notes and remembered facts"),
-            ("nav-files", "Files", "Uploaded files"),
-            ("nav-artifacts", "Artifacts", "Generated documents and decks"),
-            ("nav-sources", "Sources", "Cited web sources"),
-            ("nav-stats", "Stats", "Usage overview"),
+        try:
+            _more_open = bool(st.session_state.get("more_open", False))
+        except Exception:
+            _more_open = False
+        if st.button(
+            "More ▾" if _more_open else "More ▸",
+            key="more-toggle",
+            help="Show secondary destinations",
         ):
-            if st.button(
-                _nav_label,
-                key=_nav_key,
-                help=_nav_tip,
-                disabled=_sidebar_view == _nav_key[4:],
+            try:
+                st.session_state.more_open = not bool(
+                    st.session_state.get("more_open", False))
+            except Exception:
+                pass
+            st.rerun()
+        if _more_open:
+            for _nav_key, _nav_label, _nav_tip in (
+                ("nav-memory", "Memory", "Saved notes and remembered facts"),
+                ("nav-files", "Files", "Uploaded files"),
+                ("nav-artifacts", "Artifacts", "Generated documents and decks"),
+                ("nav-sources", "Sources", "Cited web sources"),
+                ("nav-stats", "Stats", "Usage overview"),
             ):
-                _toggle_sidebar_view(_nav_key[4:])
-                st.rerun()
+                if st.button(
+                    _nav_label,
+                    key=_nav_key,
+                    help=_nav_tip,
+                    disabled=_sidebar_view == _nav_key[4:],
+                ):
+                    _toggle_sidebar_view(_nav_key[4:])
+                    try:
+                        st.session_state.more_open = False
+                    except Exception:
+                        pass
+                    st.rerun()
 
         # ---- (Memory renders in the main workspace when selected.) ----
 
@@ -769,6 +799,12 @@ def render_sidebar() -> str:
             "</div>",
             unsafe_allow_html=True,
         )
+        try:
+            _account_uid = str(get_current_user_id() or "").strip()[:24]
+        except Exception:
+            _account_uid = ""
+        if _account_uid:
+            st.caption(f"Signed in as {_md_text(_account_uid)}.")
         if st.session_state.messages:
             st.download_button(
                 "Export chat",

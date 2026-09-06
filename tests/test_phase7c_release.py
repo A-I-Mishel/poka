@@ -572,7 +572,7 @@ def test_C_research(apptest_env, monkeypatch):
     _use_user(monkeypatch, "res-smoke")
     _stub_agent(monkeypatch, tools_used=["web_search"], sources=[dict(SRC)])
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     at.text_input(key="workflow-research-question").set_value("mars news?").run(timeout=60)
     at.button(key="workflow-research-run").click().run(timeout=180)
@@ -584,7 +584,7 @@ def test_C_research(apptest_env, monkeypatch):
     assert "save-brief-1" in _buttons(at)
     at.button(key="save-brief-1").click().run(timeout=120)
     bid = UserStore("res-smoke").list_briefs()[0]["id"]
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     assert "mars news?" in _md(at) and "Mars News" in _md(at)
 
@@ -601,7 +601,7 @@ def test_D_doc_analysis(apptest_env, monkeypatch):
         return {"output": "analysis done", "active_tier": "T", "task_type": "simple"}
     monkeypatch.setattr(agent, "answer_with_fallback", fake_answer)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-docs").click().run(timeout=120)
     at.session_state.pending_attachments = [
         {"upload_id": first.id, "kind": "pdf", "name": "a.pdf", "path": "a.pdf"},
@@ -619,11 +619,11 @@ def test_E_generate(apptest_env, monkeypatch):
     bid = UserStore("gen-smoke").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     at.button(key=f"research-generate-{bid}").click().run(timeout=120)
     assert len(FileStore("gen-smoke").list_outputs()) == 1
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)
 
@@ -642,7 +642,7 @@ def test_F_regenerate(apptest_env, monkeypatch):
     at.run(timeout=60)
     oid = FileStore("regen-smoke").list_outputs()[0].id
     old_bytes = FileStore("regen-smoke").read_output(oid)
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.button(key=f"regen-side-{oid}").click().run(timeout=120)
     assert len(FileStore("regen-smoke").list_outputs()) == 2
     assert FileStore("regen-smoke").read_output(oid) == old_bytes
@@ -655,7 +655,7 @@ def test_G_project_isolation(apptest_env, monkeypatch):
     ba = s.create_brief("in A?", [dict(SRC)], "e", pa)["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.session_state.active_project_id = pa
     at.run(timeout=60)
     assert f"research-open-{ba}" in _buttons(at)
@@ -669,13 +669,13 @@ def test_H_user_switch(apptest_env, monkeypatch):
     UserStore("alice-smoke").create_brief("alice secret?", [dict(SRC)], "shh")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.run(timeout=60)
     alice_bid = UserStore("alice-smoke").list_briefs()[0]["id"]
     assert f"research-open-{alice_bid}" in _buttons(at)
     _use_user(monkeypatch, "bob-smoke")
     at.run(timeout=120)
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     assert f"research-open-{alice_bid}" not in _buttons(at)
     assert "alice secret?" not in _md(at)
     assert "No saved research briefs yet." in _md(at)
@@ -688,7 +688,7 @@ def test_I_quota_failure(apptest_env, monkeypatch):
     bid = UserStore("quota-smoke").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     at.button(key=f"research-generate-{bid}").click().run(timeout=120)
     assert len(FileStore("quota-smoke").list_outputs()) == 1
@@ -706,7 +706,7 @@ def test_J_legacy(apptest_env, monkeypatch):
     oid = FileStore("legacy-smoke").list_outputs()[0].id
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     assert f"regen-side-{oid}" not in _buttons(at)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)

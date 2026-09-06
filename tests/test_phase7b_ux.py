@@ -450,7 +450,7 @@ def test_A_entry(apptest_env, monkeypatch):
     _use_user(monkeypatch, "x7a")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     keys = _buttons(at)
     assert keys.get("workflow-select-research") == "Research"
     assert keys.get("workflow-select-docs") == "Document Analysis"
@@ -461,7 +461,7 @@ def test_B_research_happy(apptest_env, monkeypatch):
     _use_user(monkeypatch, "x7b")
     _stub_agent(monkeypatch, tools_used=["web_search"], sources=[dict(SRC)])
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     assert at.button(key="workflow-select-research").disabled is True
     assert "What would you like to research?" in _all_text(at)
@@ -480,7 +480,7 @@ def test_C_research_completion(apptest_env, monkeypatch):
     _use_user(monkeypatch, "x7c")
     _stub_agent(monkeypatch, tools_used=["web_search"], sources=[dict(SRC)])
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     at.text_input(key="workflow-research-question").set_value("mars news?").run(timeout=60)
     at.button(key="workflow-research-run").click().run(timeout=180)
@@ -489,10 +489,10 @@ def test_C_research_completion(apptest_env, monkeypatch):
     at.button(key="save-brief-1").click().run(timeout=120)
     assert len(UserStore("x7c").list_briefs()) == 1
     bid = UserStore("x7c").list_briefs()[0]["id"]
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.run(timeout=60)
     assert "Research complete" in _all_text(at)
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     at.button(key=f"research-generate-{bid}").click().run(timeout=120)
     assert len(FileStore("x7c").list_outputs()) == 1
@@ -512,7 +512,7 @@ def test_D_doc_analysis(apptest_env, monkeypatch):
         return {"output": "analysis done", "active_tier": "T", "task_type": "simple"}
     monkeypatch.setattr(agent, "answer_with_fallback", fake_answer)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-docs").click().run(timeout=120)
     assert "No files attached" in _all_text(at)
     at.session_state.pending_attachments = [
@@ -544,7 +544,7 @@ def test_E_doc_completion(apptest_env, monkeypatch):
         return {"output": "here is your document", "active_tier": "T", "task_type": "simple"}
     monkeypatch.setattr(agent, "answer_with_fallback", fake_answer)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-docs").click().run(timeout=120)
     seeded = FileStore("x7e").save_upload(PDF_BYTES, "a.pdf")
     at.session_state.pending_attachments = [
@@ -552,7 +552,7 @@ def test_E_doc_completion(apptest_env, monkeypatch):
     at.run(timeout=60)
     at.button(key="workflow-docs-summarize").click().run(timeout=180)
     assert len(made) == 1 and len(FileStore("x7e").list_outputs()) == 1
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)
 
@@ -564,7 +564,7 @@ def test_F_quota_ux(apptest_env, monkeypatch):
     bid = UserStore("x7f").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key="research-open-" + bid).click().run(timeout=120)
     at.button(key="research-generate-" + bid).click().run(timeout=120)
     assert len(FileStore("x7f").list_outputs()) == 1
@@ -584,7 +584,7 @@ def test_G_project_switching(apptest_env, monkeypatch):
     s.create_brief("in A?", [dict(SRC)], "secret-A", pa)
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     at.session_state.active_project_id = pa
     at.run(timeout=60)
@@ -602,7 +602,7 @@ def test_H_continue_in_chat(apptest_env, monkeypatch):
     at.session_state.pending_attachments = [{"upload_id": "a" * 16, "kind": "pdf", "name": "a.pdf"}]
     at.session_state.current_project_id = "b" * 16
     at.run(timeout=60)
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     assert at.session_state["selected_workflow"] == "research"
     at.button(key="workflow-exit").click().run(timeout=120)

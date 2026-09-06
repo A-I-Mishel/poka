@@ -91,7 +91,7 @@ def _all_text(at):
 
 def _open_memory(at):
     """Navigate to the Memory workspace view (7F location)."""
-    at.button(key="nav-memory").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-memory").click().run(timeout=120)
     assert not at.exception
     return at
 

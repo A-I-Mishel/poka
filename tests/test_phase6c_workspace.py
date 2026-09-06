@@ -477,7 +477,7 @@ def test_A_list_renders(apptest_env, monkeypatch):
     UserStore("c6-A").create_brief("mars news?", [dict(SRC)], "summary")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.run(timeout=60)
     bid = UserStore("c6-A").list_briefs()[0]["id"]
     assert f"research-open-{bid}" in _buttons(at)
@@ -490,7 +490,7 @@ def test_B_open_brief(apptest_env, monkeypatch):
     bid = UserStore("c6-B").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     assert not at.exception
     body = _md(at)
@@ -507,7 +507,7 @@ def test_C_generate_one(apptest_env, monkeypatch):
     bid = UserStore("c6-C").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     at.button(key=f"research-generate-{bid}").click().run(timeout=120)
     assert not at.exception
@@ -528,7 +528,7 @@ def test_D_regenerate_two_intact(apptest_env, monkeypatch):
     at.run(timeout=60)
     oid = FileStore("c6-D").list_outputs()[0].id
     old_bytes = FileStore("c6-D").read_output(oid)
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.button(key=f"regen-side-{oid}").click().run(timeout=120)
     assert not at.exception
     outs = FileStore("c6-D").list_outputs()
@@ -542,7 +542,7 @@ def test_E_legacy_download_only(apptest_env, monkeypatch):
     oid = FileStore("c6-E").list_outputs()[0].id
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     assert f"regen-side-{oid}" not in _buttons(at)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)
@@ -555,7 +555,7 @@ def test_F_project_isolation(apptest_env, monkeypatch):
     ba = s.create_brief("in A?", [dict(SRC)], "e", pa)["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.session_state.active_project_id = pa
     at.run(timeout=60)
     assert f"research-open-{ba}" in _buttons(at)
@@ -571,7 +571,7 @@ def test_G_personal_isolation(apptest_env, monkeypatch):
     bp = s.create_brief("personal?", [dict(SRC)], "e")["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.run(timeout=60)
     assert f"research-open-{bp}" in _buttons(at)
     at.session_state.active_project_id = pa

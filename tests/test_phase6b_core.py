@@ -578,7 +578,7 @@ def test_b_open_brief_sources_visible(apptest_env, monkeypatch):
     bid = UserStore("appt-b").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.run(timeout=60)
     assert f"research-open-{bid}" in _buttons(at)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
@@ -595,7 +595,7 @@ def test_c_brief_generate_docx_appears(apptest_env, monkeypatch):
     bid = UserStore("appt-c").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     assert not at.exception
     assert f"research-generate-{bid}" in _buttons(at)
@@ -603,7 +603,7 @@ def test_c_brief_generate_docx_appears(apptest_env, monkeypatch):
     assert not at.exception
     outs = FileStore("appt-c").list_outputs()
     assert len(outs) == 1 and outs[0].kind == "docx"
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     assert "Artifacts" in _md(at)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)
@@ -628,7 +628,7 @@ def test_d_regenerate_new_preserves_original(apptest_env, monkeypatch):
     assert len(outs) == 1
     oid = outs[0].id
     old_bytes = FileStore("appt-d").read_output(oid)
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert f"regen-side-{oid}" in _buttons(at)
     at.button(key=f"regen-side-{oid}").click().run(timeout=120)
     assert not at.exception
@@ -644,7 +644,7 @@ def test_e_legacy_no_regenerate(apptest_env, monkeypatch):
     oid = FileStore("appt-e").list_outputs()[0].id
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.run(timeout=60)
     assert not at.exception
     assert "Old.docx" in _md(at)
@@ -660,7 +660,7 @@ def test_f_project_a_absent_from_b(apptest_env, monkeypatch):
     ba = store.create_brief("in A?", [_src()], "excerpt A", pa)["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.session_state.active_project_id = pa
     at.run(timeout=60)
     assert f"research-open-{ba}" in _buttons(at)
@@ -677,7 +677,7 @@ def test_g_personal_absent_from_project(apptest_env, monkeypatch):
     bp = store.create_brief("personal q?", [_src()], "personal excerpt")["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.run(timeout=60)
     assert f"research-open-{bp}" in _buttons(at)
     at.session_state.active_project_id = pa

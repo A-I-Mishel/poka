@@ -481,7 +481,7 @@ def test_A_selection(apptest_env, monkeypatch):
     _use_user(monkeypatch, "w7a")
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     keys = _buttons(at)
     assert keys.get("workflow-select-research") == "Research"
     assert keys.get("workflow-select-docs") == "Document Analysis"
@@ -491,7 +491,7 @@ def test_B_research_workflow(apptest_env, monkeypatch):
     _use_user(monkeypatch, "w7b")
     _stub_agent(monkeypatch, tools_used=["web_search"], sources=[dict(SRC)])
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     assert not at.exception
     at.text_input(key="workflow-research-question").set_value("mars news?").run(timeout=60)
@@ -510,7 +510,7 @@ def test_C_brief_to_document(apptest_env, monkeypatch):
     _use_user(monkeypatch, "w7c")
     _stub_agent(monkeypatch, tools_used=["web_search"], sources=[dict(SRC)])
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     at.text_input(key="workflow-research-question").set_value("mars news?").run(timeout=60)
     at.button(key="workflow-research-run").click().run(timeout=180)
@@ -520,11 +520,11 @@ def test_C_brief_to_document(apptest_env, monkeypatch):
     at.button(key="save-brief-1").click().run(timeout=120)
     assert len(UserStore("w7c").list_briefs()) == 1
     bid = UserStore("w7c").list_briefs()[0]["id"]
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     at.button(key=f"research-generate-{bid}").click().run(timeout=120)
     assert len(FileStore("w7c").list_outputs()) == 1
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert any(str(b.key).startswith("side-dl-") for b in at.download_button)
 
 
@@ -543,7 +543,7 @@ def test_D_doc_analysis(apptest_env, monkeypatch):
         return {"output": "analysis done", "active_tier": "T", "task_type": "simple"}
     monkeypatch.setattr(agent, "answer_with_fallback", fake_answer)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-docs").click().run(timeout=120)
     # Stage two files via recent picker path (same representation as chat).
     at.session_state.pending_attachments = [
@@ -578,7 +578,7 @@ def test_E_doc_to_document(apptest_env, monkeypatch):
         return {"output": "here is your document", "active_tier": "T", "task_type": "simple"}
     monkeypatch.setattr(agent, "answer_with_fallback", fake_answer)
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-docs").click().run(timeout=120)
     seeded = FileStore("w7e").save_upload(PDF_BYTES, "a.pdf")
     at.session_state.pending_attachments = [
@@ -598,7 +598,7 @@ def test_F_project_isolation(apptest_env, monkeypatch):
     UserStore("w7f").create_project("ProjB")
     at.session_state.active_project_id = pid_a
     at.run(timeout=60)
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     at.text_input(key="workflow-research-question").set_value("proj A q?").run(timeout=60)
     at.button(key="workflow-research-run").click().run(timeout=180)
@@ -607,7 +607,7 @@ def test_F_project_isolation(apptest_env, monkeypatch):
     at.button(key="save-brief-1").click().run(timeout=120)
     briefs_a = UserStore("w7f").list_briefs(pid_a)
     assert len(briefs_a) == 1
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.session_state.active_project_id = UserStore("w7f").list_projects()[1]["id"]
     at.run(timeout=60)
     assert f"research-open-{briefs_a[0]['id']}" not in _buttons(at)
@@ -617,7 +617,7 @@ def test_G_personal_isolation(apptest_env, monkeypatch):
     _use_user(monkeypatch, "w7g")
     _stub_agent(monkeypatch, tools_used=["web_search"], sources=[dict(SRC)])
     at = _run_app()
-    at.button(key="nav-workflows").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-workflows").click().run(timeout=120)
     at.button(key="workflow-select-research").click().run(timeout=120)
     at.text_input(key="workflow-research-question").set_value("personal q?").run(timeout=60)
     at.button(key="workflow-research-run").click().run(timeout=180)
@@ -625,7 +625,7 @@ def test_G_personal_isolation(apptest_env, monkeypatch):
     at.run(timeout=60)
     at.button(key="save-brief-1").click().run(timeout=120)
     bid = UserStore("w7g").list_briefs()[0]["id"]
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     assert "project_id" not in UserStore("w7g").get_brief(bid)
     pid = UserStore("w7g").create_project("ProjA")["id"]
     at.session_state.active_project_id = pid
@@ -640,7 +640,7 @@ def test_H_quota_failure(apptest_env, monkeypatch):
     bid = UserStore("w7h").list_briefs()[0]["id"]
     _stub_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-research").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-research").click().run(timeout=120)
     at.button(key=f"research-open-{bid}").click().run(timeout=120)
     at.button(key=f"research-generate-{bid}").click().run(timeout=120)
     assert len(FileStore("w7h").list_outputs()) == 1

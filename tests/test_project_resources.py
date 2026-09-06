@@ -223,7 +223,7 @@ def test_case_a_shared_pdf_once(res_env, monkeypatch):
     at.run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     files = _section(_md(at), "Files")
     assert files.count(">shared.pdf<") == 1
 
@@ -233,7 +233,7 @@ def test_personal_files_unchanged(res_env, monkeypatch):
     seeded = FileStore("res-personal-files").save_upload(PDF_BYTES, "loose.pdf")
     _stub_app_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     body = _md(at)
     assert "loose.pdf" in body
     assert seeded.id is not None
@@ -255,7 +255,7 @@ def test_case_b_project_artifacts(res_env, monkeypatch):
     at.run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     body = _md(at)
     assert "Brief.docx" in body
     assert any(k == f"side-dl-{meta.id}" for k, _ in
@@ -268,7 +268,7 @@ def test_legacy_unlinked_excluded_from_project(res_env, monkeypatch):
     FileStore("res-legacy").register_output("Old.docx", DOCX_BYTES, "docx")
     _stub_app_agent(monkeypatch)
     at = _run_app()
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     body = _md(at)
     assert "Old.docx" not in body  # no message links it: excluded
@@ -295,7 +295,7 @@ def test_case_c_project_sources(res_env, monkeypatch):
     at.run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-sources").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-sources").click().run(timeout=120)
     body = _md(at)
     assert "Mars News" in body and "example.com" in body
     assert "https://example.com/mars" in body
@@ -325,13 +325,13 @@ def test_case_d_move_updates_views(res_env, monkeypatch):
     ]
     at.run(timeout=60)
     at.button(key=f"project-{pid}").click().run(timeout=120)
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     body = _md(at)
     assert "move.pdf" in _section(body, "Files")
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     body = _md(at)
     assert "Move.docx" in _section(body, "Artifacts")
-    at.button(key="nav-sources").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-sources").click().run(timeout=120)
     body = _md(at)
     assert "s.example" in _section(body, "Sources")
     # Open conversation (Personal) with a fresh file is not yet included.
@@ -346,7 +346,7 @@ def test_case_d_move_updates_views(res_env, monkeypatch):
     assert not at.exception
     # Project still active (its row is disabled); the open file joins.
     assert at.button(key=f"project-{pid}").disabled is True
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert _section(_md(at), "Files").count(">move.pdf<") == 1  # still once
 
 
@@ -364,13 +364,13 @@ def test_case_e_move_out_hides_views(res_env, monkeypatch):
     at.session_state.current_project_id = pid
     at.run(timeout=60)
     at.button(key=f"project-{pid}").click().run(timeout=120)
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert "leave.pdf" in _section(_md(at), "Files")
     at.button(key="back-to-chat").click().run(timeout=120)
     at.button(key="conv-move-open").click().run(timeout=120)
     at.button(key="conv-move-personal").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     files = _section(_md(at), "Files")
     assert "leave.pdf" not in files
     assert "No files in this project yet." in files
@@ -395,7 +395,7 @@ def test_case_f_forged_ids_skipped(res_env, monkeypatch):
     at.run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     body = _md(at)
     assert "alice.pdf" not in body
     assert "No files in this project yet." in body
@@ -416,7 +416,7 @@ def test_case_g_expired_artifact(res_env, monkeypatch):
     at.run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     body = _md(at)
     assert "Gone.pptx" in body and "Expired" in body
     assert not any(str(b.key).startswith("side-dl-" + "0" * 16)
@@ -438,11 +438,11 @@ def test_case_h_project_empty_states(res_env, monkeypatch):
     assert not at.exception
     body = _md(at)
     assert "No conversations in" in body
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert "No files in this project yet." in _md(at)
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert "No generated files in this project yet." in _md(at)
-    at.button(key="nav-sources").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-sources").click().run(timeout=120)
     assert "No web sources in this project yet." in _md(at)
 
 
@@ -465,7 +465,7 @@ def test_archived_members_visible_as_personal(res_env, monkeypatch):
     assert not at.exception
     body = _md(at)
     assert at.button(key="project-personal").disabled is True
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert "a.pdf" in _md(at)  # member falls back to Personal views
 
 
@@ -478,9 +478,9 @@ def test_cross_user_resources_invisible(res_env, monkeypatch):
     body = _md(at)
     assert "alice.pdf" not in body
     assert "Alice.docx" not in body
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert "No uploaded files yet" in _md(at)
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert "No generated files yet." in _md(at)
 
 
@@ -497,7 +497,7 @@ def test_personal_sources_derived(res_env, monkeypatch):
                                     "domain": "p.example"}]}]},
     ]
     at.run(timeout=120)
-    at.button(key="nav-sources").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-sources").click().run(timeout=120)
     assert "p.example" in _md(at)
 
 
@@ -517,7 +517,7 @@ def test_downloads_metadata_vault_intact(res_env, monkeypatch):
     at.run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert any(str(b.key) == f"side-dl-{meta.id}" for b in at.download_button)
     from services import memory as mem_mod
     assert mem_mod.list_memory_facts() == []

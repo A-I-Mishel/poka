@@ -213,11 +213,11 @@ def test_project_empty_states(polish_env, monkeypatch):
     body = _text(at)
     assert "No conversations in" in body
     assert "will belong to it" in body
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert "No files in this project yet." in _text(at)
-    at.button(key="nav-artifacts").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-artifacts").click().run(timeout=120)
     assert "No generated files in this project yet." in _text(at)
-    at.button(key="nav-sources").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-sources").click().run(timeout=120)
     assert "No web sources in this project yet." in _text(at)
     at.button(key="back-to-chat").click().run(timeout=120)
     assert "No project context yet." in _text(at)
@@ -241,7 +241,7 @@ def test_scoped_visibility_smoke(polish_env, monkeypatch):
     at.run(timeout=120)
     at.button(key=f"project-{pid}").click().run(timeout=120)
     assert not at.exception
-    at.button(key="nav-files").click().run(timeout=120)
+    at.button(key="more-toggle").click().run(timeout=120); at.button(key="nav-files").click().run(timeout=120)
     assert "scoped.pdf" in _text(at)
 
 
