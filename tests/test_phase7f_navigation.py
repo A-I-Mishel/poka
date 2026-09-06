@@ -105,9 +105,9 @@ def test_10_single_view_dispatch():
 
 
 def test_11_mode_with_composer():
-    with open(APP_PATH, encoding="utf-8") as fh:
-        app_src = fh.read()
-    assert '"mode-fast"' in app_src and '"mode-deep"' in app_src
+    import ui.composer as composer_mod
+    composer_src = inspect.getsource(composer_mod.render_composer)
+    assert '"composer-mode"' in composer_src
 
 
 def test_12_no_extra_state():
@@ -154,9 +154,9 @@ def test_19_stats_view_intact():
 
 
 def test_20_mode_semantics_intact():
-    with open(APP_PATH, encoding="utf-8") as fh:
-        app_src = fh.read()
-    assert "deep_mode" in app_src
+    import ui.composer as composer_mod
+    composer_src = inspect.getsource(composer_mod.render_composer)
+    assert "deep_mode" in composer_src
 
 
 # ------------------------------------------------------- Workspace behavior

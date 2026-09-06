@@ -409,8 +409,115 @@ COMPOSER_SCRIPT: str = """
             }
         }
     }
+    /* --- Shared clipboard write with execCommand fallback (same
+       behavior as the message Copy button above; factored so the
+       code-block button reuses the exact same path) --- */
+    function pokaCopyText(text, done, fail) {
+        const fallbackCopy = function () {
+            try {
+                const ta = doc.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                doc.body.appendChild(ta);
+                ta.select();
+                doc.execCommand("copy");
+                doc.body.removeChild(ta);
+                done();
+            } catch (err) {
+                fail();
+            }
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done, fallbackCopy);
+        } else {
+            fallbackCopy();
+        }
+    }
+    /* --- Code-block copy buttons ---
+       One small Copy button per <pre> inside chat content. Purely
+       additive (dataset-guarded); blocks without <code> copy pre text. */
+    function armCodeCopy() {
+        const pres = doc.querySelectorAll('div[data-testid="stChatMessageContent"] pre');
+        for (const pre of pres) {
+            if (pre.dataset.pokaCodeCopy) continue;
+            pre.dataset.pokaCodeCopy = "1";
+            const btn = doc.createElement("button");
+            btn.textContent = "Copy";
+            btn.className = "poka-code-copy";
+            btn.type = "button";
+            btn.setAttribute("aria-label", "Copy code block");
+            btn.addEventListener("click", function (ev) {
+                ev.stopPropagation();
+                const code = pre.querySelector("code");
+                const text = ((code ? code.innerText : pre.innerText) || "");
+                const done = function () {
+                    btn.textContent = "Copied";
+                    setTimeout(function () { btn.textContent = "Copy"; }, 1200);
+                };
+                pokaCopyText(text, done, function () { btn.textContent = "Failed"; });
+            });
+            pre.appendChild(btn);
+        }
+    }
+    /* --- Read-aloud buttons (assistant messages only) ---
+       Browser speech synthesis, no backend involved. The whole feature
+       stays hidden when the API is unavailable. One utterance at a
+       time; clicking again stops playback. */
+    function armListenButtons() {
+        let synth = null;
+        try { synth = win.speechSynthesis || null; } catch (err) { synth = null; }
+        if (!synth || typeof win.SpeechSynthesisUtterance === "undefined") return;
+        try { synth.getVoices(); } catch (err) { /* ignore */ }
+        const nodes = doc.querySelectorAll('div[data-testid="stChatMessage"]');
+        for (const node of nodes) {
+            if (node.dataset.pokaListen) continue;
+            const content = node.querySelector('div[data-testid="stChatMessageContent"]');
+            const isAssistant = !!node.querySelector('div[data-testid="stChatMessageAvatarAssistant"]');
+            if (!content || !isAssistant) continue;
+            node.dataset.pokaListen = "1";
+            const btn = doc.createElement("button");
+            btn.textContent = "Listen";
+            btn.className = "poka-copy poka-listen";
+            btn.type = "button";
+            let speaking = false;
+            btn.addEventListener("click", function (ev) {
+                ev.stopPropagation();
+                try {
+                    if (speaking) {
+                        synth.cancel();
+                        speaking = false;
+                        btn.textContent = "Listen";
+                        return;
+                    }
+                    synth.cancel();
+                    const text = content.innerText || content.textContent || "";
+                    const utter = new win.SpeechSynthesisUtterance(text);
+                    utter.onend = function () { speaking = false; btn.textContent = "Listen"; };
+                    utter.onerror = function () { speaking = false; btn.textContent = "Listen"; };
+                    speaking = true;
+                    btn.textContent = "Stop";
+                    synth.speak(utter);
+                } catch (err) {
+                    speaking = false;
+                    btn.textContent = "Failed";
+                    setTimeout(function () { btn.textContent = "Listen"; }, 1200);
+                }
+            });
+            const meta = node.querySelector('.poka-meta');
+            if (meta) {
+                meta.appendChild(btn);
+            } else if (content.nextSibling) {
+                content.parentNode.insertBefore(btn, content.nextSibling);
+            } else {
+                content.parentNode.appendChild(btn);
+            }
+        }
+    }
     armCopyButtons();
-    new MutationObserver(function () { armCopyButtons(); }).observe(doc.body, { childList: true, subtree: true });
+    armCodeCopy();
+    armListenButtons();
+    new MutationObserver(function () { armCopyButtons(); armCodeCopy(); armListenButtons(); }).observe(doc.body, { childList: true, subtree: true });
 })();
 </script>
 """

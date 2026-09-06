@@ -167,8 +167,10 @@ def test_widget_keys_stable():
                 "forget-box", "forget-memory", "export-chat", "clean-files",
                 "research-close", "conv-move-open"):
         assert key in src, key
-    # 7F: Fast/Deep lives with the composer in app.py.
-    assert "mode-fast" in _app_src() and "mode-deep" in _app_src()
+    # 7G: Fast/Deep lives inside the composer bar as one toggle pill.
+    import ui.composer as composer_mod
+    _composer_src = inspect.getsource(composer_mod.render_composer)
+    assert "composer-mode" in _composer_src and "deep_mode" in _composer_src
 
 
 def test_no_new_product_state():

@@ -1,13 +1,12 @@
 # Poka Streamlit theme — official theming layer (visual only).
 #
-# Matches the premium design-system variables in ui/theme.py so native
-# Streamlit controls use the Poka accent instead of the default
-# Streamlit primary color. All detailed styling still lives in
-# ui/theme.py; this only aligns native defaults.
+# Premium dark + accent matching ui/theme.py section 29. Native widgets
+# follow the same deep base so unstyled controls never flash gray.
+# All detailed styling still lives in ui/theme.py.
 
 [theme]
 base = "dark"
-primaryColor = "#7566ff"
-backgroundColor = "#08080c"
-secondaryBackgroundColor = "#0e0e13"
-textColor = "#f4f4f6"
+primaryColor = "#7c6cff"
+backgroundColor = "#131318"
+secondaryBackgroundColor = "#0e0e14"
+textColor = "#ffffff"

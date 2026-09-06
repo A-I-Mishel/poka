@@ -19,7 +19,7 @@ from services.auth import AuthRequired, authenticate, verify_access_token
 from services.context import set_current_user_id
 from services.memory import set_memory_dir
 from services.storage import UserStore
-from ui.chat import _retry_last, render_assistant_response, render_followups, render_history
+from ui.chat import _regenerate_last, _retry_last, render_assistant_response, render_history
 from ui.composer import render_composer
 from ui.components import COMPOSER_SCRIPT
 from ui.sidebar import get_active_project, render_sidebar, render_workspace_view
@@ -194,8 +194,11 @@ if not _workspace_active:
 
     render_history()
 
-    # Contextual follow-ups under the latest assistant reply (if any).
-    render_followups()
+# Live response slot: in-flight turns (new user bubble, Thinking…,
+# assistant reply, errors) render HERE, above the sticky composer.
+# Previously they rendered after the composer in DOM order, so new
+# messages appeared below it until the next interaction reran the page.
+live_slot = st.container(key="live-response")
 
 
 # ============================================================
@@ -206,34 +209,8 @@ render_attachment_chip()
 
 
 # ============================================================
-# MODE (compact Fast/Deep lives with the composer in 7F;
-# same deep_mode state and keys, only placement moved)
-# ============================================================
-
-_mode_is_deep = bool(st.session_state.get("deep_mode", False))
-_mode_a, _mode_b, _mode_rest = st.columns([1, 1, 6], gap="small")
-with _mode_a:
-    if st.button(
-        "Fast",
-        key="mode-fast",
-        help="Fast mode",
-        disabled=not _mode_is_deep,
-    ):
-        st.session_state.deep_mode = False
-        st.rerun()
-with _mode_b:
-    if st.button(
-        "Deep",
-        key="mode-deep",
-        help="Deep mode",
-        disabled=_mode_is_deep,
-    ):
-        st.session_state.deep_mode = True
-        st.rerun()
-
-
-# ============================================================
-# CUSTOM COMPOSER
+# CUSTOM COMPOSER (mode toggle lives inside the bar in 7G;
+# same deep_mode state, only placement moved)
 # ============================================================
 
 plus_clicked, send_clicked = render_composer()
@@ -305,15 +282,24 @@ pending_prompt = st.session_state.pop(
 
 if pending_prompt:
 
-    render_assistant_response(
-        str(pending_prompt)
-    )
+    with live_slot:
+
+        render_assistant_response(
+            str(pending_prompt)
+        )
 
 
 # Retry lives here (after send processing) so a failure in this same run
 # immediately shows both the error above and the Retry button below.
 if st.session_state.pop("do_retry", False):
-    _retry_last()
+    with live_slot:
+        _retry_last()
+
+# Regenerate runs here for the same reason as retry: right after send
+# processing, so a failure immediately shows the error plus Retry below.
+if st.session_state.pop("do_regen", False):
+    with live_slot:
+        _regenerate_last()
 
 if st.session_state.get("last_failed"):
     if st.button("Retry", key="retry-main"):

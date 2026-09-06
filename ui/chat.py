@@ -505,6 +505,18 @@ def render_history() -> None:
             elif meta_html:
                 st.markdown(meta_html, unsafe_allow_html=True)
 
+            if not is_user and idx == len(st.session_state.messages) - 1:
+                # Regenerate offers a fresh answer to the latest exchange
+                # only; the earlier answer is kept, never replaced. Sets a
+                # flag handled by the page flow (same pattern as Retry).
+                if st.button(
+                    "Regenerate",
+                    key=f"regen-msg-{idx}",
+                    help="Generate a new response to the latest message",
+                ):
+                    st.session_state.do_regen = True
+                    st.rerun()
+
 
 # Intentional UI shortcuts (not AI-generated): each fills the existing
 # composer input via the same composer_key mechanism as suggestion cards
@@ -534,27 +546,13 @@ _FOLLOWUPS = (
 
 
 def render_followups() -> None:
-    """Show contextual follow-up shortcuts under the latest assistant reply."""
-    msgs = st.session_state.get("messages", [])
-    if not msgs:
-        return
-    last = msgs[-1]
-    if not isinstance(last, dict) or last.get("role") != "assistant":
-        return
+    """Follow-up shortcuts (retired; kept as a no-op for compatibility).
 
-    with st.container(key="followups"):
-        st.markdown(
-            '<p class="poka-follow-label">Follow up</p>',
-            unsafe_allow_html=True,
-        )
-        cols = st.columns(len(_FOLLOWUPS))
-        for idx, (label, prompt, tip) in enumerate(_FOLLOWUPS):
-            with cols[idx]:
-                if st.button(label, key=f"follow-{idx}", help=tip):
-                    st.session_state[
-                        f"composer_input_{st.session_state.composer_key}"
-                    ] = prompt
-                    st.rerun()
+    Previously rendered Summarize/Simplify/Example/Table shortcut chips
+    under the latest assistant reply. Removed per design request —
+    app.py still calls this, so the name stays valid and does nothing.
+    """
+    return
 
 
 def _attachment_hint(entry: Dict[str, Any], index: int, total: int) -> str:
@@ -781,6 +779,9 @@ def render_assistant_response(
 
             persist()
 
+            # Settle the finished turn into history above the composer.
+            st.rerun()
+
         except Exception as e:
 
             typing_box.empty()
@@ -839,6 +840,106 @@ def _retry_last() -> None:
                 )
             st.session_state.messages.append(retry_msg)
             persist()
+            # Settle the finished turn into history above the composer.
+            st.rerun()
+        except Exception as e:
+            typing_box.empty()
+            st.session_state.last_failed = send_text
+            st.error(f"Request failed: {e}")
+            st.rerun()
+
+
+def _regenerate_last() -> None:
+    """Append a fresh answer to the latest exchange (original kept).
+
+    Rebuilds the request from the persisted user message — raw content
+    plus stored attachment links re-expanded through the same hint
+    builders as a fresh send — then runs the standard agent path with
+    history ending before the previous assistant reply. Never mutates
+    or deletes existing messages; on failure the rebuilt request lands
+    in last_failed so Retry can recover it. No-ops with a toast unless
+    the open conversation ends in user → assistant.
+    """
+    msgs = list(st.session_state.get("messages", []))
+    if (
+        len(msgs) < 2
+        or not isinstance(msgs[-1], dict)
+        or msgs[-1].get("role") != "assistant"
+        or not isinstance(msgs[-2], dict)
+        or msgs[-2].get("role") != "user"
+    ):
+        st.toast("Nothing to regenerate.")
+        return
+    user_msg = msgs[-2]
+    prior = msgs[:-1]
+    send_text: str = str(user_msg.get("content", "") or "")
+    entries = [
+        a for a in (user_msg.get("attachments") or [])
+        if isinstance(a, dict) and a.get("id")
+    ]
+    total = len(entries)
+    if total > 1:
+        send_text += _attachments_overview([
+            {
+                "name": str(a.get("name", "file")),
+                "kind": str(a.get("kind", "image")),
+            }
+            for a in entries
+        ])
+    for position, att in enumerate(entries, start=1):
+        kind: str = str(att.get("kind", ""))
+        upload_id: str = str(att.get("id", ""))
+        disp_name: str = str(att.get("name", "file"))
+        hint_entry = {"kind": kind, "upload_id": upload_id,
+                      "name": disp_name}
+        # Same branch shape as a fresh send (pdf/csv hint-only,
+        # everything else also attempted as an image); retry parity is
+        # intentional — regeneration costs one bounded call either way.
+        send_text += _attachment_hint(hint_entry, position, total)
+    regen_history = build_chat_history(prior[:-1])
+    regen_raw: List[Dict[str, Any]] = [
+        dict(m) for m in prior[:-1] if isinstance(m, dict)
+    ]
+    with st.chat_message("assistant"):
+        st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
+        typing_box = _show_typing()
+        # Same one-shot semantics as retry: the consumed intent is gone,
+        # so record whatever this run actually used.
+        regen_search = bool(st.session_state.get("force_search", False))
+        try:
+            known_ids = _known_output_ids()
+            output: str = run_agent(
+                str(send_text),
+                history=regen_history,
+                raw_messages=regen_raw,
+                project_context=get_active_project_context(),
+            )
+            typing_box.empty()
+            st.markdown(output)
+            regen_metas = _outputs_since(known_ids)
+            regen_msg: Dict[str, Any] = {
+                "role": "assistant",
+                "content": output,
+                "time": utcnow_iso(),
+                **_assistant_meta(regen_search),
+            }
+            if regen_metas:
+                regen_msg["artifacts"] = [
+                    {"id": m.id, "kind": m.kind, "name": m.display_name}
+                    for m in regen_metas
+                ]
+            regen_sources = _sources_section(regen_msg)
+            if regen_sources:
+                st.markdown(regen_sources, unsafe_allow_html=True)
+            for meta in regen_metas:
+                _render_message_artifact(
+                    meta.id, meta.kind, meta.display_name,
+                    f"dl-{meta.id}-{len(st.session_state.messages)}",
+                )
+            st.session_state.messages.append(regen_msg)
+            persist()
+            # Settle the finished turn into history above the composer.
+            st.rerun()
         except Exception as e:
             typing_box.empty()
             st.session_state.last_failed = send_text

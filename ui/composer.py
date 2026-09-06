@@ -10,14 +10,19 @@ import streamlit as st
 
 
 def render_composer() -> Tuple[bool, bool]:
-    """Render the composer row. Returns (plus_clicked, send_clicked)."""
+    """Render the composer row. Returns (plus_clicked, send_clicked).
+
+    The Fast/Deep mode toggle lives here as a single pill button inside
+    the bar (second cell). It flips the shared ``deep_mode`` session flag
+    and reruns; answering still reads that flag via application.session.
+    """
 
     # Keyed container gives the shell a stable wrapper class
     # (st-key-composer) for positioning; widget keys below are unchanged.
     with st.container(key="composer"):
 
-        col_plus, col_input, col_send = st.columns(
-            [0.7, 8.3, 0.8],
+        col_plus, col_mode, col_input, col_send = st.columns(
+            [0.7, 1.5, 7.0, 0.8],
             gap="small",
             vertical_alignment="center",
         )
@@ -35,6 +40,26 @@ def render_composer() -> Tuple[bool, bool]:
                 key="composer_plus",
                 help="Attachments and tools",
             )
+
+
+        # --------------------------------------------------------
+        # MODE TOGGLE (single pill inside the bar)
+        # --------------------------------------------------------
+
+
+        with col_mode:
+
+            _is_deep = bool(st.session_state.get("deep_mode", False))
+
+            if st.button(
+                "Deep" if _is_deep else "Fast",
+                key="composer-mode",
+                help="Switch to Fast mode" if _is_deep else "Switch to Deep mode",
+            ):
+
+                st.session_state.deep_mode = not _is_deep
+
+                st.rerun()
 
 
         # --------------------------------------------------------

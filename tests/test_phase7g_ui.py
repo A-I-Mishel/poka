@@ -442,3 +442,13 @@ def test_J_narrow():
     assert "@media (max-width: 480px)" in theme.THEME_CSS
     assert "@media (max-width: 390px)" in theme.THEME_CSS
     assert "264px" in theme.THEME_CSS
+
+
+def test_K_sidebar_rail_rows():
+    # Section 28: full-width borderless rows across button generations,
+    # section labels clear the rows above (no search/PROJECTS overlap).
+    import ui.theme as theme
+    css = theme.THEME_CSS
+    assert 'stSidebar"] div[data-testid="stButton"] > button' in css
+    assert ".st-key-new-chat button" in css
+    assert "margin: 20px 0 6px" in css
