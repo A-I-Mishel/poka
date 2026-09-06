@@ -1,0 +1,26 @@
+# Render blueprint for the Poka API (long-running backend).
+# The React UI lives on Vercel; this keeps minutes-long agent runs,
+# ~500MB Python deps, and on-disk chats/uploads/memory alive.
+# Dashboard: New > Blueprint > connect repo > fill the empty env vars.
+# After deploy, set VITE_API_URL in Vercel to this service's URL.
+
+services:
+  - type: web
+    name: poka-api
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn backend.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.2
+      - key: OPENCODE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: POKA_FRONTEND_ORIGIN
+        value: https://poka.vercel.app
+      - key: POKA_AUTH_MODE
+        value: open

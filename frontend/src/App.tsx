@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { api, ChatMessage } from "./api";
+import { api, apiUrl, ChatMessage } from "./api";
 import "./theme.css";
 
 /* ---------------- icons (from approved design) ---------------- */
@@ -458,7 +458,7 @@ export default function App() {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       const stored = localStorage.getItem("poka_token") || "";
       if (stored) headers.Authorization = `Bearer ${stored}`;
-      const res = await fetch("/api/chats/truncate", {
+      const res = await fetch(apiUrl("/api/chats/truncate"), {
         method: "POST",
         headers,
         body: JSON.stringify({ index }),
@@ -895,7 +895,7 @@ export default function App() {
                               <img
                                 key={a.id}
                                 className="msg-img"
-                                src={`/api/uploads/${a.id}/file`}
+                                src={apiUrl(`/api/uploads/${a.id}/file`)}
                                 alt={a.name}
                               />
                             ))}
@@ -939,7 +939,7 @@ export default function App() {
                               className="card-icon-btn"
                               style={{ opacity: 1 }}
                               title="Download"
-                              href={`/api/artifacts/${a.id}/download`}
+                              href={apiUrl(`/api/artifacts/${a.id}/download`)}
                               download
                             >
                               {I.down}
@@ -1415,7 +1415,7 @@ function PanelBody(props: {
                 className="card-icon-btn"
                 style={{ opacity: 1 }}
                 title="Download"
-                href={`/api/uploads/${f.id}/file`}
+                href={apiUrl(`/api/uploads/${f.id}/file`)}
                 download
               >
                 {I.down}
@@ -1445,7 +1445,7 @@ function PanelBody(props: {
                 title={`${a.name} — click to download`}
                 onClick={() => {
                   const link = document.createElement("a");
-                  link.href = `/api/artifacts/${a.id}/download`;
+                  link.href = apiUrl(`/api/artifacts/${a.id}/download`);
                   link.download = a.name;
                   link.click();
                 }}

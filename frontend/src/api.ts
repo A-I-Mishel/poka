@@ -22,13 +22,21 @@ export interface SendResult {
   warnings: string[];
 }
 
+/* API origin. Empty = same origin (local dev via Vite proxy, or
+   single-server mode). Set VITE_API_URL in the hosting dashboard
+   when the UI and API live on different hosts — never hardcoded. */
+export const API_BASE: string =
+  (import.meta.env.VITE_API_URL as string | undefined) || "";
+
+export const apiUrl = (path: string): string => `${API_BASE}${path}`;
+
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("poka_token") || "";
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers || {}) },
   });
@@ -105,7 +113,7 @@ export const api = {
     onToken: (cumulative: string) => void,
     signal?: AbortSignal,
   ): Promise<SendResult> => {
-    const res = await fetch("/api/chat/stream", {
+    const res = await fetch(apiUrl("/api/chat/stream"), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(body),
@@ -137,7 +145,7 @@ export const api = {
 
   upload: async (file: File): Promise<{ id: string; kind: string; name: string }> => {    const form = new FormData();
     form.append("file", file);
-    const res = await fetch("/api/uploads", {
+    const res = await fetch(apiUrl("/api/uploads"), {
       method: "POST",
       headers: { ...authHeaders() },
       body: form,
@@ -149,7 +157,7 @@ export const api = {
   uploads: () => req<{ id: string; kind: string; name: string }[]>("/api/uploads"),
 
   artifacts: () => req<{ id: string; kind: string; name: string }[]>("/api/artifacts"),
-  artifactUrl: (id: string) => `/api/artifacts/${id}/download`,
+  artifactUrl: (id: string) => apiUrl(`/api/artifacts/${id}/download`),
   regenerateArtifact: (id: string) =>
     req<{ id: string; kind: string; name: string }>(`/api/artifacts/${id}/regenerate`, {
       method: "POST",
