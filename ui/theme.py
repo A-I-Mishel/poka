@@ -15,25 +15,25 @@ THEME_CSS: str = """
    ============================================================ */
 :root {
     /* Surfaces */
-    --bg-0: #09090D;
-    --bg-1: #0F0F14;
-    --bg-2: #16161D;
-    --bg-3: #1E1E27;
+    --bg-0: #09090d;
+    --bg-1: #0d0d12;
+    --bg-2: #15151c;
+    --bg-3: #1e1e27;
 
     /* Borders */
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.14);
+    --border: #292933;
+    --border-strong: #3d3d48;
 
     /* Text */
-    --text-1: #F4F4F5;
-    --text-2: #A1A1AA;
-    --text-3: #71717A;
+    --text-1: #f2f2f5;
+    --text-2: #a1a1aa;
+    --text-3: #71717a;
 
     /* Accent — restrained use only (active, primary, focus, selected) */
-    --accent: #6E6DF2;
-    --accent-hover: #7D7CF5;
-    --accent-pressed: #5B5AE0;
-    --accent-wash: rgba(110, 109, 242, 0.12);
+    --accent: #7566ff;
+    --accent-hover: #8474ff;
+    --accent-pressed: #6354e6;
+    --accent-wash: rgba(117, 102, 255, 0.12);
 
     /* Status */
     --success: #10B981;
@@ -90,7 +90,7 @@ THEME_CSS: str = """
 
 section[data-testid="stMain"] .block-container,
 div[data-testid="stMainBlockContainer"] {
-    max-width: 48rem;
+    max-width: 650px;
     /* In-flow clearance for the sticky composer (compact, not a hack). */
     padding-bottom: 24px !important;
 }
@@ -131,7 +131,7 @@ footer {
     border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(110, 109, 242, 0.45);
+    background: rgba(117, 102, 255, 0.45);
 }
 
 
@@ -635,7 +635,7 @@ div[data-testid="stChatMessage"]:has(
     border: 1px solid var(--border);
     box-shadow: none;
     margin-left: auto;
-    max-width: 70%;
+    max-width: 420px;
     animation: poka-fade var(--dur) var(--ease);
     font-size: var(--fs-15);
     line-height: 1.65;
@@ -696,7 +696,7 @@ mark.search-hit {
 section[data-testid="stSidebar"] {
     background: var(--bg-1) !important;
     border-right: 1px solid var(--border);
-    width: 280px;
+    width: 230px;
 }
 
 section[data-testid="stSidebar"] .block-container {
@@ -1014,7 +1014,7 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
 .st-key-composer {
     position: sticky !important;
     bottom: 16px !important;
-    width: min(768px, calc(100% - 32px)) !important;
+    width: min(575px, calc(100% - 32px)) !important;
     margin-left: auto !important;
     margin-right: auto !important;
     margin-top: 8px !important;
@@ -1022,7 +1022,7 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
     background-color: var(--bg-1) !important;
     border: 1px solid var(--border) !important;
     border-radius: 22px !important;
-    padding: var(--sp-8) 10px !important;
+    padding: 6px 10px !important;
     box-sizing: border-box !important;
     z-index: 50 !important;
     box-shadow: var(--shadow-composer) !important;
@@ -1098,10 +1098,10 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
     font-size: var(--fs-15) !important;
     font-weight: 400 !important;
     line-height: 1.4 !important;
-    padding: 11px 8px !important;
+    padding: 8px !important;
     margin: 0 !important;
-    min-height: 42px !important;
-    height: 42px !important;
+    min-height: 34px !important;
+    height: 34px !important;
     caret-color: var(--accent-hover) !important;
 }
 .st-key-composer [data-testid="stTextInput"] input::placeholder {
@@ -1119,13 +1119,13 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
     outline: none !important;
 }
 
-/* Composer buttons — 36px circular icon buttons.
+/* Composer buttons — 32px circular icon buttons.
    Labels ("+"/"↑") stay in Python for keys/a11y; visuals are SVG icons. */
 .st-key-composer button {
-    width: 36px !important;
-    height: 36px !important;
-    min-width: 36px !important;
-    max-width: 36px !important;
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    max-width: 32px !important;
     padding: 0 !important;
     margin: 0 !important;
     border-radius: var(--r-pill) !important;
@@ -1226,7 +1226,7 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
     top: anchor(top) !important;
     bottom: auto !important;
     translate: 0 calc(-100% - 8px) !important;
-    width: 280px !important;
+    width: 230px !important;
     max-width: calc(100vw - 32px) !important;
     max-height: calc(100vh - 200px) !important;
     overflow-y: auto !important;
@@ -1277,13 +1277,26 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
     background-size: contain !important;
 }
 .st-key-menu-files button::before {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23A1A1AA' stroke-width='1.4'%3E%3Cpath d='M3 1.5h4.5L11 5v9.5H3z'/%3E%3Cpath d='M7.5 1.5V5H11'/%3E%3Cpath d='M7 8.5v3M5.5 10h3' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23A1A1AA' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 11V3M4.5 6.5L8 3l3.5 3.5'/%3E%3Cpath d='M2.5 11.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2'/%3E%3C/svg%3E") !important;
 }
 .st-key-menu-camera button::before {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23A1A1AA' stroke-width='1.4'%3E%3Crect x='1.5' y='4' width='13' height='9' rx='2'/%3E%3Ccircle cx='8' cy='8.5' r='2.5'/%3E%3Cpath d='M5.5 4l1-1.5h3l1 1.5'/%3E%3C/svg%3E") !important;
 }
 .st-key-menu-search button::before {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23A1A1AA' stroke-width='1.4'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M2 8h12M8 2c-3.5 3.5-3.5 8.5 0 12M8 2c3.5 3.5 3.5 8.5 0 12'/%3E%3C/svg%3E") !important;
+}
+
+/* Popover header + upload limits subtext */
+.poka-menu-head {
+    color: var(--text-1);
+    font-size: var(--fs-13);
+    font-weight: 600;
+    margin: 4px 4px 2px;
+}
+.poka-menu-sub {
+    color: var(--text-3);
+    font-size: var(--fs-12);
+    margin: 2px 4px 4px 38px;
 }
 
 /* Pickers live inside the menu card — compact, never overflowing */
@@ -1303,7 +1316,7 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    width: min(768px, 100%);
+    width: min(575px, 100%);
     margin: 0 auto 8px;
 }
 .poka-chip {
@@ -1371,7 +1384,7 @@ section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] > button {
     align-items: center;
     gap: 7px;
     background: var(--accent-wash);
-    border: 1px solid rgba(110, 109, 242, 0.3);
+    border: 1px solid rgba(117, 102, 255, 0.3);
     color: var(--text-2);
     font-size: var(--fs-12);
     border-radius: var(--r-pill);
@@ -1427,7 +1440,7 @@ div[data-testid="stCameraInput"] {
    ============================================================ */
 .poka-home {
     text-align: center;
-    max-width: 768px;
+    max-width: 600px;
     margin: 0 auto;
     padding: 28px 24px 0;
 }
@@ -1462,6 +1475,11 @@ div[data-testid="stCameraInput"] {
     max-width: 560px;
 }
 
+/* Suggestion grid — capped to the home column width */
+.st-key-home {
+    max-width: 600px;
+    margin: 0 auto;
+}
 /* Suggestion cards — lightweight bordered cards, native buttons inside */
 .st-key-home div[data-testid="stVerticalBlockBorderWrapper"] {
     background: var(--bg-2);
@@ -1528,17 +1546,17 @@ div[data-testid="stCameraInput"] {
 @media (max-width: 1100px) {
     section[data-testid="stMain"] .block-container,
     div[data-testid="stMainBlockContainer"] {
-        max-width: 44rem;
+        max-width: 620px;
     }
     .st-key-composer {
-        width: min(760px, calc(100% - 32px)) !important;
+        width: min(575px, calc(100% - 32px)) !important;
     }
 }
 
 /* Tablet */
 @media (max-width: 900px) {
     section[data-testid="stSidebar"] {
-        width: 260px;
+        width: 220px;
     }
     div[data-testid="stChatMessage"]:has(
         div[data-testid="stChatMessageAvatarUser"]
@@ -1557,26 +1575,26 @@ div[data-testid="stCameraInput"] {
     .st-key-composer {
         width: calc(100% - 24px) !important;
         bottom: 12px !important;
-        padding: 7px 8px !important;
+        padding: 6px 8px !important;
         border-radius: 18px !important;
     }
     .st-key-composer [data-testid="stHorizontalBlock"] {
         gap: 4px !important;
     }
     .st-key-composer button {
-        width: 36px !important;
-        height: 36px !important;
-        min-width: 36px !important;
-        max-width: 36px !important;
+        width: 32px !important;
+        height: 32px !important;
+        min-width: 32px !important;
+        max-width: 32px !important;
     }
     .st-key-composer [data-testid="stTextInput"] input {
         font-size: var(--fs-14) !important;
-        min-height: 38px !important;
-        height: 38px !important;
-        padding: 9px 6px !important;
+        min-height: 34px !important;
+        height: 34px !important;
+        padding: 8px 6px !important;
     }
     .st-key-attachment-menu {
-        width: 280px !important;
+        width: 230px !important;
         max-width: calc(100vw - 32px) !important;
     }
     div[data-testid="stChatMessage"]:has(

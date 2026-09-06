@@ -7,7 +7,7 @@
 
 [theme]
 base = "dark"
-primaryColor = "#6E6DF2"
-backgroundColor = "#09090D"
-secondaryBackgroundColor = "#0F0F14"
-textColor = "#F4F4F5"
+primaryColor = "#7566ff"
+backgroundColor = "#09090d"
+secondaryBackgroundColor = "#0d0d12"
+textColor = "#f2f2f5"

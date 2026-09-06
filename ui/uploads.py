@@ -127,8 +127,13 @@ def render_attachment_menu() -> None:
         # (st-key-attachment-menu) for anchoring; widget keys unchanged.
         with st.container(key="attachment-menu"):
 
+            st.markdown(
+                '<p class="poka-menu-head">Add files or photos</p>',
+                unsafe_allow_html=True,
+            )
+
             if st.button(
-                "Add files or photos",
+                "Upload",
                 key="menu-files",
             ):
 
@@ -140,6 +145,13 @@ def render_attachment_menu() -> None:
                 )
 
                 st.rerun()
+
+            st.markdown(
+                '<p class="poka-menu-sub">'
+                "200MB per file \u2022 PDF, CSV, PNG, JPG"
+                "</p>",
+                unsafe_allow_html=True,
+            )
 
 
             if st.session_state.attach_menu == "files":
