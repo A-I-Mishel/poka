@@ -120,6 +120,32 @@ def test_upload_roundtrip(client, stub_agent):
     assert send.status_code == 200
 
 
+def test_upload_sniffs_missing_extension(client):
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("report", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert up.status_code == 200, up.text
+    assert up.json()["kind"] == "pdf"
+
+
+def test_upload_sniffs_wrong_extension(client):
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("photo.txt", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert up.status_code == 200, up.text
+    assert up.json()["kind"] == "pdf"
+
+
+def test_upload_rejects_unknown_bytes(client):
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("blob", io.BytesIO(b"\x00\x01\x02not-a-doc"), "application/pdf")},
+    )
+    assert up.status_code == 400
+
+
 def test_chats_new_archives(client, stub_agent):
     client.post("/api/chat/send", json={"content": "first topic"})
     res = client.post("/api/chats/new", json={})

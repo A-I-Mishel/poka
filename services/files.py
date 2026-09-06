@@ -102,6 +102,22 @@ def kind_for_ext(ext: str) -> str:
     return "image"
 
 
+def _sniff_ext(head: bytes) -> Optional[str]:
+    """Detect a type from magic bytes when the filename has none/wrong one.
+
+    Same signatures the validator already enforces below, so a
+    sniffed type always passes the subsequent content check.
+    Returns None when the bytes match no allowed type.
+    """
+    if head.lstrip().startswith(b"%PDF"):
+        return "pdf"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    return None
+
+
 def _atomic_write_bytes(dest: Path, data: bytes) -> None:
     """Write bytes atomically: unique tmp in the same dir, fsync, replace.
 
@@ -224,6 +240,10 @@ class FileStore:
             raise FileValidationError(f"File too large. Maximum is {limit_mb} MB.")
         safe = sanitize_filename(filename)
         ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
+        if ext not in ALLOWED_UPLOAD_EXTS:
+            # Missing or wrong extension (e.g. extensionless downloads):
+            # fall back to magic bytes before rejecting.
+            ext = _sniff_ext(bytes(data[:16])) or ""
         if ext not in ALLOWED_UPLOAD_EXTS:
             allowed = ", ".join(sorted(ALLOWED_UPLOAD_EXTS))
             raise FileValidationError(f"Unsupported file type. Allowed: {allowed}.")
