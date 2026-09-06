@@ -1,3 +1,13 @@
+---
+title: Poka
+emoji: 🐞
+colorFrom: purple
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Poka — Smart Task Agent
 
 Poka is a multi-purpose AI assistant (Streamlit web app) for students and

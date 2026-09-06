@@ -1,0 +1,14 @@
+.git/
+__pycache__/
+.pytest_cache/
+.env
+data/
+memory/
+frontend/node_modules/
+frontend/dist/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+uploaded_*
+camera_*
