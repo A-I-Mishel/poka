@@ -715,6 +715,12 @@ button { font-family: inherit; }
 /* ADD: hamburger (drawer toggle) — desktop never shows it. */
 .hamburger { display: none; }
 
+/* ADD: medium screens/tablets — slimmer sidebar keeps content roomy. */
+@media (max-width: 1100px) and (min-width: 761px) {
+  .sidebar { width: 232px; min-width: 232px; }
+  .chat-col { padding: 24px 20px 14px; }
+}
+
 /* ADD: small-screen drawer. The sidebar becomes an overlay panel
    opened via the hamburger; backdrop click or Esc closes it. */
 @media (max-width: 760px) {
@@ -722,6 +728,8 @@ button { font-family: inherit; }
     display: flex;
     position: fixed;
     left: 0; top: 0; bottom: 0;
+    width: min(300px, 84vw);
+    min-width: 0;
     z-index: 60;
     box-shadow: 12px 0 32px rgba(0, 0, 0, .5);
     animation: chip-in .18s ease-out;
@@ -736,5 +744,23 @@ button { font-family: inherit; }
   .chat-col { padding: 20px 14px 12px; }
   .composer-wrap { padding: 8px 12px 12px; }
   .topbar { padding: 10px 14px; }
+  .topbar-left { min-width: 0; flex: 1; }
+  .chat-title {
+    min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .model-pill { font-size: 11.5px; padding: 5px 10px; flex-shrink: 0; }
   .bubble table { display: block; overflow-x: auto; width: max-content; max-width: 100%; }
+  /* 16px+ inputs stop iOS Safari auto-zooming on focus. */
+  .composer textarea { font-size: 16px; }
+  .search { font-size: 16px; }
+  .empty-state { padding-top: 8vh; }
+}
+
+/* ADD: short viewports (landscape phones, split windows). */
+@media (max-height: 600px) {
+  .empty-state { padding-top: 6vh; }
+  .empty-state .empty-icon { width: 42px; height: 42px; margin-bottom: 10px; }
+  .logo { padding-bottom: 8px; }
+  .section-label { padding-top: 12px; }
 }
