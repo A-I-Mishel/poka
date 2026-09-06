@@ -628,6 +628,159 @@ def test_fallback_attempts_consume_llm_budget():
     assert calls["n"] == 3
 
 
+def _drop_tier_state(*names):
+    for name in names:
+        agent._TIER_FAILS.pop(name, None)
+        agent._TIER_SKIP_UNTIL.pop(name, None)
+
+
+def test_midloop_failover_keeps_tool_results():
+    import agent as agent_mod
+
+    class DeadLLM:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            raise ConnectionError("tier died mid-task")
+
+    class GoodLLM:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            class R:
+                content = "final answer"
+                tool_calls = []
+
+            return R()
+
+    calls = {"n": 0}
+
+    def provider():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ("zz-dead-1", DeadLLM())
+        return ("zz-good-1", GoodLLM())
+
+    trace: list = []
+    try:
+        out = agent_mod.run_tool_loop(
+            GoodLLM(), "hello", [], llm_provider=provider, tier_trace=trace)
+        assert out == "final answer"
+        # Same round retried on the next tier; only the winner is traced.
+        assert trace == ["zz-good-1"]
+        assert "zz-dead-1" in agent_mod._TIER_FAILS
+    finally:
+        _drop_tier_state("zz-dead-1", "zz-good-1")
+
+
+def test_loop_exhaustion_raises_when_nothing_produced():
+    import agent as agent_mod
+    from types import SimpleNamespace
+
+    def no_tiers():
+        raise RuntimeError("All LLM tiers failed at runtime.")
+
+    dummy = SimpleNamespace(bind_tools=lambda _tools: dummy)
+    with pytest.raises(RuntimeError, match="All LLM tiers failed"):
+        agent_mod.run_tool_loop(dummy, "hello", [], llm_provider=no_tiers)
+
+
+def test_salvage_partial_on_synthesis_failure():
+    import agent as agent_mod
+    from services.limits import MAX_EXTERNAL_TOKENS
+
+    calls = {"n": 0}
+
+    class FlakyLLM:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise ConnectionError("synthesis tier died")
+
+            class R:
+                content = "draft answer"
+                tool_calls = [{"name": "no-such-tool", "args": {}}]
+
+            return R()
+
+    budget = agent_mod.RequestBudget()
+    budget.external_tokens = MAX_EXTERNAL_TOKENS + 1
+    out = agent_mod.run_tool_loop(FlakyLLM(), "do work", [], budget=budget)
+    assert "draft answer" in out
+    assert "partial" in out.lower()
+
+
+def test_budget_exhaustion_is_not_a_tier_failure():
+    import agent as agent_mod
+
+    class AlwaysTool:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            class R:
+                content = "thinking"
+                tool_calls = [{"name": "no-such-tool", "args": {}}]
+
+            return R()
+
+    provider_calls = {"n": 0}
+
+    def provider():
+        provider_calls["n"] += 1
+        return ("zz-budget-1", AlwaysTool())
+
+    budget = agent_mod.RequestBudget(max_llm=1)
+    try:
+        with pytest.raises(agent_mod.BudgetExhausted):
+            agent_mod.run_tool_loop(
+                AlwaysTool(), "hi", [], budget=budget,
+                llm_provider=provider, tier_trace=[])
+        # Our own budget never cools a tier and never retries elsewhere.
+        assert "zz-budget-1" not in agent_mod._TIER_FAILS
+        assert provider_calls["n"] == 2
+    finally:
+        _drop_tier_state("zz-budget-1")
+
+
+def test_answer_reports_failover_tier(tmp_path, monkeypatch):
+    import agent as agent_mod
+
+    monkeypatch.setenv("POKA_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("POKA_USER_ID", "failover-user")
+
+    class DeadLLM:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            raise ConnectionError("tier died mid-task")
+
+    class GoodLLM:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            class R:
+                content = "recovered!"
+
+            return R()
+
+    tiers = [("zz-dead-2", DeadLLM), ("zz-good-2", GoodLLM)]
+    try:
+        out = agent_mod.answer_with_fallback(
+            "latest news on mars", tiers=tiers, raw_messages=[])
+        assert out["output"] == "recovered!"
+        assert out["active_tier"] == "zz-good-2"
+    finally:
+        _drop_tier_state("zz-dead-2", "zz-good-2")
+
+
 def test_tool_failure_still_counts_tool_budget():
     import agent as agent_mod
 

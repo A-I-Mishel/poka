@@ -10,7 +10,7 @@ run_tool_loop keeps history clean for Gemini 3.x (no functionCall
 blocks ever go back): tool results return inside fresh human messages.
 """
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -30,6 +30,11 @@ from tools import web_search, create_pptx, build_presentation, create_docx, buil
 from tools.search_tool import extract_cited_sources
 
 from agent.budget import BudgetExhausted, RequestBudget
+from agent.cascade import (
+    _record_tier_failure,
+    _record_tier_success,
+    classify_provider_error,
+)
 from agent.executor import _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
@@ -108,6 +113,21 @@ def _execute_tool_call(tool_call: Any, budget: Optional[RequestBudget] = None) -
         return f"STATUS=FAILED tool={name}: {str(e)[:300]}"
 
 
+def _note_tier_failure(tier_name: Any, error: Any) -> None:
+    """Cool a tier down after it fails mid-task (never raises).
+
+    Unknown/empty names are ignored. Classification decides the
+    cool-down length; our own budget exhaustion is never recorded
+    here (callers re-raise it before reaching this helper).
+    """
+    if not isinstance(tier_name, str) or not tier_name:
+        return
+    try:
+        _record_tier_failure(tier_name, classify_provider_error(error)[1])
+    except Exception:
+        pass
+
+
 def run_tool_loop(
     llm_instance: BaseLanguageModel,
     user_input: str,
@@ -120,6 +140,8 @@ def run_tool_loop(
     used_tools: Optional[List[str]] = None,
     used_sources: Optional[List[Dict[str, str]]] = None,
     project_context: str = "",
+    llm_provider: Optional[Callable[[], Tuple[str, Any]]] = None,
+    tier_trace: Optional[List[str]] = None,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -139,6 +161,16 @@ def run_tool_loop(
     When used_sources is provided, structured source records parsed from
     EXECUTED web-search output are appended (deduped by URL, capped).
     Nothing is ever inferred from model-generated text.
+
+    When llm_provider is provided, each round pulls a fresh (tier name,
+    model) pair from it instead of reusing llm_instance: a tier that
+    dies mid-task is cooled down and the SAME round retries instantly
+    on the next live tier, keeping already-collected tool results.
+    Without a provider the loop keeps the historical single-tier
+    behavior. Successful tiers are appended to tier_trace when given,
+    so callers can report which tier actually finished the work.
+    BudgetExhausted is never treated as a tier failure and always
+    propagates — it is our limit, not the provider's.
     """
     if budget is None:
         budget = RequestBudget()
@@ -239,12 +271,54 @@ def run_tool_loop(
         )
     messages.append(HumanMessage(content=user_input))
 
-    bound = llm_instance.bind_tools(list(tools))
+    bound_fixed = llm_instance.bind_tools(list(tools))
+    last_text: str = ""
     last_results: List[str] = []
-    for _ in range(max_rounds):
+    last_llm: Any = llm_instance
+    provider_error: Optional[Exception] = None
+    rounds_used = 0
+    while rounds_used < max_rounds:
         budget.check_time()
-        response = agent._invoke_bounded(bound, messages, budget=budget)
+        tier_name: Optional[str] = None
+        bound: Any = bound_fixed
+        if llm_provider is not None:
+            try:
+                tier_name, round_llm = llm_provider()
+            except Exception as e:
+                # No live tier left: finish from partial results below
+                # (or raise when nothing was produced at all).
+                provider_error = e
+                break
+            try:
+                bound = round_llm.bind_tools(list(tools))
+            except BudgetExhausted:
+                raise
+            except Exception as e:
+                _note_tier_failure(tier_name, e)
+                continue
+            last_llm = round_llm
+        try:
+            response = agent._invoke_bounded(bound, messages, budget=budget)
+        except BudgetExhausted:
+            raise
+        except Exception as e:
+            if tier_name is None:
+                raise
+            # Same round retries instantly on the next live tier;
+            # collected tool results are kept, not discarded.
+            _note_tier_failure(tier_name, e)
+            continue
+        rounds_used += 1
+        if tier_name is not None:
+            if tier_trace is not None and tier_name not in tier_trace:
+                tier_trace.append(tier_name)
+            try:
+                _record_tier_success(tier_name)
+            except Exception:
+                pass
         text: str = _as_text(response.content).strip()
+        if text:
+            last_text = text
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
         if not tool_calls:
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")
@@ -283,10 +357,16 @@ def run_tool_loop(
                 )
             )
         )
-    # Budget exhausted: one final no-tools synthesis call, else a clean status.
+    if rounds_used == 0 and not last_results:
+        # Every tier failed before producing anything: honest error for
+        # the outer cascade (which fails over or reports all-tiers-down).
+        if provider_error is not None:
+            raise provider_error
+    # Budget exhausted: one final no-tools synthesis call on the last
+    # working tier, else a salvaged partial answer, else a clean status.
     try:
         final = agent._invoke_bounded(
-            llm_instance,
+            last_llm,
             [
                 SystemMessage(
                     content="Summarize the tool results below into a concise "
@@ -307,6 +387,12 @@ def run_tool_loop(
             return _with_sources(text)
     except Exception:
         pass
+    if last_text.strip():
+        return _with_sources(
+            last_text.rstrip()
+            + "\n\n[Note: I could only produce a partial answer — "
+            "a model failed midway, so some steps may be missing.]"
+        )
     return _with_sources(
         "I gathered partial results but couldn't finish composing the answer. "
         "Please try again or simplify the request."

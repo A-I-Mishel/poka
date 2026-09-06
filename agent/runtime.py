@@ -264,7 +264,7 @@ def answer_with_fallback(
     used_tools: List[str] = []
     used_sources: List[Dict[str, str]] = []
 
-    def _answer_tooled(tier_name: str, llm: BaseLanguageModel) -> str:
+    def _size_llm_for_task(tier_name: str, llm: BaseLanguageModel) -> BaseLanguageModel:
         # Task temperature via a cached client for (tier, temperature):
         # cached instances are never mutated (thread-safe sharing). Only
         # for the default cascade table -- a caller-supplied tiers table
@@ -277,12 +277,68 @@ def answer_with_fallback(
             except Exception:
                 sized = None
             if sized is not None:
-                llm = sized
-        else:
-            try:
-                llm.temperature = TASK_TEMPERATURES.get(task_type, 0.5)  # type: ignore[attr-defined]
-            except Exception:
-                pass
+                return sized
+            return llm
+        try:
+            llm.temperature = TASK_TEMPERATURES.get(task_type, 0.5)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return llm
+
+    def _make_tier_provider(pinned: Optional[Tuple[str, BaseLanguageModel]] = None):
+        """Stateful per-attempt failover across usable tiers (each once).
+
+        The pinned (name, model) pair — this cascade attempt's tier, if
+        any — is served first; afterwards tiers come from cascade order
+        minus cooled-down and already-tried ones. Getter failures cool
+        their tier and move on. Exhaustion raises a friendly error.
+        """
+        from agent.cascade import (
+            _friendly_cascade_error,
+            _record_tier_failure,
+            classify_provider_error,
+        )
+
+        attempted: set = set()
+        yielded_pinned = False
+        last_error: Optional[Exception] = None
+
+        def _provider() -> Tuple[str, BaseLanguageModel]:
+            nonlocal yielded_pinned, last_error
+            if pinned is not None and not yielded_pinned:
+                yielded_pinned = True
+                attempted.add(pinned[0])
+                return pinned[0], _size_llm_for_task(pinned[0], pinned[1])
+            ordered = [
+                item for item in _usable_tiers(first, tiers)
+                if item[0] not in attempted
+            ]
+            if not ordered:
+                if last_error is not None:
+                    raise RuntimeError(_friendly_cascade_error(last_error))
+                raise RuntimeError("All LLM tiers failed at runtime.")
+            for name, getter in ordered:
+                attempted.add(name)
+                try:
+                    llm_instance = getter()
+                except Exception as e:
+                    last_error = e
+                    try:
+                        _record_tier_failure(name, classify_provider_error(e)[1])
+                    except Exception:
+                        pass
+                    continue
+                if llm_instance is None:
+                    continue
+                return name, _size_llm_for_task(name, llm_instance)
+            raise RuntimeError(_friendly_cascade_error(last_error))
+
+        return _provider
+
+    tooled_tiers: List[str] = []
+
+    def _answer_tooled(tier_name: str, llm: BaseLanguageModel) -> str:
+        provider = _make_tier_provider(pinned=(tier_name, llm))
         mark = len(used_tools)
         mark_sources = len(used_sources)
         try:
@@ -290,14 +346,14 @@ def answer_with_fallback(
                 draft = plan_then_execute(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, budget, used_tools, used_sources,
-                    project_context,
+                    project_context, provider, tooled_tiers,
                 )
             else:
                 draft = run_tool_loop(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, force_web_search,
                     MAX_TOOL_ROUNDS, budget, used_tools, used_sources,
-                    project_context,
+                    project_context, provider, tooled_tiers,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
                 return reflect_and_improve(llm, user_input, draft, langchain_history, budget)
@@ -310,6 +366,10 @@ def answer_with_fallback(
     try:
         answer_attempts = []
         active_tier, output = _run_cascade_step(_answer_tooled, first, tiers, answer_attempts)
+        # Mid-task failover may have finished on a different tier than
+        # the cascade attempt that started the work: report the truth.
+        if tooled_tiers:
+            active_tier = tooled_tiers[-1]
         output = strip_internal_reasoning(output)
         latency_ms = int((time.time() - started_at) * 1000)
         logger.info(

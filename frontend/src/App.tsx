@@ -242,6 +242,7 @@ export default function App() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [kebabId, setKebabId] = useState<string | null>(null);
   const [camOpen, setCamOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -334,6 +335,7 @@ export default function App() {
         setCamOpen(false);
         setTierMenu(false);
         setKebabId(null);
+        setSidebarOpen(false);
       }
     };
     document.addEventListener("keydown", onKey);
@@ -561,7 +563,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      <aside className={`sidebar${sidebarOpen ? " drawer-open" : ""}`}>
         <div className="logo">
           <div className="logo-icon">
             <BugIcon size={16} />
@@ -580,6 +582,7 @@ export default function App() {
             setMessages(s.current);
             setOpenId(null);
             setSection(null);
+            setSidebarOpen(false);
           }}
         >
           + New chat
@@ -668,6 +671,7 @@ export default function App() {
                     setOpenId(c.id);
                     setActiveProject(c.project_id || null);
                     setSection(null);
+                    setSidebarOpen(false);
                   }}
                 >
                   {c.title || "Untitled"}
@@ -714,7 +718,10 @@ export default function App() {
         <div className="stack">
           <button
             className={`nav-item${section === "research" ? " active" : ""}`}
-            onClick={() => setSection("research")}
+            onClick={() => {
+              setSection("research");
+              setSidebarOpen(false);
+            }}
           >
             {I.search} Research
           </button>
@@ -740,7 +747,10 @@ export default function App() {
             <button
               key={key}
               className={`nav-item${section === key ? " active" : ""}`}
-              onClick={() => setSection(key)}
+              onClick={() => {
+                setSection(key);
+                setSidebarOpen(false);
+              }}
             >
               {icon} {label}
             </button>
@@ -783,10 +793,20 @@ export default function App() {
           </div>
         </div>
       </aside>
+      {sidebarOpen && (
+        <div className="drawer-backdrop" onClick={() => setSidebarOpen(false)} />
+      )}
 
       <main className="main">
         <header className="topbar">
           <div className="topbar-left">
+            <button
+              className="icon-btn hamburger"
+              title="Menu"
+              onClick={() => setSidebarOpen((v) => !v)}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="18" y2="18" /></svg>
+            </button>
             {section !== null && (
               <button className="icon-btn" title="Back to chat" onClick={() => setSection(null)}>
                 {I.back}

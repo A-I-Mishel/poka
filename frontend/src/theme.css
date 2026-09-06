@@ -711,3 +711,30 @@ button { font-family: inherit; }
   .sidebar { display: none; }
   .msg .col { max-width: 94%; }
 }
+
+/* ADD: hamburger (drawer toggle) — desktop never shows it. */
+.hamburger { display: none; }
+
+/* ADD: small-screen drawer. The sidebar becomes an overlay panel
+   opened via the hamburger; backdrop click or Esc closes it. */
+@media (max-width: 760px) {
+  .sidebar.drawer-open {
+    display: flex;
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    z-index: 60;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, .5);
+    animation: chip-in .18s ease-out;
+  }
+  .hamburger { display: grid; }
+  .drawer-backdrop {
+    position: fixed; inset: 0; z-index: 55;
+    background: rgba(4, 4, 8, .6);
+    animation: fade-in .15s ease-out;
+  }
+  .composer-bottom { flex-wrap: wrap; }
+  .chat-col { padding: 20px 14px 12px; }
+  .composer-wrap { padding: 8px 12px 12px; }
+  .topbar { padding: 10px 14px; }
+  .bubble table { display: block; overflow-x: auto; width: max-content; max-width: 100%; }
+}

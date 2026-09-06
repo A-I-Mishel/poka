@@ -275,7 +275,11 @@ def test_planning_passes_tools_through(monkeypatch):
     assert used == ["web_search"]
 
 
-def test_failed_tier_discards_partial_tools(monkeypatch):
+def test_failed_tier_keeps_partial_tools(monkeypatch):
+    # Mid-task failover continues the SAME loop on the next tier instead
+    # of restarting: the executed search genuinely backs the final
+    # answer, so its provenance is kept (and no quota is spent
+    # re-running it) rather than rolled back.
     monkeypatch.setitem(agent.TOOL_MAP, "web_search", SearchStub())
     flaky = FakeLLM([
         ("go", [{"name": "web_search", "args": {"query": "x"}}]),
@@ -287,9 +291,11 @@ def test_failed_tier_discards_partial_tools(monkeypatch):
         tiers=[("bad", lambda: flaky), ("good", lambda: fine)],
         raw_messages=[],
     )
-    assert out["output"] == "fine"
+    assert out["output"].startswith("fine")
+    assert "example.com/a" in out["output"]
     assert out["active_tier"] == "good"
-    assert out["tools_used"] == []
+    assert out["tools_used"] == ["web_search"]
+    assert any(s["url"] == "https://example.com/a" for s in out["sources"])
 
 
 def test_answer_reports_tools_used(monkeypatch):
