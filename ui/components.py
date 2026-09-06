@@ -5,12 +5,13 @@ callers pass values in and render the returned output. Imported by the
 page flow (app.py) and the UI sections (ui/chat.py, ui/sidebar.py).
 """
 
+import html
 import re
 from typing import Any, Dict, List
 
 import streamlit as st
 
-from services.timeutil import format_local, utcnow_stamp
+from services.timeutil import format_local, parse_iso, utcnow_stamp
 
 
 def tier_status(
@@ -73,6 +74,164 @@ def _highlight_query(text: str, query: str) -> str:
     return "".join(out)
 
 
+_MEM_TYPE_LABELS = {
+    "name": "Name",
+    "preference": "Preference",
+    "project": "Project",
+    "task_pattern": "Pattern",
+    "temporary": "Temporary",
+}
+
+
+def mem_type_label(fact: Any) -> str:
+    """Human-friendly fact type (negative preferences read as Dislike)."""
+    if not isinstance(fact, dict):
+        return "Memory"
+    ftype = str(fact.get("type", "") or "")
+    if ftype == "preference" and fact.get("polarity") == "negative":
+        return "Dislike"
+    if ftype in _MEM_TYPE_LABELS:
+        return _MEM_TYPE_LABELS[ftype]
+    return ftype.replace("_", " ").strip().title() or "Memory"
+
+
+def mem_source_label(fact: Any) -> str:
+    """Trust label from stored source; "" when unknown (never guessed)."""
+    source = fact.get("source", "") if isinstance(fact, dict) else ""
+    if source == "explicit":
+        return "Explicit"
+    if source == "inferred":
+        return "Inferred"
+    return ""
+
+
+def mem_date_label(iso_value: Any) -> str:
+    """Compact remembered-when label; "" when missing/unparseable."""
+    from datetime import datetime, timezone
+
+    dt = parse_iso(iso_value)
+    if dt is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    age_days = (now - dt).total_seconds() / 86400.0
+    if age_days < 0:
+        return ""
+    if age_days < 1:
+        return "Remembered today"
+    if age_days < 7:
+        return "Remembered this week"
+    return "Remembered " + dt.strftime("%b %Y")
+
+
+def _format_bytes(num: Any) -> str:
+    """Human file size (B/KB/MB); "" when unknown."""
+    try:
+        size = float(num)
+    except (TypeError, ValueError):
+        return ""
+    if size < 0:
+        return ""
+    if size < 1024:
+        return f"{int(size)} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _artifact_kind_label(kind: Any, display_name: Any = "") -> str:
+    """Human format label from a registry kind + filename (never invented)."""
+    if kind == "pptx":
+        return "PowerPoint"
+    if kind == "docx":
+        return "Word document"
+    suffix = str(display_name).rsplit(".", 1)
+    if len(suffix) == 2 and suffix[-1].strip():
+        return suffix[-1].strip().upper()
+    return "File"
+
+
+_ARTIFACT_ICON_SVG = (
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+    '<rect x="2" y="2.5" width="12" height="8" rx="1.5" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    '<path d="M6 13.5h4M8 10.5v3" fill="none" '
+    'stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+    "</svg>"
+)
+
+_DOC_ICON_SVG = (
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+    '<path d="M3 1h5l4 4v10H3z" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    '<path d="M8 1v4h4" fill="none" '
+    'stroke="currentColor" stroke-width="1.3"/>'
+    "</svg>"
+)
+
+
+def _artifact_icon(kind: Any) -> str:
+    """Small format glyph: slides for presentations, document otherwise."""
+    if kind == "pptx":
+        return _ARTIFACT_ICON_SVG
+    return _DOC_ICON_SVG
+
+
+def _artifact_sub_for(kind: Any, display_name: Any, size: Any,
+                      created: Any) -> str:
+    """One-line kind/size/date summary for an output record."""
+    bits = [_artifact_kind_label(kind, display_name)]
+    size_text = _format_bytes(size)
+    if size_text:
+        bits.append(size_text)
+    when = _rel_date(created)
+    if when:
+        bits.append(when)
+    return " · ".join(b for b in bits if b)
+
+
+def _rel_date(ts: Any) -> str:
+    """Compact relative day label for epoch timestamps; "" when unknown."""
+    from datetime import datetime
+
+    try:
+        moment = datetime.fromtimestamp(float(ts))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+    today = datetime.now().date()
+    delta = (today - moment.date()).days
+    if delta < 0:
+        return ""
+    if delta == 0:
+        return "Today"
+    if delta == 1:
+        return "Yesterday"
+    if delta < 7:
+        return f"{delta} days ago"
+    return moment.strftime("%b %Y")
+
+
+def _artifact_card_html(display_name: Any, kind: Any, sub: Any = "",
+                       expired: bool = False) -> str:
+    """Compact artifact row (visual only; values are escaped)."""
+    name = str(display_name or "file")
+    sub_text = str(sub or "")
+    cls = "poka-art poka-art-expired" if expired else "poka-art"
+    parts = [
+        f'<div class="{cls}">',
+        '<span class="poka-art-icon" aria-hidden="true">'
+        + _artifact_icon(kind)
+        + "</span>",
+        '<span class="poka-art-text">'
+        f'<span class="poka-art-name" title="{html.escape(name, quote=True)}">'
+        f"{html.escape(name)}</span>",
+    ]
+    if sub_text:
+        parts.append(
+            f'<span class="poka-art-sub">{html.escape(sub_text)}</span>')
+    parts.append("</span></div>")
+    return "".join(parts)
+
+
 def _export_chat_to_markdown(messages: List[Dict[str, Any]]) -> str:
     """Render the conversation as a Markdown document for download."""
     lines: List[str] = [
@@ -88,10 +247,13 @@ def _export_chat_to_markdown(messages: List[Dict[str, Any]]) -> str:
 
 
 def _show_typing() -> Any:
-    """Show the three-dot typing indicator; caller empties the box."""
+    """Show the calm thinking indicator; caller empties the box."""
     box = st.empty()
     box.markdown(
-        '<div class="typing-indicator"><span></span><span></span><span></span></div>',
+        '<div class="typing-indicator" role="status" aria-label="Poka is thinking">'
+        "<span></span><span></span><span></span>"
+        '<span class="typing-label">Thinking…</span>'
+        "</div>",
         unsafe_allow_html=True,
     )
     return box

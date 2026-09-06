@@ -1,4 +1,5 @@
 import io
+import time
 import uuid
 from typing import Any, List
 from langchain.tools import tool
@@ -90,7 +91,11 @@ def create_pptx(topic: str, content: str) -> str:
         data: bytes = buf.getvalue()
 
         try:
-            meta = FileStore(user_id).register_output(filename, data, "pptx")
+            spec = {"kind": "pptx", "tool": "create_pptx",
+                    "input": {"topic": topic, "content": content},
+                    "created": time.time()}
+            meta = FileStore(user_id).register_output(
+                filename, data, "pptx", spec)
             if dropped_bullets:
                 overflow_note += (
                     f" [{dropped_bullets} bullet lines dropped "
@@ -395,7 +400,11 @@ def build_presentation(spec_json: str) -> str:
         if overflow_notes:
             summary += " " + " ".join(overflow_notes)
         try:
-            meta = FileStore(user_id).register_output(filename, data, "pptx")
+            spec = {"kind": "pptx", "tool": "build_presentation",
+                    "input": {"spec_json": spec_json},
+                    "created": time.time()}
+            meta = FileStore(user_id).register_output(
+                filename, data, "pptx", spec)
             return f"{summary} (file ID: {meta.id})"
         except StorageError as e:
             return f"STATUS=FAILED tool=build_presentation: {e}"

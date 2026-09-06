@@ -4,7 +4,7 @@ Writes a short plan first, then executes it with tools. Any planning
 failure falls back to a plain tool loop instead of breaking the answer.
 """
 
-from typing import Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -22,10 +22,16 @@ def plan_then_execute(
     memory_notes: str = "",
     relevant_context: str = "",
     budget: Optional[RequestBudget] = None,
+    used_tools: Optional[List[str]] = None,
+    used_sources: Optional[List[Dict[str, str]]] = None,
+    project_context: str = "",
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
     Falls back to a plain tool loop if the planning call itself fails.
+    Executed tool names and parsed search sources are appended to
+    used_tools / used_sources when provided; project context flows
+    into the execution loop's system prompt.
     """
     if budget is not None:
         try:
@@ -34,6 +40,7 @@ def plan_then_execute(
             return run_tool_loop(
                 llm_instance, user_input, chat_history, memory_notes,
                 relevant_context, False, MAX_TOOL_ROUNDS, budget,
+                used_tools, used_sources, project_context,
             )
     try:
         plan_prompt = (
@@ -59,9 +66,11 @@ def plan_then_execute(
         return run_tool_loop(
             llm_instance, execution_prompt, chat_history, memory_notes,
             relevant_context, False, MAX_TOOL_ROUNDS, budget,
+            used_tools, used_sources, project_context,
         )
     except Exception:
         return run_tool_loop(
             llm_instance, user_input, chat_history, memory_notes,
             relevant_context, False, MAX_TOOL_ROUNDS, budget,
+            used_tools, used_sources, project_context,
         )

@@ -104,6 +104,7 @@ def answer_with_fallback(
     deep_mode: bool = False,
     force_web_search: bool = False,
     image_upload_ids: Optional[List[str]] = None,
+    project_context: str = "",
 ) -> Dict[str, Any]:
     """Answer with the full stack: memorize, classify, plan, execute, reflect.
 
@@ -127,9 +128,16 @@ def answer_with_fallback(
             not just a prompt hint).
         image_upload_ids: Upload IDs of attached images to analyze with a
             vision-capable tier when one is configured.
+        project_context: Explicit user-controlled text for the current
+            project, wrapped as untrusted data in the system prompt.
+            Empty means Personal / no project context.
 
     Returns:
-        Dict with 'output', 'active_tier', 'task_type', 'request_id'.
+        Dict with 'output', 'active_tier', 'task_type', 'request_id',
+        'tools_used' (names of tools executed by the successful attempt,
+        possibly empty) and 'sources' (structured source records parsed
+        from executed web-search output, possibly empty; vision
+        fast-path reports neither).
 
     Raises:
         RuntimeError: If every tier fails (friendly message + ref ID).
@@ -204,7 +212,8 @@ def answer_with_fallback(
 
     if task_type == "simple":
         def _answer_direct(_name: str, llm: BaseLanguageModel) -> str:
-            system_text = _build_system_prompt(combined_notes, relevant_context)
+            system_text = _build_system_prompt(
+                combined_notes, relevant_context, project_context)
             response = agent._invoke_bounded(
                 llm,
                 [
@@ -237,6 +246,8 @@ def answer_with_fallback(
                 "active_tier": active_tier,
                 "task_type": task_type,
                 "request_id": request_id,
+                "tools_used": [],
+                "sources": [],
             }
         except (RuntimeError, BudgetExhausted) as e:
             logger.warning("req=%s failed: %s", request_id, e)
@@ -244,6 +255,13 @@ def answer_with_fallback(
             raise RuntimeError(f"{e} (ref {request_id})") from e
 
     use_planning = deep_mode and task_type in ("multi_step", "creative")
+
+    # Tool names and source records executed by the SUCCESSFUL tier
+    # attempt only. Failed attempts re-raise for fallback, discarding
+    # their partial entries so recorded provenance always belongs to
+    # the final response.
+    used_tools: List[str] = []
+    used_sources: List[Dict[str, str]] = []
 
     def _answer_tooled(tier_name: str, llm: BaseLanguageModel) -> str:
         # Task temperature via a cached client for (tier, temperature):
@@ -264,20 +282,29 @@ def answer_with_fallback(
                 llm.temperature = TASK_TEMPERATURES.get(task_type, 0.5)  # type: ignore[attr-defined]
             except Exception:
                 pass
-        if use_planning:
-            draft = plan_then_execute(
-                llm, user_input, langchain_history, combined_notes,
-                relevant_context, budget,
-            )
-        else:
-            draft = run_tool_loop(
-                llm, user_input, langchain_history, combined_notes,
-                relevant_context, force_web_search,
-                MAX_TOOL_ROUNDS, budget,
-            )
-        if should_reflect(task_type, draft, user_input, deep_mode):
-            return reflect_and_improve(llm, user_input, draft, langchain_history, budget)
-        return draft
+        mark = len(used_tools)
+        mark_sources = len(used_sources)
+        try:
+            if use_planning:
+                draft = plan_then_execute(
+                    llm, user_input, langchain_history, combined_notes,
+                    relevant_context, budget, used_tools, used_sources,
+                    project_context,
+                )
+            else:
+                draft = run_tool_loop(
+                    llm, user_input, langchain_history, combined_notes,
+                    relevant_context, force_web_search,
+                    MAX_TOOL_ROUNDS, budget, used_tools, used_sources,
+                    project_context,
+                )
+            if should_reflect(task_type, draft, user_input, deep_mode):
+                return reflect_and_improve(llm, user_input, draft, langchain_history, budget)
+            return draft
+        except Exception:
+            del used_tools[mark:]
+            del used_sources[mark_sources:]
+            raise
 
     try:
         answer_attempts = []
@@ -302,6 +329,8 @@ def answer_with_fallback(
             "active_tier": active_tier,
             "task_type": task_type,
             "request_id": request_id,
+            "tools_used": list(used_tools),
+            "sources": [dict(s) for s in used_sources],
         }
     except (RuntimeError, BudgetExhausted) as e:
         logger.warning("req=%s failed: %s", request_id, e)

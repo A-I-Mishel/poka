@@ -24,6 +24,7 @@ from services.limits import (
     TOOL_TIMEOUT_SECONDS,
 )
 from services.obs import timed as obs_timed
+from services.storage import MAX_SOURCES, clean_source_record
 from services.tokens import count_tokens, truncate_tokens
 from tools import web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect
 from tools.search_tool import extract_cited_sources
@@ -116,6 +117,9 @@ def run_tool_loop(
     force_web_search: bool = False,
     max_rounds: int = MAX_TOOL_ROUNDS,
     budget: Optional[RequestBudget] = None,
+    used_tools: Optional[List[str]] = None,
+    used_sources: Optional[List[Dict[str, str]]] = None,
+    project_context: str = "",
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -127,6 +131,14 @@ def run_tool_loop(
 
     When force_web_search is true, a web search is EXECUTED first (not
     merely suggested) and its results seed the conversation.
+
+    When used_tools is provided, names of tools actually executed during
+    this call are appended (deduped, in order) so callers can record
+    truthful provenance. Unknown tool names are never recorded.
+
+    When used_sources is provided, structured source records parsed from
+    EXECUTED web-search output are appended (deduped by URL, capped).
+    Nothing is ever inferred from model-generated text.
     """
     if budget is None:
         budget = RequestBudget()
@@ -134,13 +146,48 @@ def run_tool_loop(
         (memory_notes.strip() + "\n" + relevant_context.strip()).strip(),
         CTX_MEMORY_TOKENS,
     )
-    system_text: str = _build_system_prompt(mem_fit, "")
+    system_text: str = _build_system_prompt(mem_fit, "", project_context)
     fitted_history, _hist_stats = fit_history(chat_history, CTX_HISTORY_TOKENS)
     messages: List[BaseMessage] = [
         SystemMessage(content=system_text),
         *fitted_history,
     ]
     search_blob_texts: List[str] = []
+
+    def _record_tool(name: Any) -> None:
+        """Note an executed tool for provenance (known tools only)."""
+        if used_tools is None:
+            return
+        if not isinstance(name, str):
+            return
+        if name not in TOOL_MAP:
+            return
+        if name not in used_tools:
+            used_tools.append(name)
+
+    def _record_search_sources(result_text: Any, name: Any) -> None:
+        """Collect provenance from EXECUTED web-search output only.
+
+        Parses the tool's own result text with the same extractor the
+        answer renderer uses. Model-generated markdown is never parsed
+        here (this function only ever sees tool return values).
+        """
+        if used_sources is None:
+            return
+        if name != "web_search":
+            return
+        if not isinstance(result_text, str):
+            return
+        for parsed in extract_cited_sources(result_text):
+            if len(used_sources) >= MAX_SOURCES:
+                return
+            record = clean_source_record(parsed)
+            if record is None:
+                continue
+            if any(e["url"].lower() == record["url"].lower()
+                   for e in used_sources):
+                continue
+            used_sources.append(record)
 
     def _note_search(result_text: str) -> None:
         if result_text.startswith("[web_search] STATUS=OK"):
@@ -174,6 +221,8 @@ def run_tool_loop(
                 {"name": "web_search", "args": {"query": user_input[:MAX_QUERY_CHARS]}},
                 budget,
             )
+            _record_tool("web_search")
+            _record_search_sources(forced, "web_search")
         except BudgetExhausted:
             forced = "STATUS=FAILED tool=web_search: search budget exhausted."
         except Exception as e:
@@ -202,7 +251,16 @@ def run_tool_loop(
         if not tool_calls:
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")
         try:
-            last_results = [_execute_tool_call(tc, budget) for tc in tool_calls]
+            last_results = []
+            for tc in tool_calls:
+                result_text = _execute_tool_call(tc, budget)
+                last_results.append(result_text)
+                if isinstance(tc, dict):
+                    tc_name = tc.get("name", "")
+                else:
+                    tc_name = getattr(tc, "name", "")
+                _record_tool(tc_name)
+                _record_search_sources(result_text, tc_name)
         except BudgetExhausted:
             last_results.append(
                 "[budget] Tool budget exhausted; no further tool calls. "

@@ -51,7 +51,7 @@ def render_composer() -> Tuple[bool, bool]:
 
             st.text_input(
                 "Message",
-                placeholder="Type your message...",
+                placeholder="Ask Poka anything…",
                 label_visibility="collapsed",
                 key=field_key,
             )

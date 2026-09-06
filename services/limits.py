@@ -63,6 +63,27 @@ RATE_LIMITS: dict = {
     "deep": (20, 3600.0),
 }
 
+# Project context (explicit user-controlled per-project text).
+# Conservative: operational instructions, not a document store (~1000
+# tokens against a 24k budget alongside memory and history).
+MAX_PROJECT_CONTEXT_CHARS: int = 4000
+
+# Research brief bounds (user-owned research records).
+MAX_BRIEF_QUERY_CHARS: int = 500
+MAX_BRIEF_EXCERPT_CHARS: int = 4000
+
+# Generation spec bounds (opaque reproducibility records, never code).
+# Per-string and total caps keep specs from becoming a document store.
+MAX_SPEC_STRING_CHARS: int = 100_000
+MAX_SPEC_TOTAL_CHARS: int = 200_000
+
 # Storage hygiene
 MAX_FILENAME_LEN: int = 100
 UPLOAD_ID_RE: str = r"^[0-9a-f]{16}$"
+
+# Composer attachments (per single user message). 5 total keeps tool
+# hints small (contents are never stuffed; tools read on demand within
+# existing budgets) with headroom under the 8-record storage backstop.
+# Images are capped at 3 to match the vision fast-path batch size.
+MAX_ATTACHMENTS_PER_MESSAGE: int = 5
+MAX_IMAGE_ATTACHMENTS: int = 3

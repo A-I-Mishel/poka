@@ -1,5 +1,6 @@
 import io
 import re
+import time
 import uuid
 from typing import Any, Dict, List, Tuple
 from langchain.tools import tool
@@ -45,7 +46,11 @@ def create_docx(title: str, content: str) -> str:
         data: bytes = buf.getvalue()
 
         try:
-            meta = FileStore(user_id).register_output(filename, data, "docx")
+            spec = {"kind": "docx", "tool": "create_docx",
+                    "input": {"title": title, "content": content},
+                    "created": time.time()}
+            meta = FileStore(user_id).register_output(
+                filename, data, "docx", spec)
             note = (
                 f" [Note: limited to the first {MAX_DOCX_PARAGRAPHS} "
                 f"paragraphs ({dropped_paras} dropped).]"
@@ -328,7 +333,11 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
             f"{counts.get('table', 0)} tables."
         )
         try:
-            meta = FileStore(user_id).register_output(filename, data, "docx")
+            spec = {"kind": "docx", "tool": "build_document",
+                    "input": {"title": title, "markdown_text": markdown_text},
+                    "created": time.time()}
+            meta = FileStore(user_id).register_output(
+                filename, data, "docx", spec)
             return f"{summary} (file ID: {meta.id})"
         except StorageError as e:
             return f"STATUS=FAILED tool=build_document: {e}"

@@ -46,6 +46,7 @@ from agent.prompts import (
     _build_system_prompt,
     _memory_data_block,
     _messages_to_langchain,
+    _project_context_block,
     system_prompt,
 )
 from agent.providers import TIER_AGENT_GETTERS
@@ -103,6 +104,7 @@ __all__ = [
     "_memory_data_block",
     "_messages_to_langchain",
     "_ordered_tiers",
+    "_project_context_block",
     "_record_tier_failure",
     "_record_tier_success",
     "_run_cascade_step",

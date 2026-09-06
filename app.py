@@ -9,6 +9,8 @@ Application composition root. All behavior lives in focused modules:
 - ui.components: formatting helpers and page script.
 """
 
+import html
+
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -17,10 +19,10 @@ from services.auth import AuthRequired, authenticate, verify_access_token
 from services.context import set_current_user_id
 from services.memory import set_memory_dir
 from services.storage import UserStore
-from ui.chat import _retry_last, render_assistant_response, render_history
+from ui.chat import _retry_last, render_assistant_response, render_followups, render_history
 from ui.composer import render_composer
 from ui.components import COMPOSER_SCRIPT
-from ui.sidebar import render_sidebar
+from ui.sidebar import get_active_project, render_sidebar, render_workspace_view
 from ui.theme import apply_theme
 from ui.uploads import render_attachment_chip, render_attachment_menu
 
@@ -94,7 +96,37 @@ model_name = render_sidebar()
 # MAIN
 # ============================================================
 
-if not st.session_state.messages:
+# Subtle active-project context (re-resolved; Personal shows nothing).
+_indicator_project = get_active_project()
+if isinstance(_indicator_project, dict):
+    _indicator_name = str(_indicator_project.get("name", "")).strip()[:60]
+    if _indicator_name:
+        _indicator_safe = html.escape(_indicator_name).replace("[", "\\[")
+        st.caption(f"In project: {_indicator_safe}")
+
+# Workspace destination (7F navigation-first): a selected destination
+# renders here instead of home/chat. Composer, uploads, send, retry,
+# and error flows below stay exactly as before.
+try:
+    _workspace_active = bool(st.session_state.get("sidebar_view"))
+except Exception:
+    _workspace_active = False
+
+if _workspace_active:
+
+    render_workspace_view()
+
+if not _workspace_active and not st.session_state.messages:
+
+    # Honest first-run guidance from existing state only: returning users
+    # (archived chats) get a continue cue, new users get capabilities.
+    _hero_sub = (
+        "Welcome back — continue where you left off, "
+        "or start something new below."
+        if st.session_state.get("chats")
+        else "Ask Poka to research, draft documents and presentations, "
+        "analyze PDFs and data, or remember what matters to you."
+    )
 
     st.markdown(
         '<div class="poka-home">'
@@ -104,38 +136,39 @@ if not st.session_state.messages:
         '5 10.6 1 7l5.2-1.4z"/>'
         "</svg>"
         "</span>"
+        '<p class="poka-eyebrow">Poka · AI workspace</p>'
         "<h1>What can I help with?</h1>"
         "<p>"
-        "Ask Poka to research, draft documents and presentations, "
-        "analyze PDFs and data, or remember what matters to you."
-        "</p>"
+        + _hero_sub
+        + "</p>"
         "</div>",
         unsafe_allow_html=True,
     )
 
     _suggestions = (
         (
-            "Draft a presentation",
-            "Turn a topic into slides",
+            "Create",
+            "Slides, docs & plans",
             "Draft a short presentation about "
             "the future of renewable energy",
         ),
         (
-            "Analyze a file",
-            "PDFs, CSVs, and photos",
+            "Analyze files",
+            "PDFs, CSVs & photos",
             "I will upload a file — help me "
             "analyze and summarize it",
         ),
         (
-            "Research a topic",
-            "Get answers with sources",
+            "Research",
+            "Cited answers",
             "Research the latest developments in "
             "artificial intelligence and cite your sources",
         ),
         (
-            "Explain a concept",
-            "Break down something difficult",
-            "Explain quantum computing in simple terms",
+            "Search the web",
+            "Fresh answers + sources",
+            "What happened in artificial intelligence "
+            "this week? Cite your sources",
         ),
     )
 
@@ -155,8 +188,14 @@ if not st.session_state.messages:
                     st.caption(_hint)
 
 
-# Render conversation
-render_history()
+# Render conversation (skipped while a workspace destination is open;
+# opening a workspace never destroys chat state).
+if not _workspace_active:
+
+    render_history()
+
+    # Contextual follow-ups under the latest assistant reply (if any).
+    render_followups()
 
 
 # ============================================================
@@ -164,6 +203,33 @@ render_history()
 # ============================================================
 
 render_attachment_chip()
+
+
+# ============================================================
+# MODE (compact Fast/Deep lives with the composer in 7F;
+# same deep_mode state and keys, only placement moved)
+# ============================================================
+
+_mode_is_deep = bool(st.session_state.get("deep_mode", False))
+_mode_a, _mode_b, _mode_rest = st.columns([1, 1, 6], gap="small")
+with _mode_a:
+    if st.button(
+        "Fast",
+        key="mode-fast",
+        help="Fast mode",
+        disabled=not _mode_is_deep,
+    ):
+        st.session_state.deep_mode = False
+        st.rerun()
+with _mode_b:
+    if st.button(
+        "Deep",
+        key="mode-deep",
+        help="Deep mode",
+        disabled=_mode_is_deep,
+    ):
+        st.session_state.deep_mode = True
+        st.rerun()
 
 
 # ============================================================
