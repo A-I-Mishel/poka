@@ -13,9 +13,34 @@ LAYOUT_CSS: str = """
 
 .main-content { flex: 1 1 auto; min-width: 0; background: var(--bg-base); }
 
-.chat-area { max-width: 100%; padding: 16px 20px 140px; }
+.chat-area { max-width: 100%; padding: var(--space-lg) var(--space-xl) var(--chat-bottom-pad); }
 
-.composer-dock { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); width: min(640px, calc(100% - 40px)); background: var(--bg-overlay); backdrop-filter: blur(var(--composer-blur)); border: var(--border-default); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 10px 14px; z-index: 50; }
+/* Composer dock: the keyed Streamlit container (.st-key-composer-dock)
+   is the real wrapper; .composer-dock kept as an alias selector. */
+.composer-dock,
+.st-key-composer-dock {
+    position: fixed;
+    bottom: var(--space-lg);
+    left: calc(50% + var(--sidebar-width) / 2);
+    transform: translateX(-50%);
+    width: min(var(--composer-max-width), calc(100% - var(--space-xxl) - var(--sidebar-width)));
+    background: var(--bg-overlay);
+    backdrop-filter: blur(var(--composer-blur));
+    -webkit-backdrop-filter: blur(var(--composer-blur));
+    border: var(--line) solid var(--border-hover);
+    border-radius: var(--radius-full);
+    padding: var(--space-sm-plus) var(--space-md-plus);
+    z-index: var(--z-composer);
+    box-shadow: var(--shadow-dock);
+}
 
-.composer-dock:focus-within { border-color: var(--border-accent); box-shadow: var(--shadow-lg), var(--shadow-glow); }
+.composer-dock:focus-within,
+.st-key-composer-dock:focus-within {
+    border-color: var(--border-accent);
+    box-shadow: var(--shadow-dock-focus);
+}
+
+.composer-chips,
+.st-key-composer-chips { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-sm); padding: 0 var(--space-xs); }
+.st-key-composer-chips:empty { display: none; }
 """

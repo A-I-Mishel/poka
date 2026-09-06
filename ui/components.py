@@ -6,7 +6,9 @@ page flow (app.py) and the UI sections (ui/chat.py, ui/sidebar.py).
 """
 
 import html
+import os
 import re
+import time
 from typing import Any, Dict, List
 
 import streamlit as st
@@ -28,6 +30,11 @@ def tier_status(
     if (
         tier_name.startswith("Gemini")
         or tier_name.startswith("Nemotron")
+        or tier_name.startswith("Groq")
+        or tier_name.startswith("DeepSeek")
+        or tier_name.startswith("Big Pickle")
+        or tier_name.startswith("MiMo")
+        or tier_name.startswith("Ling")
     ):
         return (
             "fallback",
@@ -259,6 +266,58 @@ def _show_typing() -> Any:
     return box
 
 
+# Streaming (typewriter) reveal for assistant answers. The agent pipeline
+# (tools, fallbacks, reflection) only yields the complete final text, so
+# true token streaming is not available at this layer — instead the final
+# text is revealed progressively into a dedicated placeholder. Short
+# answers render instantly; longer ones reveal in ~40 ticks so pacing
+# stays constant regardless of length. Set POKA_STREAM_DELAY=0 to
+# disable the animation (e.g. automated tests).
+_STREAM_MAX_TICKS: int = 40
+_STREAM_CURSOR: str = "▍"
+
+
+def _stream_delay() -> float:
+    """Per-tick pause for the streaming reveal (0 disables animation)."""
+    try:
+        return max(0.0, float(os.environ.get("POKA_STREAM_DELAY", "0.025")))
+    except (TypeError, ValueError):
+        return 0.025
+
+
+def stream_markdown(text: Any) -> Any:
+    """Render text with a streaming effect; returns the placeholder used.
+
+    Progressively reveals the text word-by-word (whitespace preserved,
+    so line breaks and code blocks keep their shape) with a cursor while
+    streaming. Always ends with one final render of the complete text,
+    so the visible result is byte-identical to a direct render. Never
+    raises for rendering trouble — falls back to a single render.
+    """
+    box = st.empty()
+    full = str(text or "")
+    try:
+        if not full.strip() or len(full.split()) < 8 or _stream_delay() <= 0:
+            box.markdown(full)
+            return box
+        chunks = re.split(r"(\s+)", full)
+        word_ends = [i for i, c in enumerate(chunks) if c and not c.isspace()]
+        per_tick = max(1, len(word_ends) // _STREAM_MAX_TICKS)
+        delay = _stream_delay()
+        step = 0
+        while step < len(word_ends):
+            step = min(step + per_tick, len(word_ends))
+            box.markdown("".join(chunks[:word_ends[step - 1] + 1]) + _STREAM_CURSOR)
+            time.sleep(delay)
+        box.markdown(full)
+    except Exception:
+        try:
+            box.markdown(full)
+        except Exception:
+            pass
+    return box
+
+
 # Enter-to-send wiring plus the auto-scroll follower and hover copy
 # buttons. Rendered once per page via components.html(...). The selectors
 # degrade gracefully (main section fallback) on older Streamlit builds.
@@ -268,28 +327,54 @@ COMPOSER_SCRIPT: str = """
     const win = window.parent;
     const doc = win.document;
 
-    /* --- Enter-to-send (rebound to the fresh input after every send,
-       since each send recreates the input with a new widget key) --- */
-    const scope = doc.querySelector(".st-key-composer")
-        || doc.querySelector('section[data-testid="stMain"]');
-    if (scope) {
-        const input = scope.querySelector('div[data-testid="stTextInput"] input');
-        if (input && !input.dataset.enterBound) {
-            input.dataset.enterBound = "1";
-            input.setAttribute("autocomplete", "off");
-            input.setAttribute("autocapitalize", "off");
-            input.setAttribute("autocorrect", "off");
-            input.addEventListener("keydown", function (e) {
-                if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-                    e.preventDefault();
-                    const box = input.closest(".st-key-composer") || scope;
-                    const btns = box.querySelectorAll("button");
-                    const send = btns[btns.length - 1];
-                    if (send) send.click();
+    /* --- Enter-to-send (persistent observer: each send recreates the
+       input with a new widget key, and this iframe may load before the
+       input exists, so re-scan on every DOM mutation instead of binding
+       once) --- */
+    function pokaBindEnter(box) {
+        if (!box || !box.querySelector) return;
+        const input = box.querySelector('div[data-testid="stTextInput"] input');
+        if (!input || input.dataset.enterBound) return;
+        input.dataset.enterBound = "1";
+        input.setAttribute("autocomplete", "off");
+        input.setAttribute("autocapitalize", "off");
+        input.setAttribute("autocorrect", "off");
+        input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+                e.preventDefault();
+                /* Resolve the Send button lazily: the input is recreated
+                   on every send while the button persists, so a captured
+                   reference could go stale. Prefer the stable keyed
+                   wrapper, fall back to the last button in the bar. */
+                const scope = input.closest(".st-key-composer") || doc;
+                const send = scope.querySelector(".st-key-composer_send button");
+                if (send) {
+                    send.click();
+                    return;
                 }
-            });
-        }
+                const btns = scope.querySelectorAll("button");
+                if (btns.length) btns[btns.length - 1].click();
+            }
+        });
     }
+    function pokaScanEnter() {
+        try {
+            const scopes = doc.querySelectorAll(".st-key-composer");
+            if (scopes.length) {
+                for (const box of scopes) pokaBindEnter(box);
+            } else {
+                const main = doc.querySelector('section[data-testid="stMain"]');
+                if (main) pokaBindEnter(main);
+            }
+        } catch (err) { /* ignore */ }
+    }
+    pokaScanEnter();
+    try {
+        new MutationObserver(function () { pokaScanEnter(); }).observe(
+            doc.body || doc.documentElement,
+            { childList: true, subtree: true }
+        );
+    } catch (err) { /* ignore */ }
 
     /* --- auto-scroll follower (bound once per page) --- */
     if (doc.__pokaScrollBound) return;
@@ -357,9 +442,10 @@ COMPOSER_SCRIPT: str = """
     }).observe(doc.body, { childList: true, subtree: true });
 
     /* --- Copy buttons (hover to reveal) ---
-       Placed inside the message meta row when present (time + Copy side
-       by side), otherwise directly after the message content. Copy text
-       source and clipboard behavior are unchanged. */
+       Placed inside the .msg-actions anchor when present (inside the
+       assistant bubble, hover-revealed), else the message meta row,
+       otherwise directly after the message content. Copy text source
+       and clipboard behavior are unchanged. */
     function armCopyButtons() {
         const nodes = doc.querySelectorAll('div[data-testid="stChatMessage"]');
         for (const node of nodes) {
@@ -399,13 +485,18 @@ COMPOSER_SCRIPT: str = """
                     fallbackCopy();
                 }
             });
-            const meta = node.querySelector('.poka-meta');
-            if (meta) {
-                meta.appendChild(btn);
-            } else if (content.nextSibling) {
-                content.parentNode.insertBefore(btn, content.nextSibling);
+            const actions = node.querySelector('.msg-actions');
+            if (actions) {
+                actions.appendChild(btn);
             } else {
-                content.parentNode.appendChild(btn);
+                const meta = node.querySelector('.poka-meta');
+                if (meta) {
+                    meta.appendChild(btn);
+                } else if (content.nextSibling) {
+                    content.parentNode.insertBefore(btn, content.nextSibling);
+                } else {
+                    content.parentNode.appendChild(btn);
+                }
             }
         }
     }
@@ -504,13 +595,18 @@ COMPOSER_SCRIPT: str = """
                     setTimeout(function () { btn.textContent = "Listen"; }, 1200);
                 }
             });
-            const meta = node.querySelector('.poka-meta');
-            if (meta) {
-                meta.appendChild(btn);
-            } else if (content.nextSibling) {
-                content.parentNode.insertBefore(btn, content.nextSibling);
+            const actions = node.querySelector('.msg-actions');
+            if (actions) {
+                actions.appendChild(btn);
             } else {
-                content.parentNode.appendChild(btn);
+                const meta = node.querySelector('.poka-meta');
+                if (meta) {
+                    meta.appendChild(btn);
+                } else if (content.nextSibling) {
+                    content.parentNode.insertBefore(btn, content.nextSibling);
+                } else {
+                    content.parentNode.appendChild(btn);
+                }
             }
         }
     }

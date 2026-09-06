@@ -17,6 +17,12 @@ from config import (
     get_tier1b_llm,
     get_tier2_llm,
     get_tier3_llm,
+    get_tier_big_pickle_llm,
+    get_tier_deepseek_llm,
+    get_tier_groq_llm,
+    get_tier_ling_llm,
+    get_tier_mimo_llm,
+    get_tier_nemotron_ultra_llm,
 )
 
 TIER_AGENT_GETTERS: List[
@@ -24,6 +30,12 @@ TIER_AGENT_GETTERS: List[
 ] = [
     ("Muse Spark 1.3", get_tier1_llm),  # type: ignore[arg-type]
     ("Nemotron 3.5", get_tier1b_llm),  # type: ignore[arg-type]
+    ("DeepSeek V4 Flash", get_tier_deepseek_llm),  # type: ignore[arg-type]
+    ("Nemotron 3 Ultra", get_tier_nemotron_ultra_llm),  # type: ignore[arg-type]
+    ("Big Pickle", get_tier_big_pickle_llm),  # type: ignore[arg-type]
+    ("MiMo V2.5", get_tier_mimo_llm),  # type: ignore[arg-type]
+    ("Ling 3.0 Flash", get_tier_ling_llm),  # type: ignore[arg-type]
+    ("Groq", get_tier_groq_llm),  # type: ignore[arg-type]
     ("Gemini 3.6 Flash", get_tier2_llm),  # type: ignore[arg-type]
     ("Gemini 3.5 Flash", get_tier3_llm),  # type: ignore[arg-type]
 ]

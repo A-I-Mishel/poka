@@ -1,8 +1,8 @@
-import logging
+﻿import logging
 import re
 from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 from services.context import get_current_user_id
 from services.limits import MAX_QUERY_CHARS, MAX_SEARCH_CHARS

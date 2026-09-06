@@ -23,7 +23,7 @@ from services.vision import (
 from agent.budget import BudgetExhausted, RequestBudget
 from agent.cascade import _usable_tiers
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.prompts import _as_text
+from agent.prompts import _as_text, strip_internal_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def _try_vision_answer(
             response = agent._invoke_bounded(
                 llm_instance, [HumanMessage(content=payload)], budget=None
             )
-            text = _as_text(response.content).strip()
+            text = strip_internal_reasoning(_as_text(response.content).strip())
             if not text:
                 continue
             logger.info("req=%s tier=%s vision ok", request_id, name)

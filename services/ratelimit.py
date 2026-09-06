@@ -9,7 +9,7 @@ swap it via configure_rate_limiter(). Limits live in services.limits.
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Deque, Dict, Optional, Tuple
 
 from services.limits import RATE_LIMITS

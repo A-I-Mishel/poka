@@ -15,7 +15,7 @@ Results live in existing persisted objects (messages, briefs,
 artifacts). ``Continue in chat`` clears workflow selection alone.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from services.limits import MAX_BRIEF_QUERY_CHARS
 

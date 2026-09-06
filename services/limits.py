@@ -33,6 +33,10 @@ MAX_SEARCH_CHARS: int = 6000
 
 # Execution bounds (seconds)
 MODEL_TIMEOUT_SECONDS: float = 90.0
+# First-response deadline: a tier that emits no token within this window
+# is abandoned and the cascade falls through to the next tier. Applies to
+# every model call (classify, answer, tools, reflection, vision).
+FIRST_TOKEN_TIMEOUT_SECONDS: float = 3.0
 TOOL_TIMEOUT_SECONDS: float = 90.0
 PROBE_TIMEOUT_SECONDS: float = 20.0
 

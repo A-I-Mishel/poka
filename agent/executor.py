@@ -8,16 +8,23 @@ Design (see agent docstring for the cancellation model):
   process exit, and a caller timeout orphans only the result, never a
   thread. Never submit _call_bounded from inside a pool worker.
 - Every model invocation also charges the request budget first.
+- Model calls stream with a first-token deadline
+  (services.limits.FIRST_TOKEN_TIMEOUT_SECONDS): a tier that stays
+  silent past the deadline raises TimeoutError so the cascade fails
+  over to the next tier immediately. The remaining tokens then use the
+  regular total timeout. Models without .stream() (legacy/test
+  doubles) use plain .invoke() with the total timeout only.
 """
 
 import concurrent.futures
+import os
 import queue
 import threading
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Iterator, List, Optional
 
 from langchain_core.language_models.base import BaseLanguageModel
 
-from services.limits import MODEL_TIMEOUT_SECONDS
+from services.limits import FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
 from services.obs import event as obs_event
 
 from agent.budget import RequestBudget
@@ -76,7 +83,104 @@ def _call_bounded(fn: Callable[[], Any], timeout: float, what: str) -> Any:
     try:
         return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError as e:
+        # Since Python 3.11 concurrent.futures.TimeoutError IS the builtin
+        # TimeoutError, a worker that raised its own TimeoutError (e.g. the
+        # first-token deadline) lands here too. If the worker already
+        # finished, re-raise its real outcome to preserve the message;
+        # only a still-running worker means this call truly timed out.
+        if future.done():
+            return future.result()
         raise TimeoutError(f"{what} timed out after {timeout:g}s.") from e
+
+
+def _first_token_timeout() -> float:
+    """First-token deadline in seconds (0 disables streaming fast-fail)."""
+    try:
+        return max(
+            0.0,
+            float(
+                os.environ.get(
+                    "POKA_FIRST_TOKEN_TIMEOUT",
+                    str(FIRST_TOKEN_TIMEOUT_SECONDS),
+                )
+            ),
+        )
+    except (TypeError, ValueError):
+        return FIRST_TOKEN_TIMEOUT_SECONDS
+
+
+def _next_chunk_before(iterator: Iterator[Any], deadline: float) -> Any:
+    """Return next(iterator), raising TimeoutError past the deadline.
+
+    The pull runs on a throwaway daemon thread (never the shared pool:
+    submitting pool work from inside a pool worker would deadlock). A
+    late provider orphans only that thread's blocked read — the same
+    exposure as any bounded call that outlives its deadline.
+    """
+    box: List[Any] = []
+    errors: List[BaseException] = []
+
+    def _pull() -> None:
+        try:
+            box.append(next(iterator))
+        except BaseException as exc:  # captured, re-raised below
+            errors.append(exc)
+
+    worker = threading.Thread(target=_pull, daemon=True)
+    worker.start()
+    worker.join(deadline)
+    if worker.is_alive():
+        raise TimeoutError(
+            f"Model request first token timed out after {deadline:g}s."
+        )
+    if errors:
+        exc = errors[0]
+        if isinstance(exc, StopIteration):
+            raise RuntimeError("Model returned no output.") from exc
+        raise exc
+    return box[0]
+
+
+def _merge_stream_chunks(chunks: List[Any]) -> Any:
+    """Fold streamed message chunks into one response (text + tool calls)."""
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged = merged + chunk
+    return merged
+
+
+def _invoke_via_stream(
+    llm_instance: BaseLanguageModel,
+    messages: Any,
+    first_token_timeout: float,
+) -> Any:
+    """Stream one model call with a first-token deadline.
+
+    Returns the merged response, or None when this model cannot stream
+    (no .stream attribute: legacy/test doubles) or streaming itself
+    breaks — the caller then falls back to plain .invoke().
+    A silent provider raises TimeoutError so the cascade fails over.
+    """
+    stream_fn = getattr(llm_instance, "stream", None)
+    if not callable(stream_fn):
+        return None
+    try:
+        iterator = stream_fn(messages)
+    except Exception:
+        return None
+    try:
+        first = _next_chunk_before(iterator, first_token_timeout)
+    except TimeoutError:
+        raise
+    except Exception:
+        return None
+    chunks = [first]
+    try:
+        for chunk in iterator:
+            chunks.append(chunk)
+        return _merge_stream_chunks(chunks)
+    except Exception:
+        return None
 
 
 def _invoke_bounded(
@@ -85,12 +189,29 @@ def _invoke_bounded(
     timeout: float = MODEL_TIMEOUT_SECONDS,
     budget: Optional[RequestBudget] = None,
 ) -> Any:
-    """Invoke a model with bounded execution time, charging the budget."""
+    """Invoke a model with bounded execution time, charging the budget.
+
+    The call streams when the model supports it: silence past the
+    first-token deadline raises TimeoutError (fast tier fallback),
+    while the full answer still enjoys the total timeout. Models
+    without streaming use plain invocation under the total timeout.
+    """
     if budget is not None:
         budget.count_llm()
     provider = getattr(llm_instance, "model", type(llm_instance).__name__)
+    first_token_timeout = _first_token_timeout()
+
+    def _call() -> Any:
+        if first_token_timeout > 0:
+            streamed = _invoke_via_stream(
+                llm_instance, messages, first_token_timeout
+            )
+            if streamed is not None:
+                return streamed
+        return llm_instance.invoke(messages)
+
     try:
-        return _call_bounded(lambda: llm_instance.invoke(messages), timeout, "Model request")
+        return _call_bounded(_call, timeout, "Model request")
     except TimeoutError:
         if budget is not None:
             budget.timeouts += 1

@@ -32,7 +32,7 @@ from agent.budget import BudgetExhausted, RequestBudget
 from agent.cascade import ROUTER_STATS, _run_cascade_step, _usable_tiers
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.planning import plan_then_execute
-from agent.prompts import _as_text, _build_system_prompt, _memory_data_block, _messages_to_langchain
+from agent.prompts import _as_text, _build_system_prompt, _memory_data_block, _messages_to_langchain, strip_internal_reasoning
 from agent.reflection import reflect_and_improve, should_reflect
 from agent.router import classify_task, rule_route
 from agent.toolrun import MAX_TOOL_ROUNDS, run_tool_loop
@@ -228,6 +228,7 @@ def answer_with_fallback(
         try:
             answer_attempts: List[str] = []
             active_tier, output_simple = _run_cascade_step(_answer_direct, first, tiers, answer_attempts)
+            output_simple = strip_internal_reasoning(output_simple)
             latency_ms = int((time.time() - started_at) * 1000)
             logger.info(
                 "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d fallbacks=%d latency_ms=%d",
@@ -309,6 +310,7 @@ def answer_with_fallback(
     try:
         answer_attempts = []
         active_tier, output = _run_cascade_step(_answer_tooled, first, tiers, answer_attempts)
+        output = strip_internal_reasoning(output)
         latency_ms = int((time.time() - started_at) * 1000)
         logger.info(
             "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d search=%d "

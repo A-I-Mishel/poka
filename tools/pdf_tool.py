@@ -1,4 +1,4 @@
-from langchain.tools import tool
+﻿from langchain_core.tools import tool
 from pypdf import PdfReader
 from typing import List, Optional, Tuple
 

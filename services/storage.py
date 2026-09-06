@@ -857,7 +857,7 @@ class UserStore:
         except FileNotFoundError:
             return ""
         except PermissionError as e:
-            raise StorageError(f"Cannot read memory notes: permission denied.") from e
+            raise StorageError("Cannot read memory notes: permission denied.") from e
         except OSError as e:
             raise StorageError(f"Cannot read memory notes: storage failure ({e}).") from e
 

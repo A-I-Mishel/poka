@@ -522,6 +522,80 @@ def test_bounded_worker_exception_propagates():
     assert agent._call_bounded(lambda: "alive", timeout=30.0, what="ping") == "alive"
 
 
+def test_first_token_timeout_fails_fast(monkeypatch):
+    import time
+
+    from langchain_core.messages import AIMessageChunk
+
+    monkeypatch.setenv("POKA_FIRST_TOKEN_TIMEOUT", "0.05")
+
+    class SlowStream:
+        def stream(self, messages):
+            time.sleep(2)
+            yield AIMessageChunk(content="too late")
+
+    started = time.time()
+    with pytest.raises(TimeoutError, match="first token timed out"):
+        agent._invoke_bounded(SlowStream(), "hi", timeout=30.0)
+    # Fast fail: well under the 30s total timeout.
+    assert time.time() - started < 10
+
+
+def test_silent_tier_falls_back_to_next(monkeypatch):
+    import time
+
+    from langchain_core.messages import AIMessageChunk
+
+    monkeypatch.setenv("POKA_FIRST_TOKEN_TIMEOUT", "0.05")
+
+    class SlowStream:
+        def stream(self, messages):
+            time.sleep(2)
+            yield AIMessageChunk(content="too late")
+
+    class QuickReply:
+        def invoke(self, messages):
+            class R:
+                content = "fast answer"
+
+            return R()
+
+    name, result = agent._run_cascade_step(
+        lambda _name, llm: agent._invoke_bounded(llm, "hi"),
+        None,
+        [("slow", SlowStream), ("quick", QuickReply)],
+    )
+    assert name == "quick"
+    assert result.content == "fast answer"
+
+
+def test_invoke_only_model_skips_streaming(monkeypatch):
+    # Legacy models / test doubles without .stream() use plain invoke.
+    monkeypatch.setenv("POKA_FIRST_TOKEN_TIMEOUT", "0.05")
+
+    class InvokeOnly:
+        def invoke(self, messages):
+            class R:
+                content = "direct"
+
+            return R()
+
+    assert agent._invoke_bounded(InvokeOnly(), "hi", timeout=30.0).content == "direct"
+
+
+def test_streamed_chunks_merge_text(monkeypatch):
+    from langchain_core.messages import AIMessageChunk
+
+    monkeypatch.setenv("POKA_FIRST_TOKEN_TIMEOUT", "5")
+
+    class Chunked:
+        def stream(self, messages):
+            yield AIMessageChunk(content="Hel")
+            yield AIMessageChunk(content="lo")
+
+    assert agent._invoke_bounded(Chunked(), "hi", timeout=30.0).content == "Hello"
+
+
 def test_fallback_attempts_consume_llm_budget():
     import agent as agent_mod
 

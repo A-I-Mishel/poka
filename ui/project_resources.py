@@ -12,7 +12,7 @@ pruned files, expired artifacts, and tampered records degrade to
 absence instead of errors.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from services.storage import clean_source_record
 from services.limits import MAX_DISPLAY_NAME_CHARS

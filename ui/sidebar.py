@@ -73,11 +73,6 @@ def _project_card_html(name: str, meta: str, active: bool) -> str:
     )
 
 
-def _new_project_btn_html() -> str:
-    """New Project primary button wrapper (visual; behavior is Streamlit)."""
-    return '<div class="btn-primary">New Project</div>'
-
-
 def _artifact_sub(meta: Any) -> str:
     """One-line kind/size/date summary from a live registry record."""
     return _artifact_sub_for(
@@ -318,11 +313,8 @@ def render_sidebar() -> str:
                     unsafe_allow_html=True,
                 )
 
-        # ---- Projects (UI context only: selection for later phases.
-        # No conversation/file filtering happens here yet.) ----
-        # NEW theme header (old kept active for compat).
+        # ---- Projects (single section header; duplicate title removed) ----
         st.markdown('<p class="section-label">Projects</p>', unsafe_allow_html=True)
-        st.markdown(_section_title_html("Projects"), unsafe_allow_html=True)
 
         try:
             _project_list = _user_store().list_projects()
@@ -337,17 +329,6 @@ def render_sidebar() -> str:
             for p in _project_list
             if isinstance(p, dict) and str(p.get("id", ""))
         }
-
-        # NEW theme New Project primary button (visual wrapper + primary action).
-        st.markdown(_new_project_btn_html(), unsafe_allow_html=True)
-        if st.button(
-            "New Project",
-            key="project-create-new",
-            help="Create project",
-            type="primary",
-        ):
-            st.session_state.creating_project = True
-            st.rerun()
 
         _personal_col, _create_col = st.columns([4, 1])
         with _personal_col:
@@ -547,7 +528,6 @@ def render_sidebar() -> str:
             '<p class="section-label">Recents</p>',
             unsafe_allow_html=True,
         )
-        st.markdown(_section_title_html("Recents"), unsafe_allow_html=True)
 
         _active_bucket = (
             _active_project.get("id")

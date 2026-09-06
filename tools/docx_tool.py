@@ -1,9 +1,9 @@
-import io
+﻿import io
 import re
 import time
 import uuid
 from typing import Any, Dict, List, Tuple
-from langchain.tools import tool
+from langchain_core.tools import tool
 from docx import Document
 from docx.shared import Pt
 

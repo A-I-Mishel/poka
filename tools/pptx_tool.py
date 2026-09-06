@@ -1,8 +1,8 @@
-import io
+﻿import io
 import time
 import uuid
 from typing import Any, List
-from langchain.tools import tool
+from langchain_core.tools import tool
 from pptx import Presentation
 from pptx.util import Inches
 
@@ -216,7 +216,6 @@ def build_presentation(spec_json: str) -> str:
     if denied is not None:
         return denied
 
-    from pptx.util import Pt
     from pptx.dml.color import RGBColor
 
     overflow_notes: List[str] = []

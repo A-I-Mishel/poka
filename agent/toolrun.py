@@ -33,7 +33,7 @@ from agent.budget import BudgetExhausted, RequestBudget
 from agent.executor import _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.prompts import _as_text, _build_system_prompt
+from agent.prompts import _as_text, _build_system_prompt, strip_internal_reasoning
 
 tools: List[Any] = [web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
@@ -195,6 +195,7 @@ def run_tool_loop(
 
     def _with_sources(final_text: str) -> str:
         """Append only sources actually returned this request. Never invents."""
+        final_text = strip_internal_reasoning(final_text)
         sources: List[Dict[str, str]] = []
         seen_urls = set()
         for blob in search_blob_texts:
@@ -239,14 +240,11 @@ def run_tool_loop(
     messages.append(HumanMessage(content=user_input))
 
     bound = llm_instance.bind_tools(list(tools))
-    last_text: str = ""
     last_results: List[str] = []
     for _ in range(max_rounds):
         budget.check_time()
         response = agent._invoke_bounded(bound, messages, budget=budget)
         text: str = _as_text(response.content).strip()
-        if text:
-            last_text = text
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
         if not tool_calls:
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")

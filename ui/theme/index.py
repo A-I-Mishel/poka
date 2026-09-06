@@ -5,6 +5,7 @@ from .base import BASE_CSS
 from .chat import CHAT_CSS
 from .components import COMPONENTS_CSS
 from .layout import LAYOUT_CSS
+from .polish import POLISH_CSS
 from .responsive import RESPONSIVE_CSS
 from .streamlit import STREAMLIT_CSS
 
@@ -47,6 +48,7 @@ ALL_CSS: str = "\n".join([
     RESPONSIVE_CSS,
     STREAMLIT_CSS,
     LEGACY_CSS,
+    POLISH_CSS,
 ])
 
 # Backwards-compat alias for pre-package imports (theme.THEME_CSS).

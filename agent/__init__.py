@@ -42,11 +42,13 @@ from agent.executor import (
 )
 from agent.planning import plan_then_execute
 from agent.prompts import (
+    SYSTEM_PROMPT,
     _as_text,
     _build_system_prompt,
     _memory_data_block,
     _messages_to_langchain,
     _project_context_block,
+    strip_internal_reasoning,
     system_prompt,
 )
 from agent.providers import TIER_AGENT_GETTERS
@@ -122,7 +124,9 @@ __all__ = [
     "rule_route",
     "run_tool_loop",
     "should_reflect",
+    "strip_internal_reasoning",
     "summarize_history",
+    "SYSTEM_PROMPT",
     "system_prompt",
     "tools",
 ]

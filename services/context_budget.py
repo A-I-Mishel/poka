@@ -9,7 +9,7 @@ oldest-first (always keeping at least the newest message). Token counts
 are approximations (see services.tokens), so budgets stay conservative.
 """
 
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 from langchain_core.messages import BaseMessage
 

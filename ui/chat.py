@@ -36,7 +36,7 @@ from ui.components import (
     _artifact_sub_for,
     _format_time,
     _highlight_query,
-    _show_typing,
+    stream_markdown,
 )
 from ui.uploads import _kind_icon
 
@@ -54,6 +54,11 @@ _POKA_ASSISTANT_ID: str = (
     "<span>Poka</span>"
     "</div>"
 )
+
+# Brand avatar for assistant messages (single source; the native avatar
+# orb is styled as a gradient circle in ui/theme/chat.py). Must be an
+# emoji — Streamlit loads any other string as an image path.
+_ASSISTANT_AVATAR: str = "✨"
 
 
 # --- New theme wrappers (ui/theme/chat.py classes) ---
@@ -95,13 +100,20 @@ def _bubble_user_html(content: str) -> str:
     return f'<div class="msg-bubble-user">{content}</div>'
 
 
-def _msg_actions_html() -> str:
-    """Hover-reveal Copy + Listen actions."""
-    return (
-        '<div class="msg-actions">'
-        '<button class="msg-action-btn" type="button">Copy</button>'
-        '<button class="msg-action-btn" type="button">Listen</button>'
-        "</div>"
+def _render_msg_actions(idx: int, msg: dict) -> None:
+    """Anchor row for message actions inside the assistant bubble.
+
+    Copy/Listen are provided by the page script (COMPOSER_SCRIPT) as real
+    clipboard/speech buttons attached to this anchor — previously this
+    function rendered Streamlit Copy/Listen buttons that only showed a
+    toast without copying, duplicating the working JS buttons and leaving
+    two dead columns ([1,1,1,2] with only two filled). Emitting the anchor
+    keeps one action source with the hover-reveal styling. Edit and
+    Regenerate stay as real Streamlit buttons rendered elsewhere.
+    """
+    st.markdown(
+        f'<div class="msg-actions" data-msg-idx="{int(idx)}"></div>',
+        unsafe_allow_html=True,
     )
 
 
@@ -291,10 +303,6 @@ def _render_message_artifact(entry_id: str, entry_kind: str,
                      help="Creates a new artifact using the saved "
                      "generation settings."):
             try:
-                _before = {m.id for m in _file_store().list_outputs()}
-            except Exception:
-                _before = set()
-            try:
                 _new_meta = research_svc.regenerate_artifact(
                     _file_store(), entry_id)
             except ValueError as e:
@@ -441,16 +449,16 @@ def render_history() -> None:
 
         is_user: bool = isinstance(msg, dict) and msg.get("role") == "user"
 
-        with st.chat_message(msg["role"]):
-            # NEW theme row wrapper.
-            st.markdown(_msg_row_open(is_user), unsafe_allow_html=True)
-
-            if msg.get("role") == "assistant":
-                st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
-            elif is_user:
-                # NEW user avatar.
-                st.markdown(_avatar_user_html(), unsafe_allow_html=True)
-
+        with st.chat_message(
+            msg["role"],
+            avatar=None if is_user else _ASSISTANT_AVATAR,
+        ):
+            # Native chat layout owns avatar + bubble positioning (one
+            # st.chat_message = one row). Custom row/avatar/bubble wrapper
+            # divs were split across separate st.markdown calls, so the
+            # browser auto-closed each one and the bubbles rendered empty —
+            # the native avatar orb + content bubble are styled in
+            # ui/theme/chat.py instead. No behavior change.
             if is_user:
                 for _att in _non_image_attachments(msg):
                     st.markdown(
@@ -501,21 +509,13 @@ def render_history() -> None:
                         width=UI_IMAGE_PREVIEW_WIDTH,
                     )
 
-            # NEW theme bubbles (open/content/close so Markdown still renders).
-            if is_user:
-                st.markdown('<div class="msg-bubble-user">', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
+            # Message text renders as plain Markdown inside the native
+            # content bubble (styled in ui/theme/chat.py).
             st.markdown(
                 _highlight_query(str(msg.get("content", "")), search_text)
             )
             if not is_user:
-                # NEW hover-reveal actions INSIDE the assistant bubble.
-                # Existing copy/listen callbacks (JS poka-copy/poka-listen
-                # arming message content) stay active; these buttons are
-                # the visual hover targets sharing .msg-action-btn style.
-                st.markdown(_msg_actions_html(), unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+                _render_msg_actions(idx, msg)
             if not is_user:
                 sources_html: str = _sources_section(msg)
                 if sources_html:
@@ -556,7 +556,7 @@ def render_history() -> None:
                                 help="Save this research answer as a brief",
                             ):
                                 try:
-                                    _record = research_svc.create_brief_from_message(
+                                    research_svc.create_brief_from_message(
                                         _user_store(),
                                         st.session_state.messages,
                                         idx,
@@ -639,9 +639,6 @@ def render_history() -> None:
                 ):
                     st.session_state.do_regen = True
                     st.rerun()
-
-            # NEW: close theme row wrapper.
-            st.markdown(_msg_row_close(), unsafe_allow_html=True)
 
 
 # Intentional UI shortcuts (not AI-generated): each fills the existing
@@ -833,10 +830,7 @@ def render_assistant_response(
         ensure_current_chat_id()
 
     with st.chat_message("user"):
-        # NEW theme user row.
-        st.markdown(_msg_row_open(True), unsafe_allow_html=True)
-        st.markdown(_avatar_user_html(), unsafe_allow_html=True)
-
+        # Native layout (see render_history): no split wrapper divs.
         for _entry in [a for a in attachments if a["kind"] != "image"]:
             st.markdown(
                 _file_row_html(
@@ -853,20 +847,11 @@ def render_assistant_response(
                     width=UI_IMAGE_PREVIEW_WIDTH,
                 )
 
-        # NEW theme user bubble (open/content/close). No hover actions
-        # on user bubbles (assistant-only per spec).
-        st.markdown('<div class="msg-bubble-user">', unsafe_allow_html=True)
         st.markdown(user_text)
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown(_msg_row_close(), unsafe_allow_html=True)
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=_ASSISTANT_AVATAR):
 
-        # NEW theme assistant row.
-        st.markdown(_msg_row_open(False), unsafe_allow_html=True)
-        st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
-
-        # NEW skeleton first (~0.6s), then thinking dots while waiting.
+        # Skeleton first (~0.6s), then thinking dots while waiting.
         skeleton_box = st.empty()
         skeleton_box.markdown(_skeleton_msg_html(), unsafe_allow_html=True)
         import time as _time
@@ -890,15 +875,10 @@ def render_assistant_response(
 
             typing_box.empty()
 
-            # NEW theme assistant bubble (open/content/actions/close).
-            # Actions sit INSIDE the bubble after content; existing
-            # copy/listen callbacks (JS poka-copy/poka-listen) unchanged.
-            # NEW code fences stay plain markdown for now (see helper).
-            st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
-            st.markdown(output)
-            st.markdown(_msg_actions_html(), unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown(_msg_row_close(), unsafe_allow_html=True)
+            # Assistant reply streams as Markdown in the native content
+            # bubble; Copy/Listen anchor follows (JS poka-copy/poka-listen).
+            stream_markdown(output)
+            _render_msg_actions(len(st.session_state.messages), {"content": output})
 
             fresh_metas = _outputs_since(known_ids)
             new_artifacts = [
@@ -956,10 +936,8 @@ def _retry_last() -> None:
     retry_raw: List[Dict[str, Any]] = [
         dict(m) for m in (prior[:-1] if prior else []) if isinstance(m, dict)
     ]
-    with st.chat_message("assistant"):
-        # NEW theme assistant row + thinking dots.
-        st.markdown(_msg_row_open(False), unsafe_allow_html=True)
-        st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
+    with st.chat_message("assistant", avatar=_ASSISTANT_AVATAR):
+        # Native layout (see render_history) + thinking dots.
         typing_box = _show_thinking_dots()
         # Retry executes with the session's current toggle state (the
         # original one-shot was consumed by the failed send), so record
@@ -974,13 +952,8 @@ def _retry_last() -> None:
                 project_context=get_active_project_context(),
             )
             typing_box.empty()
-            # NEW theme assistant bubble (actions INSIDE, existing
-            # copy/listen callbacks unchanged).
-            st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
-            st.markdown(output)
-            st.markdown(_msg_actions_html(), unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown(_msg_row_close(), unsafe_allow_html=True)
+            stream_markdown(output)
+            _render_msg_actions(len(st.session_state.messages), {"content": output})
             retry_metas = _outputs_since(known_ids)
             retry_msg: Dict[str, Any] = {
                 "role": "assistant",
@@ -1063,10 +1036,8 @@ def _regenerate_last() -> None:
     regen_raw: List[Dict[str, Any]] = [
         dict(m) for m in prior[:-1] if isinstance(m, dict)
     ]
-    with st.chat_message("assistant"):
-        # NEW theme assistant row + thinking dots.
-        st.markdown(_msg_row_open(False), unsafe_allow_html=True)
-        st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
+    with st.chat_message("assistant", avatar=_ASSISTANT_AVATAR):
+        # Native layout (see render_history) + thinking dots.
         typing_box = _show_thinking_dots()
         # Same one-shot semantics as retry: the consumed intent is gone,
         # so record whatever this run actually used.
@@ -1080,13 +1051,8 @@ def _regenerate_last() -> None:
                 project_context=get_active_project_context(),
             )
             typing_box.empty()
-            # NEW theme assistant bubble (actions INSIDE, existing
-            # copy/listen callbacks unchanged).
-            st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
-            st.markdown(output)
-            st.markdown(_msg_actions_html(), unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown(_msg_row_close(), unsafe_allow_html=True)
+            stream_markdown(output)
+            _render_msg_actions(len(st.session_state.messages), {"content": output})
             regen_metas = _outputs_since(known_ids)
             regen_msg: Dict[str, Any] = {
                 "role": "assistant",

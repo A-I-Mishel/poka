@@ -10,4 +10,7 @@ pillow>=12.3.0
 pandas
 pypdf>=6.16.1,<7
 python-dotenv>=1.2.2
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.18
 # chromadb==0.5.5  # optional -- needs C++ build tools on Windows; app runs without it

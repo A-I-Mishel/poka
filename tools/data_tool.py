@@ -1,8 +1,7 @@
-from langchain.tools import tool
+﻿from langchain_core.tools import tool
 import csv
 import io
-import pandas as pd
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from services.context import get_current_user_id
 from services.files import FileStore
@@ -25,8 +24,10 @@ def _cap_output(text: str) -> str:
     return text
 
 
-def _load_csv_frame(upload_id: str) -> Tuple[Optional[pd.DataFrame], Optional[str], bool]:
+def _load_csv_frame(upload_id: str) -> Tuple[Optional["pd.DataFrame"], Optional[str], bool]:
     """Resolve + load a capped frame. Returns (df, error, truncated)."""
+    import pandas as pd
+
     user_id = get_current_user_id()
     if not user_id:
         return None, "STATUS=INVALID tool=csv: no user context, cannot resolve uploads.", False
@@ -64,7 +65,7 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional[pd.DataFrame], Optional[st
             f"STATUS=DENIED tool=csv: too many columns "
             f"({len(columns)} > {MAX_CSV_COLUMNS})."
         ), False
-    frame: Optional[pd.DataFrame] = None
+    frame: Optional["pd.DataFrame"] = None
     last_error: str = ""
     with obs_timed("csv.parse") as rec:
         for encoding in ("utf-8-sig", "utf-8", "latin-1"):
@@ -131,7 +132,7 @@ def analyze_csv(upload_id: str) -> str:
         return f"STATUS=FAILED tool=analyze_csv: {str(e)[:200]}"
 
 
-def _require_column(df: pd.DataFrame, column: str) -> Optional[str]:
+def _require_column(df: "pd.DataFrame", column: str) -> Optional[str]:
     """Validate a column name; return an error string or None."""
     if not column:
         return "STATUS=INVALID tool=csv_inspect: this operation needs a column name."
@@ -172,6 +173,8 @@ def csv_inspect(upload_id: str, operation: str, column: str = "", params: str = 
     Returns:
         The operation result text, or a STATUS= error marker.
     """
+    import pandas as pd
+
     op = str(operation or "").strip().lower()
     if op not in _CSV_OPS:
         return (
