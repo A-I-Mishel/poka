@@ -15,6 +15,7 @@ absence instead of errors.
 from typing import Any, Dict, List, Optional
 
 from services.storage import clean_source_record
+from services.limits import MAX_DISPLAY_NAME_CHARS
 
 #: Display cap for the project Sources section (deduped, first-seen).
 MAX_PROJECT_SOURCES: int = 10
@@ -104,7 +105,7 @@ def artifact_entries_in(messages: Any) -> List[Dict[str, str]]:
             if not isinstance(name, str) or not name:
                 continue
             seen.add(file_id)
-            found.append({"id": file_id, "kind": kind, "name": name[:120]})
+            found.append({"id": file_id, "kind": kind, "name": name[:MAX_DISPLAY_NAME_CHARS]})
     return found
 
 

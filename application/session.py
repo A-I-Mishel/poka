@@ -19,6 +19,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 import agent
 from services.context import get_current_user_id
 from services.files import FileStore, FileValidationError
+from services.limits import MAX_CHAT_TITLE_CHARS
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
 from services.storage import (
@@ -247,7 +248,7 @@ def archive_current_chat() -> None:
 
     record: Dict[str, Any] = {
         "id": ensure_current_chat_id(),
-        "title": title.strip()[:38],
+        "title": title.strip()[:MAX_CHAT_TITLE_CHARS],
         "messages": msgs,
     }
     try:

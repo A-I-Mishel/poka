@@ -24,7 +24,7 @@ from ui.composer import render_composer
 from ui.components import COMPOSER_SCRIPT
 from ui.sidebar import get_active_project, render_sidebar, render_workspace_view
 from ui.theme import apply_theme
-from ui.uploads import render_attachment_chip, render_attachment_menu
+from ui.uploads import render_attachment_menu
 
 
 st.set_page_config(
@@ -202,15 +202,10 @@ live_slot = st.container(key="live-response")
 
 
 # ============================================================
-# ATTACHMENT STATUS
-# ============================================================
-
-render_attachment_chip()
-
-
-# ============================================================
 # CUSTOM COMPOSER (mode toggle lives inside the bar in 7G;
-# same deep_mode state, only placement moved)
+# same deep_mode state, only placement moved.
+# NOTE: attachment chips render INSIDE the composer dock
+# (ui/composer.py slot) — do not render them here too.)
 # ============================================================
 
 plus_clicked, send_clicked = render_composer()

@@ -15,7 +15,21 @@ def render_composer() -> Tuple[bool, bool]:
     The Fast/Deep mode toggle lives here as a single pill button inside
     the bar (second cell). It flips the shared ``deep_mode`` session flag
     and reruns; answering still reads that flag via application.session.
+
+    New theme: input area is wrapped in .composer-dock (centered bottom,
+    glass blur). Attachment chips render INSIDE the dock via the slot
+    below (single render site — do not also call the chip renderer in
+    app.py; duplicate remove-keys would crash).
     """
+
+    # NEW theme dock open (glass, centered bottom).
+    st.markdown('<div class="composer-dock">', unsafe_allow_html=True)
+    # NEW: chips slot INSIDE the dock, not below it (single render site).
+    st.markdown('<div class="composer-chips">', unsafe_allow_html=True)
+    from ui.uploads import render_attachment_chip as _render_chips_in_dock
+
+    _render_chips_in_dock()
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # Keyed container gives the shell a stable wrapper class
     # (st-key-composer) for positioning; widget keys below are unchanged.
@@ -94,5 +108,8 @@ def render_composer() -> Tuple[bool, bool]:
                 key="composer_send",
                 help="Send message",
             )
+
+    # NEW theme dock close.
+    st.markdown("</div>", unsafe_allow_html=True)
 
     return plus_clicked, send_clicked

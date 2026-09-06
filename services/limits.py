@@ -87,3 +87,25 @@ UPLOAD_ID_RE: str = r"^[0-9a-f]{16}$"
 # Images are capped at 3 to match the vision fast-path batch size.
 MAX_ATTACHMENTS_PER_MESSAGE: int = 5
 MAX_IMAGE_ATTACHMENTS: int = 3
+
+# UI display truncations (single source of truth — no [:38]/[:120]/[:200]
+# literals elsewhere in production code; tests may use literals).
+MAX_CHAT_TITLE_CHARS: int = 38
+MAX_DISPLAY_NAME_CHARS: int = 120
+MAX_ERROR_SNIPPET_CHARS: int = 200
+
+# Structured presentation builder bounds (single source of truth).
+# create_pptx caps via MAX_PPTX_SLIDES / MAX_PPTX_BULLETS_PER_SLIDE above;
+# build_presentation reuses the same slide cap plus these layout caps.
+PPTX_BUILD_MAX_TITLE_CHARS: int = 80
+PPTX_BUILD_MAX_BULLET_CHARS: int = 160
+PPTX_BUILD_MAX_BULLETS_PER_CHUNK: int = 7
+PPTX_BUILD_MAX_TABLE_ROWS: int = 12
+PPTX_BUILD_MAX_TABLE_COLS: int = 6
+PPTX_BUILD_MAX_SUBTITLE_CHARS: int = 120
+
+# UI layout dimensions (Streamlit API ints — CSS strings live in
+# ui/theme/tokens.py). Single source of truth for width=/height= literals.
+UI_IMAGE_PREVIEW_WIDTH: int = 320
+UI_TEXT_AREA_HEIGHT: int = 80
+UI_HTML_SHIM_HEIGHT: int = 0

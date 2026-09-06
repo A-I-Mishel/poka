@@ -26,6 +26,12 @@ from services.memory import (
     load_structured_memory,
 )
 from services import research as research_svc
+from services.limits import (
+    MAX_CHAT_TITLE_CHARS,
+    MAX_DISPLAY_NAME_CHARS,
+    MAX_ERROR_SNIPPET_CHARS,
+    UI_TEXT_AREA_HEIGHT,
+)
 from services.storage import StorageError, clean_source_record
 from services.timeutil import utcnow_iso, utcnow_stamp
 from ui.components import (
@@ -39,6 +45,37 @@ from ui.components import (
     mem_type_label,
 )
 from ui.uploads import _kind_icon
+
+
+# --- New theme project cards (ui/theme/components.py + layout.py) ---
+# Pure HTML builders; Streamlit buttons below keep behavior/keys unchanged.
+
+
+def _section_title_html(text: str) -> str:
+    """Section header using the new theme class."""
+    return f'<p class="sidebar-section-title">{html.escape(str(text))}</p>'
+
+
+def _project_card_html(name: str, meta: str, active: bool) -> str:
+    """Project row card with icon, title, meta; active gets .active."""
+    raw_name = str(name or "Untitled")
+    safe_name = html.escape(raw_name)
+    safe_meta = html.escape(str(meta or ""))
+    first = html.escape(raw_name.strip()[:1] or "P")
+    cls = "project-card active" if active else "project-card"
+    return (
+        f'<div class="{cls}">'
+        f'<div class="project-card-icon" aria-hidden="true">{first}</div>'
+        '<div class="project-card-info">'
+        f'<div class="project-card-title">{safe_name}</div>'
+        f'<div class="project-card-meta">{safe_meta}</div>'
+        "</div></div>"
+    )
+
+
+def _new_project_btn_html() -> str:
+    """New Project primary button wrapper (visual; behavior is Streamlit)."""
+    return '<div class="btn-primary">New Project</div>'
 
 
 def _artifact_sub(meta: Any) -> str:
@@ -283,7 +320,9 @@ def render_sidebar() -> str:
 
         # ---- Projects (UI context only: selection for later phases.
         # No conversation/file filtering happens here yet.) ----
+        # NEW theme header (old kept active for compat).
         st.markdown('<p class="section-label">Projects</p>', unsafe_allow_html=True)
+        st.markdown(_section_title_html("Projects"), unsafe_allow_html=True)
 
         try:
             _project_list = _user_store().list_projects()
@@ -299,6 +338,17 @@ def render_sidebar() -> str:
             if isinstance(p, dict) and str(p.get("id", ""))
         }
 
+        # NEW theme New Project primary button (visual wrapper + primary action).
+        st.markdown(_new_project_btn_html(), unsafe_allow_html=True)
+        if st.button(
+            "New Project",
+            key="project-create-new",
+            help="Create project",
+            type="primary",
+        ):
+            st.session_state.creating_project = True
+            st.rerun()
+
         _personal_col, _create_col = st.columns([4, 1])
         with _personal_col:
             if st.button(
@@ -311,10 +361,12 @@ def render_sidebar() -> str:
                 st.session_state.renaming_idx = None
                 st.rerun()
         with _create_col:
+            # NEW: same key/label, primary type for .btn-primary language.
             if st.button(
                 "+",
                 key="project-create",
                 help="Create project",
+                type="primary",
             ):
                 st.session_state.creating_project = True
                 st.rerun()
@@ -355,6 +407,13 @@ def render_sidebar() -> str:
             _is_active: bool = (
                 _active_project is not None
                 and _active_project.get("id") == _pid
+            )
+            # NEW theme project card (visual; buttons below keep behavior).
+            # Meta uses the real created date (no invented member counts).
+            _pmeta: str = _rel_date(_project.get("created")) or "Project"
+            st.markdown(
+                _project_card_html(_pname, _pmeta, _is_active),
+                unsafe_allow_html=True,
             )
             _prow_col, _ppencil_col = st.columns([4, 1])
             with _prow_col:
@@ -465,7 +524,7 @@ def render_sidebar() -> str:
             _ctx_text: str = st.text_area(
                 "Project context",
                 value=_ctx_current,
-                height=80,
+                height=UI_TEXT_AREA_HEIGHT,
                 placeholder="e.g. FastAPI backend, prefers type hints…",
                 label_visibility="collapsed",
                 key="project-context-box",
@@ -488,6 +547,7 @@ def render_sidebar() -> str:
             '<p class="section-label">Recents</p>',
             unsafe_allow_html=True,
         )
+        st.markdown(_section_title_html("Recents"), unsafe_allow_html=True)
 
         _active_bucket = (
             _active_project.get("id")
@@ -559,7 +619,7 @@ def render_sidebar() -> str:
                     save_col, cancel_col = st.columns(2)
                     if save_col.button("Save", key=f"rename-save-{i}"):
                         st.session_state.chats[i]["title"] = (
-                            new_title.strip()[:38] or chat_title
+                            new_title.strip()[:MAX_CHAT_TITLE_CHARS] or chat_title
                         )
                         st.session_state.renaming_idx = None
                         persist()
@@ -991,9 +1051,9 @@ def render_artifacts_view() -> None:
                             _new_meta = research_svc.regenerate_artifact(
                                 _file_store(), meta.id)
                         except ValueError as e:
-                            st.toast(str(e)[:200])
+                            st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
                         except RuntimeError as e:
-                            st.toast(str(e)[:200])
+                            st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
                         except Exception:
                             st.toast("Could not regenerate this file.")
                         else:
@@ -1124,9 +1184,9 @@ def render_artifacts_view() -> None:
                             _new_meta_p = research_svc.regenerate_artifact(
                                 _file_store(), _ameta.id)
                         except ValueError as e:
-                            st.toast(str(e)[:200])
+                            st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
                         except RuntimeError as e:
-                            st.toast(str(e)[:200])
+                            st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
                         except Exception:
                             st.toast("Could not regenerate this file.")
                         else:
@@ -1320,7 +1380,7 @@ def render_research_view() -> None:
             )
             _bq = str(_sel_brief.get("query", "")).strip() or "Untitled brief"
             st.markdown(
-                f"<p><strong>{html.escape(_bq[:200])}</strong></p>",
+                f"<p><strong>{html.escape(_bq[:MAX_ERROR_SNIPPET_CHARS])}</strong></p>",
                 unsafe_allow_html=True,
             )
             _bcreated = research_svc.format_brief_created(
@@ -1387,9 +1447,9 @@ def render_research_view() -> None:
                             _user_store(), _file_store(),
                             _sel_brief.get("id", ""))
                     except ValueError as e:
-                        st.toast(str(e)[:200])
+                        st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
                     except RuntimeError as e:
-                        st.toast(str(e)[:200])
+                        st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
                     except Exception:
                         st.toast("Could not generate document.")
                     else:
@@ -1413,7 +1473,7 @@ def render_research_view() -> None:
                                 _msgs_g.append({
                                     "role": "assistant",
                                     "content": "Generated document from brief: "
-                                    f"{str(_sel_brief.get('query', ''))[:120]}",
+                                    f"{str(_sel_brief.get('query', ''))[:MAX_DISPLAY_NAME_CHARS]}",
                                     "time": utcnow_iso(),
                                     "artifacts": [{
                                         "id": _gen_meta.id,
@@ -1583,7 +1643,7 @@ def render_memory_view() -> None:
             "memory_notes",
             "",
         ),
-        height=80,
+        height=UI_TEXT_AREA_HEIGHT,
         placeholder="e.g. Prefers concise answers, works in Berlin…",
         label_visibility="collapsed",
         key="memory-box",
@@ -1722,7 +1782,7 @@ def render_workflows_view() -> None:
             try:
                 _cleaned_q = workflow_svc.validate_research_question(_wf_q)
             except ValueError as e:
-                st.toast(str(e)[:200])
+                st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
             else:
                 try:
                     _wf_msg_len = len(st.session_state.get("messages", []) or [])

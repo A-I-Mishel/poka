@@ -23,6 +23,11 @@ from application.session import (
     run_agent,
 )
 from services.files import FileValidationError
+from services.limits import (
+    MAX_DISPLAY_NAME_CHARS,
+    MAX_ERROR_SNIPPET_CHARS,
+    UI_IMAGE_PREVIEW_WIDTH,
+)
 from services.storage import StorageError, clean_source_record
 from services.timeutil import utcnow_iso
 from services import research as research_svc
@@ -49,6 +54,107 @@ _POKA_ASSISTANT_ID: str = (
     "<span>Poka</span>"
     "</div>"
 )
+
+
+# --- New theme wrappers (ui/theme/chat.py classes) ---
+# Pure HTML builders; no session state, no behavior change.
+
+
+def _msg_row_open(is_user: bool) -> str:
+    """Open a message row wrapper."""
+    cls = "msg-row-user" if is_user else "msg-row"
+    return f'<div class="{cls}">'
+
+def _msg_row_close() -> str:
+    """Close a message row wrapper."""
+    return "</div>"
+
+
+def _avatar_bot_html() -> str:
+    """Assistant avatar with status dot."""
+    return (
+        '<div class="msg-avatar-wrap">'
+        '<div class="msg-avatar-bot">✦</div>'
+        '<span class="msg-status"></span>'
+        "</div>"
+    )
+
+
+def _avatar_user_html() -> str:
+    """User avatar."""
+    return '<div class="msg-avatar-user">You</div>'
+
+
+def _bubble_assistant_html(content: str) -> str:
+    """Wrap assistant content in its bubble."""
+    return f'<div class="msg-bubble-assistant">{content}</div>'
+
+
+def _bubble_user_html(content: str) -> str:
+    """Wrap user content in its bubble."""
+    return f'<div class="msg-bubble-user">{content}</div>'
+
+
+def _msg_actions_html() -> str:
+    """Hover-reveal Copy + Listen actions."""
+    return (
+        '<div class="msg-actions">'
+        '<button class="msg-action-btn" type="button">Copy</button>'
+        '<button class="msg-action-btn" type="button">Listen</button>'
+        "</div>"
+    )
+
+
+def _code_block_html(lang: str, code: str) -> str:
+    """Code block with header dots + language + body.
+
+    NOTE: triple-backtick fences in assistant markdown stay as plain
+    markdown for now (chrome added later); this helper builds the
+    spec chrome when explicitly used.
+    """
+    safe_lang = html.escape(str(lang or ""))
+    safe_code = html.escape(str(code or ""))
+    return (
+        '<div class="code-block">'
+        '<div class="code-header">'
+        '<span class="code-dot code-dot-red"></span>'
+        '<span class="code-dot code-dot-yellow"></span>'
+        '<span class="code-dot code-dot-green"></span>'
+        f'<span class="code-lang">{safe_lang}</span>'
+        "</div>"
+        f'<div class="code-body">{safe_code}</div>'
+        "</div>"
+    )
+
+
+def _thinking_dots_html() -> str:
+    """Three animated thinking dots (replaces plain Thinking...)."""
+    return (
+        '<div class="thinking-dots" role="status" aria-label="Poka is thinking">'
+        "<span></span><span></span><span></span>"
+        "</div>"
+    )
+
+
+def _skeleton_msg_html() -> str:
+    """Skeleton loading placeholder for generation state."""
+    return (
+        '<div class="skeleton-msg" aria-hidden="true">'
+        '<div style="display:flex;gap:12px;align-items:center">'
+        '<div class="skeleton-avatar"></div>'
+        '<div style="flex:1">'
+        '<div class="skeleton-line" style="width:85%"></div>'
+        '<div class="skeleton-line" style="width:60%"></div>'
+        '<div class="skeleton-line" style="width:40%"></div>'
+        "</div></div></div>"
+    )
+
+
+def _show_thinking_dots() -> Any:
+    """Show the new thinking-dots indicator; caller empties the box."""
+    box = st.empty()
+    box.markdown(_thinking_dots_html(), unsafe_allow_html=True)
+    return box
 
 
 def _file_row_html(kind: str, name: str) -> str:
@@ -124,7 +230,7 @@ def _linked_artifacts(msg: Any) -> list:
             clean.append({
                 "id": entry["id"],
                 "kind": entry["kind"],
-                "name": entry["name"][:120],
+                "name": entry["name"][:MAX_DISPLAY_NAME_CHARS],
             })
     return clean[:8]
 
@@ -192,9 +298,9 @@ def _render_message_artifact(entry_id: str, entry_kind: str,
                 _new_meta = research_svc.regenerate_artifact(
                     _file_store(), entry_id)
             except ValueError as e:
-                st.toast(str(e)[:200])
+                st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
             except RuntimeError as e:
-                st.toast(str(e)[:200])
+                st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
             except Exception:
                 st.toast("Could not regenerate this file.")
             else:
@@ -336,9 +442,14 @@ def render_history() -> None:
         is_user: bool = isinstance(msg, dict) and msg.get("role") == "user"
 
         with st.chat_message(msg["role"]):
+            # NEW theme row wrapper.
+            st.markdown(_msg_row_open(is_user), unsafe_allow_html=True)
 
             if msg.get("role") == "assistant":
-                st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
+                st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
+            elif is_user:
+                # NEW user avatar.
+                st.markdown(_avatar_user_html(), unsafe_allow_html=True)
 
             if is_user:
                 for _att in _non_image_attachments(msg):
@@ -358,7 +469,7 @@ def render_history() -> None:
             ):
                 st.image(
                     str(msg["image"]),
-                    width=320,
+                    width=UI_IMAGE_PREVIEW_WIDTH,
                 )
                 _shown_images = {str(msg["image"])}
             else:
@@ -387,12 +498,24 @@ def render_history() -> None:
                     _shown_images.add(_resolved_str)
                     st.image(
                         _resolved_str,
-                        width=320,
+                        width=UI_IMAGE_PREVIEW_WIDTH,
                     )
 
+            # NEW theme bubbles (open/content/close so Markdown still renders).
+            if is_user:
+                st.markdown('<div class="msg-bubble-user">', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
             st.markdown(
                 _highlight_query(str(msg.get("content", "")), search_text)
             )
+            if not is_user:
+                # NEW hover-reveal actions INSIDE the assistant bubble.
+                # Existing copy/listen callbacks (JS poka-copy/poka-listen
+                # arming message content) stay active; these buttons are
+                # the visual hover targets sharing .msg-action-btn style.
+                st.markdown(_msg_actions_html(), unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
             if not is_user:
                 sources_html: str = _sources_section(msg)
                 if sources_html:
@@ -441,9 +564,9 @@ def render_history() -> None:
                                             "current_project_id", None),
                                     )
                                 except ValueError as e:
-                                    st.toast(str(e)[:200])
+                                    st.toast(str(e)[:MAX_ERROR_SNIPPET_CHARS])
                                 except StorageError as e:
-                                    st.toast(f"Could not save brief: {e}"[:200])
+                                    st.toast(f"Could not save brief: {e}"[:MAX_ERROR_SNIPPET_CHARS])
                                 except Exception:
                                     st.toast("Could not save brief.")
                                 else:
@@ -516,6 +639,9 @@ def render_history() -> None:
                 ):
                     st.session_state.do_regen = True
                     st.rerun()
+
+            # NEW: close theme row wrapper.
+            st.markdown(_msg_row_close(), unsafe_allow_html=True)
 
 
 # Intentional UI shortcuts (not AI-generated): each fills the existing
@@ -707,6 +833,9 @@ def render_assistant_response(
         ensure_current_chat_id()
 
     with st.chat_message("user"):
+        # NEW theme user row.
+        st.markdown(_msg_row_open(True), unsafe_allow_html=True)
+        st.markdown(_avatar_user_html(), unsafe_allow_html=True)
 
         for _entry in [a for a in attachments if a["kind"] != "image"]:
             st.markdown(
@@ -721,16 +850,30 @@ def render_assistant_response(
             if os.path.exists(_path):
                 st.image(
                     _path,
-                    width=320,
+                    width=UI_IMAGE_PREVIEW_WIDTH,
                 )
 
+        # NEW theme user bubble (open/content/close). No hover actions
+        # on user bubbles (assistant-only per spec).
+        st.markdown('<div class="msg-bubble-user">', unsafe_allow_html=True)
         st.markdown(user_text)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(_msg_row_close(), unsafe_allow_html=True)
 
     with st.chat_message("assistant"):
 
-        st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
+        # NEW theme assistant row.
+        st.markdown(_msg_row_open(False), unsafe_allow_html=True)
+        st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
 
-        typing_box = _show_typing()
+        # NEW skeleton first (~0.6s), then thinking dots while waiting.
+        skeleton_box = st.empty()
+        skeleton_box.markdown(_skeleton_msg_html(), unsafe_allow_html=True)
+        import time as _time
+
+        _time.sleep(0.6)
+        skeleton_box.empty()
+        typing_box = _show_thinking_dots()
 
         try:
 
@@ -747,7 +890,15 @@ def render_assistant_response(
 
             typing_box.empty()
 
+            # NEW theme assistant bubble (open/content/actions/close).
+            # Actions sit INSIDE the bubble after content; existing
+            # copy/listen callbacks (JS poka-copy/poka-listen) unchanged.
+            # NEW code fences stay plain markdown for now (see helper).
+            st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
             st.markdown(output)
+            st.markdown(_msg_actions_html(), unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown(_msg_row_close(), unsafe_allow_html=True)
 
             fresh_metas = _outputs_since(known_ids)
             new_artifacts = [
@@ -784,6 +935,10 @@ def render_assistant_response(
 
         except Exception as e:
 
+            try:
+                skeleton_box.empty()
+            except Exception:
+                pass
             typing_box.empty()
 
             st.session_state.last_failed = send_text
@@ -802,8 +957,10 @@ def _retry_last() -> None:
         dict(m) for m in (prior[:-1] if prior else []) if isinstance(m, dict)
     ]
     with st.chat_message("assistant"):
-        st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
-        typing_box = _show_typing()
+        # NEW theme assistant row + thinking dots.
+        st.markdown(_msg_row_open(False), unsafe_allow_html=True)
+        st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
+        typing_box = _show_thinking_dots()
         # Retry executes with the session's current toggle state (the
         # original one-shot was consumed by the failed send), so record
         # whatever this retry actually used — never the failed attempt's.
@@ -817,7 +974,13 @@ def _retry_last() -> None:
                 project_context=get_active_project_context(),
             )
             typing_box.empty()
+            # NEW theme assistant bubble (actions INSIDE, existing
+            # copy/listen callbacks unchanged).
+            st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
             st.markdown(output)
+            st.markdown(_msg_actions_html(), unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown(_msg_row_close(), unsafe_allow_html=True)
             retry_metas = _outputs_since(known_ids)
             retry_msg: Dict[str, Any] = {
                 "role": "assistant",
@@ -901,8 +1064,10 @@ def _regenerate_last() -> None:
         dict(m) for m in prior[:-1] if isinstance(m, dict)
     ]
     with st.chat_message("assistant"):
-        st.markdown(_POKA_ASSISTANT_ID, unsafe_allow_html=True)
-        typing_box = _show_typing()
+        # NEW theme assistant row + thinking dots.
+        st.markdown(_msg_row_open(False), unsafe_allow_html=True)
+        st.markdown(_avatar_bot_html(), unsafe_allow_html=True)
+        typing_box = _show_thinking_dots()
         # Same one-shot semantics as retry: the consumed intent is gone,
         # so record whatever this run actually used.
         regen_search = bool(st.session_state.get("force_search", False))
@@ -915,7 +1080,13 @@ def _regenerate_last() -> None:
                 project_context=get_active_project_context(),
             )
             typing_box.empty()
+            # NEW theme assistant bubble (actions INSIDE, existing
+            # copy/listen callbacks unchanged).
+            st.markdown('<div class="msg-bubble-assistant">', unsafe_allow_html=True)
             st.markdown(output)
+            st.markdown(_msg_actions_html(), unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown(_msg_row_close(), unsafe_allow_html=True)
             regen_metas = _outputs_since(known_ids)
             regen_msg: Dict[str, Any] = {
                 "role": "assistant",
