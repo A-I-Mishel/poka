@@ -1,32 +1,19 @@
----
-title: Poka
-emoji: 🐞
-colorFrom: purple
-colorTo: indigo
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Poka — Smart Task Agent
 
-Poka is a multi-purpose AI assistant (Streamlit web app) for students and
-professionals: chat with file attachments, web research with citations,
-PDF/CSV analysis, PowerPoint and Word generation, and persistent
-per-user memory — backed by a cascading multi-model agent.
+Poka is a multi-purpose AI assistant (React web app + FastAPI backend)
+for students and professionals: chat with file attachments, web
+research with citations, PDF/CSV analysis, PowerPoint and Word
+generation, and persistent per-user memory — backed by a cascading
+multi-model agent.
 
 ## Architecture
 
 ```
-app.py  (composition root: bootstrap, section order, send flow)
+frontend/  (React + Vite UI, deployed on Vercel)
   |
-  +-- ui/chat.py         (history render, send/edit/retry flows)
-  +-- ui/sidebar.py      (brand, status, chats, memory, files, stats)
-  +-- ui/uploads.py      (attachment chip, plus-menu pickers)
-  +-- ui/composer.py     (input row; returns button clicks)
-  +-- ui/components.py   (formatting, badges, export, page script)
-  +-- ui/theme.py        (visual theme)
-  +-- application/session.py  (stores, agent calls, session bootstrap)
+  v  (HTTP /api, VITE_API_URL points at the backend)
+backend/  (FastAPI: chat, chats, uploads, artifacts, projects,
+           briefs, memory, meta routers + chatflow pipeline)
   |
   v
 agent/  (budget, executor, prompts, providers, cascade, router,
@@ -44,21 +31,27 @@ config.py  (tier construction, temperatures; secrets via services.secrets)
 memory_engine.py  (compat alias of services.memory)
 ```
 
-Dependency flow: UI → application → agent → services/tools →
-storage/providers. UI sections never touch the filesystem directly;
-tools only accept opaque upload IDs; every model call goes through the
-shared bounded executor; memory and tool output are always labeled
-untrusted data in prompts. `import agent` attribute calls (not
-from-imports) at UI seams keep test doubles effective.
+Dependency flow: frontend → backend → agent → services/tools →
+storage/providers. Tools only accept opaque upload IDs; every model
+call goes through the shared bounded executor; memory and tool output
+are always labeled untrusted data in prompts.
 
 ## Installation
 
-Requires Python 3.12.
+Requires Python 3.12 and Node 24.
 
 ```bash
 pip install -r requirements.txt
-pip install pytest          # for tests only
-streamlit run app.py        # open http://localhost:8501
+uvicorn backend.main:app --port 8000   # API on http://localhost:8000
+cd frontend && npm install && npm run dev   # UI on http://localhost:5173
+```
+
+Run the test suite (stubbed models, temp directories — no API quota
+spent):
+
+```bash
+pip install pytest
+python -m pytest tests/ -q
 ```
 
 ## Environment variables / secrets
@@ -71,21 +64,23 @@ streamlit run app.py        # open http://localhost:8501
 | `POKA_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
 | `POKA_USER_ID` | no | Pin a stable local/dev identity |
 | `POKA_DATA_DIR` | no (`data/`) | Storage root override (tests use tmp) |
+| `POKA_FRONTEND_ORIGIN` | on the API host | Allowed CORS origin(s) of the UI |
+| `VITE_API_URL` | on Vercel | Public URL of the API (empty = same origin) |
 
-Locally these live in `.env` (gitignored). On Streamlit Cloud put them
-under Settings → Secrets. Never commit keys; `.env` and
-`.streamlit/secrets.toml` are gitignored.
+Locally these live in `.env` (gitignored). On Render/Vercel put them
+under Environment Variables. Never commit keys.
 
 ## Authentication modes
 
-- **open** (default): local/dev/trusted use. Identity chain is
-  `POKA_USER_ID` → logged-in OIDC viewer → browser link token →
-  ephemeral session. Link tokens are anonymous, never equivalent to login.
-- **private**: only `POKA_USER_ID`, logged-in OIDC viewers, or holders of
-  a `POKA_ACCESS_TOKENS` token (sign-in form or `?token=` URL) are
-  admitted. Everyone else sees the sign-in screen. No password database:
-  tokens are compared with `secrets.compare_digest`, never logged, and
-  only a hash-derived user ID is persisted.
+- **open** (default): local/dev/trusted use. Identity is `POKA_USER_ID`
+  when set, else a per-request ephemeral id. Clients may send
+  `Authorization: Bearer <token>`; it is verified only against
+  `POKA_ACCESS_TOKENS`.
+- **private**: only `POKA_USER_ID` or holders of a `POKA_ACCESS_TOKENS`
+  token (sent as `Authorization: Bearer <token>`) are admitted.
+  Everyone else gets HTTP 401. Tokens are compared with
+  `secrets.compare_digest`, never logged, and only a hash-derived user
+  ID is persisted.
 
 ## Model configuration
 
@@ -96,7 +91,7 @@ Cascade (first live tier wins, failed tiers cool down):
 4. Gemini 3.5 Flash (Google fallback)
 
 Per-task temperatures apply when a tier answers (creative 0.85,
-factual/research lower). Deep Mode (sidebar toggle) enables planning +
+factual/research lower). Deep Mode (UI toggle) enables planning +
 self-reflection at the cost of extra calls.
 
 ## Tools
@@ -137,12 +132,15 @@ failures raise instead of masquerading as corruption.
 
 ## Deployment
 
-Streamlit Community Cloud: push `main`, set entry point `app.py`,
-Python 3.12, add secrets. The free tier sleeps when idle and its disk
-is ephemeral (chats/files persist on machines with real disks).
-Public deployments must set `POKA_AUTH_MODE=private` plus
-`POKA_ACCESS_TOKENS`: the default `open` mode is for local/dev/trusted
-use only.
+- **API**: Render via `render.yaml` blueprint
+  (`uvicorn backend.main:app`), or any Python host / the `Dockerfile`
+  (builds the React UI and serves it from the API).
+- **UI**: Vercel from `frontend/` (Vite). Set `VITE_API_URL` to the
+  public API URL and `POKA_FRONTEND_ORIGIN` on the API host to the
+  Vercel URL.
+- Public deployments must set `POKA_AUTH_MODE=private` plus
+  `POKA_ACCESS_TOKENS`: the default `open` mode is for local/dev/
+  trusted use only.
 
 ## Tests
 
@@ -162,11 +160,7 @@ audit (`pip-audit`) is blocking — a known vulnerability fails CI.
   engine that isn't bundled.
 - Vision works on Gemini tiers; other tiers answer from text with an
   honest inability note.
-- Link-token identity is shareable by URL by design (open mode only).
 - In-memory rate limiter is per-process (documented; Redis-swappable).
 - Provider HTTP calls carry native timeouts; a hung sync SDK call still
   occupies one shared pool thread until it returns, but callers always
   regain control at the deadline (see `agent/executor.py`).
-- `st.components.v1.html` (inline composer script) is deprecated upstream
-  with removal after 2026-06-01; migration is intentionally deferred
-  because `st.iframe` only embeds URLs and cannot run the inline script.

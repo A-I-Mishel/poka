@@ -1,10 +1,9 @@
 """Framework-free chat pipeline backing send + stream endpoints.
 
-Mirrors ui/chat.render_assistant_response without any Streamlit
-dependency: attachment hints, history building, agent invocation,
-provenance capture, artifact linkage, and persistence. The React
-frontend owns transient UI state; this module owns everything the
-old page flow did with st.session_state.
+Attachment hints, history building, agent invocation, provenance
+capture, artifact linkage, and persistence. The React frontend owns
+transient UI state; this module owns everything server-side per
+request, bound to the authenticated user.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,7 +31,7 @@ from services.timeutil import utcnow_iso
 from backend.deps import UserContext
 
 
-# --- attachment hints (same contract as the Streamlit composer) ---
+# --- attachment hints (same contract as the React composer) ---
 
 def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int) -> str:
     """Tool hint for one staged attachment (ID-only, never paths)."""
@@ -388,8 +387,8 @@ def archive_current(current: List[Dict[str, Any]],
     """Split the open conversation into a history record (pure logic).
 
     Returns (record, empty_current). Raises ValueError when empty.
-    The caller owns the open conversation's id (like the Streamlit
-    session's current_chat_id): pass it back to keep identity stable
+    The caller owns the open conversation's id (like a client-side
+    current-chat id): pass it back to keep identity stable
     across open/archive cycles, else a fresh id is minted.
     """
     msgs = [dict(m) for m in current if isinstance(m, dict)]

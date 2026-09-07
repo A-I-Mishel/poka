@@ -108,8 +108,8 @@ PPTX_BUILD_MAX_TABLE_ROWS: int = 12
 PPTX_BUILD_MAX_TABLE_COLS: int = 6
 PPTX_BUILD_MAX_SUBTITLE_CHARS: int = 120
 
-# UI layout dimensions (Streamlit API ints — CSS strings live in
-# ui/theme/tokens.py). Single source of truth for width=/height= literals.
+# UI layout hints for API consumers (image preview width, composer height).
+# Single source of truth for width=/height= literals.
 UI_IMAGE_PREVIEW_WIDTH: int = 320
 UI_TEXT_AREA_HEIGHT: int = 80
 UI_HTML_SHIM_HEIGHT: int = 0

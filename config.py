@@ -67,7 +67,7 @@ def _cached_client(tier: str, temperature: float, key: str, make: Callable[[], A
 
 
 def _get_secret(name: str) -> Optional[str]:
-    """Read a secret from Streamlit Cloud secrets first, then env/.env.
+    """Read a secret from env/.env.
 
     Thin wrapper over the central services.secrets seam (kept for
     backward compatibility).

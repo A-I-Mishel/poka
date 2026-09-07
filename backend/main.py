@@ -4,8 +4,7 @@ Run (from the repo root)::
 
     uvicorn backend.main:app --port 8000
 
-The React frontend (frontend/) talks to this API; the Streamlit app
-(app.py) keeps working untouched during the transition.
+The React frontend (frontend/) talks to this API.
 """
 
 import os

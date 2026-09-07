@@ -20,7 +20,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
       - name: Compile all Python files
-        run: python -m compileall -q app.py config.py memory_engine.py store.py services tools ui tests application agent
+        run: python -m compileall -q backend config.py memory_engine.py services tools agent tests
       - name: Run tests (mocked providers, no API calls)
         run: python -m pytest tests/ -q
 

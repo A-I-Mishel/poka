@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from services.limits import MAX_BRIEF_EXCERPT_CHARS, MAX_BRIEF_QUERY_CHARS
 from services.storage import clean_generation_spec, clean_source_record, is_valid_id
 
-#: Cap for the sidebar Research list (compact, Streamlit-friendly).
+#: Cap for the visible Research list (compact).
 MAX_VISIBLE_BRIEFS: int = 8
 
 

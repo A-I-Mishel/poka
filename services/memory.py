@@ -28,9 +28,9 @@ MEMORY_FILE: str = "structured_memory.json"
 MAX_FACTS: int = 50
 MAX_PROCESSED_HASHES: int = 300
 
-# Memory directory is thread-local: Streamlit serves each session on its
-# own thread and app.py re-binds it on every run, so concurrent users can
-# never observe or overwrite each other's memory file through this module.
+# Memory directory is thread-local: the API binds it per request to the
+# authenticated user's vault, so concurrent users can never observe or
+# overwrite each other's memory file through this module.
 # _MEMORY_DIR remains as the process-wide default for scripts/tests.
 _MEMORY_DIR: str = ""
 _state = threading.local()

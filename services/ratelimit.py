@@ -39,7 +39,7 @@ class RateLimiter:
 class MemoryRateLimiter(RateLimiter):
     """Sliding-window limiter kept in process memory.
 
-    Correct for single-process deployments (Streamlit default). For
+    Correct for single-process deployments. For
     multi-process setups each process enforces independently, which is
     fail-open on counts — documented, acceptable for abuse friction,
     not for hard billing.
