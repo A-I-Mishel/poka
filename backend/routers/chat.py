@@ -73,11 +73,11 @@ def _word_chunks(text: str, max_chunks: int = 40):
 def _stream_delay() -> float:
     """Per-chunk pause so delivery reads as streaming, not a dump.
 
-    Same knob as the old UI's typewriter (POKA_STREAM_DELAY, seconds;
+    Same knob as the old UI's typewriter (PLUTO_STREAM_DELAY, seconds;
     0 disables pacing). Short answers render instantly regardless.
     """
     try:
-        return max(0.0, float(os.environ.get("POKA_STREAM_DELAY", "0.025")))
+        return max(0.0, float(os.environ.get("PLUTO_STREAM_DELAY", "0.025")))
     except (TypeError, ValueError):
         return 0.025
 

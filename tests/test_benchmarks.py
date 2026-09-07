@@ -26,9 +26,9 @@ def _isolated_cwd(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POKA_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("POKA_USER_ID", "bench-user")
-    monkeypatch.delenv("POKA_AUTH_MODE", raising=False)
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PLUTO_USER_ID", "bench-user")
+    monkeypatch.delenv("PLUTO_AUTH_MODE", raising=False)
     ctx.set_current_user_id("bench-user")
     yield
     ctx.set_current_user_id(None)

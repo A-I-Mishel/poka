@@ -12,7 +12,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Optional
 
-logger = logging.getLogger("poka.obs")
+logger = logging.getLogger("pluto.obs")
 
 _FORBIDDEN_HINTS = (
     "api_key",

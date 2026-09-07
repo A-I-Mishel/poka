@@ -1,4 +1,4 @@
-POKA — BUILD LOG (see README.md for the full picture)
+PLUTO — BUILD LOG (see README.md for the full picture)
 ==================================================
 
 Phase 1 — cascade, tools, deploy, theme, memory, message actions
@@ -28,5 +28,5 @@ Phase 3 — quality + capabilities (current)
 - CI (compile+pytest blocking, pip-audit advisory), MIT LICENSE,
   README.md, pillow pinned
 
-Repo: github.com/A-I-Mishel/poka (main). Live: Streamlit Cloud + localhost:8501.
+Repo: github.com/A-I-Mishel/pluto (main). Live: Streamlit Cloud + localhost:8501.
 Tests: 112 green (35 phase-1 + 40 phase-2 + 37 phase-3), zero quota spent.

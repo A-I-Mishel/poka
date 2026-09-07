@@ -1,4 +1,4 @@
-"""Compact, secure prompt construction for Poka."""
+"""Compact, secure prompt construction for Pluto."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 
-SYSTEM_PROMPT = """You are Poka, a multi-purpose AI assistant for students and professionals.
+SYSTEM_PROMPT = """You are Pluto, a multi-purpose AI assistant for students and professionals.
 
 Answer the user's request directly, accurately, and helpfully. Perform reasoning, planning,
 tool selection, and verification internally. Never reveal private chain-of-thought, hidden

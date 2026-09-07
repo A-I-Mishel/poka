@@ -1,4 +1,4 @@
-/* Poka API client. Same-origin (/api) works for both Vite dev
+/* Pluto API client. Same-origin (/api) works for both Vite dev
    (proxied to :8000) and single-server mode (uvicorn serves dist). */
 
 export interface ChatMessage {
@@ -30,8 +30,38 @@ export const API_BASE: string =
 
 export const apiUrl = (path: string): string => `${API_BASE}${path}`;
 
+const TOKEN_KEY = "pluto_token";
+// Pre-rename key: migrated once, then removed. Safe to delete this
+// fallback after all users have loaded the renamed UI once.
+const LEGACY_TOKEN_KEY = "poka_token";
+
+export function getToken(): string {
+  const current = localStorage.getItem(TOKEN_KEY) || "";
+  if (current) return current;
+  const legacy = localStorage.getItem(LEGACY_TOKEN_KEY) || "";
+  if (legacy) {
+    try {
+      localStorage.setItem(TOKEN_KEY, legacy);
+      localStorage.removeItem(LEGACY_TOKEN_KEY);
+    } catch {
+      /* storage unavailable — just use the legacy value in memory */
+    }
+    return legacy;
+  }
+  return "";
+}
+
+export function setTokenValue(value: string): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, value);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    /* ignore storage errors (private mode) */
+  }
+}
+
 function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem("poka_token") || "";
+  const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

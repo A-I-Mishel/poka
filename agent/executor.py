@@ -74,7 +74,7 @@ class _BoundedExecutor:
         return future
 
 
-_bounded_pool = _BoundedExecutor(_BOUNDED_MAX_WORKERS, "poka-bounded")
+_bounded_pool = _BoundedExecutor(_BOUNDED_MAX_WORKERS, "pluto-bounded")
 
 
 def _call_bounded(fn: Callable[[], Any], timeout: float, what: str) -> Any:
@@ -100,7 +100,7 @@ def _first_token_timeout() -> float:
             0.0,
             float(
                 os.environ.get(
-                    "POKA_FIRST_TOKEN_TIMEOUT",
+                    "PLUTO_FIRST_TOKEN_TIMEOUT",
                     str(FIRST_TOKEN_TIMEOUT_SECONDS),
                 )
             ),

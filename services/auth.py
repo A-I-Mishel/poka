@@ -1,12 +1,12 @@
 """Authentication modes and access-token gate.
 
-Modes (POKA_AUTH_MODE, default "open"):
+Modes (PLUTO_AUTH_MODE, default "open"):
 - open:    local/dev/trusted use. Identity chain: env identity, else a
            per-request ephemeral id.
 - private: public deployment. ONLY the env identity or holders of a
            configured access token are admitted.
 
-Access tokens (POKA_ACCESS_TOKENS, comma-separated, via env): shared
+Access tokens (PLUTO_ACCESS_TOKENS, comma-separated, via env): shared
 secrets verified with secrets.compare_digest. A verified token yields
 a stable pseudonymous user id (sha256 of the token), so holders keep
 their own isolated data and revocation = rotating the secret. Raw
@@ -42,7 +42,7 @@ def _configured_tokens() -> list:
     Read through the central secret seam so tokens work identically
     wherever the app runs.
     """
-    raw = get_secret("POKA_ACCESS_TOKENS", "") or ""
+    raw = get_secret("PLUTO_ACCESS_TOKENS", "") or ""
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 

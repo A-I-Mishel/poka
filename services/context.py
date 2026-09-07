@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from typing import Optional
 
 _current_user_id: ContextVar[Optional[str]] = ContextVar(
-    "poka_user_id", default=None
+    "pluto_user_id", default=None
 )
 
 

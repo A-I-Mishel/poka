@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { api, apiUrl, ChatMessage } from "./api";
+import { api, apiUrl, ChatMessage, getToken, setTokenValue } from "./api";
 import "./theme.css";
 
 /* ---------------- icons (from approved design) ---------------- */
@@ -192,7 +192,7 @@ type Section = "research" | "memory" | "files" | "artifacts" | "sources" | "stat
 
 const SECTION_TITLES: Record<Section, { title: string; sub: string }> = {
   research: { title: "Research", sub: "Saved research reports from search-backed answers." },
-  memory: { title: "Memory", sub: "Things Poka remembers across conversations. Hover a card to forget it." },
+  memory: { title: "Memory", sub: "Things Pluto remembers across conversations. Hover a card to forget it." },
   files: { title: "Files", sub: "Documents shared in this workspace." },
   artifacts: { title: "Artifacts", sub: "Generated documents, code, and visuals." },
   sources: { title: "Sources", sub: "Cited sources from briefs and the open conversation." },
@@ -236,7 +236,7 @@ export default function App() {
   const [briefs, setBriefs] = useState<any[]>([]);
   const [facts, setFacts] = useState<any[]>([]);
   const [researchFilter, setResearchFilter] = useState("");
-  const [token, setToken] = useState(() => localStorage.getItem("poka_token") || "");
+  const [token, setToken] = useState(() => getToken());
   const [showToken, setShowToken] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -456,7 +456,7 @@ export default function App() {
   async function truncateAndEdit(index: number, text: string) {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      const stored = localStorage.getItem("poka_token") || "";
+      const stored = getToken();
       if (stored) headers.Authorization = `Bearer ${stored}`;
       const res = await fetch(apiUrl("/api/chats/truncate"), {
         method: "POST",
@@ -544,11 +544,11 @@ export default function App() {
   }
 
   function exportChat() {
-    const lines = [`# Poka Chat Export\n`, `Exported: ${new Date().toLocaleString()}\n\n`];
+    const lines = [`# Pluto Chat Export\n`, `Exported: ${new Date().toLocaleString()}\n\n`];
     for (const m of messages) {
-      lines.push(`## ${m.role === "user" ? "You" : "Poka"}\n\n${m.content}\n\n---\n\n`);
+      lines.push(`## ${m.role === "user" ? "You" : "Pluto"}\n\n${m.content}\n\n---\n\n`);
     }
-    downloadBlob("poka-chat.md", lines.join(""));
+    downloadBlob("pluto-chat.md", lines.join(""));
   }
 
   const filteredChats = chats.filter((c) =>
@@ -559,7 +559,7 @@ export default function App() {
     ? "Ask something complex — take your time…"
     : forceSearch
       ? "Search the web or ask anything…"
-      : "Message Poka…";
+      : "Message Pluto…";
 
   return (
     <div className="app">
@@ -569,7 +569,7 @@ export default function App() {
             <BugIcon size={16} />
           </div>
           <div>
-            <div className="logo-name">Poka</div>
+            <div className="logo-name">Pluto</div>
             <div className="logo-sub">AI assistant</div>
           </div>
         </div>
@@ -773,7 +773,7 @@ export default function App() {
               value={token}
               onChange={(e) => {
                 setToken(e.target.value);
-                localStorage.setItem("poka_token", e.target.value);
+                setTokenValue(e.target.value);
               }}
             />
           )}
@@ -1200,7 +1200,7 @@ export default function App() {
                 />
               </div>
               <div className="disclaimer">
-                Poka can make mistakes. Consider checking important information.
+                Pluto can make mistakes. Consider checking important information.
               </div>
             </div>
           </div>
@@ -1364,7 +1364,7 @@ function PanelBody(props: {
       <>
         <div className="panel-head">
           <h2>Memory</h2>
-          <p>Things Poka remembers across conversations. Hover a card to forget it.</p>
+          <p>Things Pluto remembers across conversations. Hover a card to forget it.</p>
         </div>
         <div className="card-list">
           {facts.length === 0 && <p className="empty-note">Nothing remembered yet.</p>}

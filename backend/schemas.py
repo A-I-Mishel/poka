@@ -1,4 +1,4 @@
-"""Pydantic contracts for the Poka API (v1)."""
+"""Pydantic contracts for the Pluto API (v1)."""
 
 from typing import Any, Dict, List, Optional
 

@@ -8,7 +8,7 @@ Identity resolution (no Streamlit involved):
 1. ``Authorization: Bearer <token>`` verified via services.auth when the
    caller presents one (works in every auth mode).
 2. Otherwise, in non-private mode, the local identity chain
-   (env POKA_USER_ID, OIDC, ephemeral) — same as the desktop app.
+   (env PLUTO_USER_ID, OIDC, ephemeral) — same as the desktop app.
 3. Otherwise HTTP 401.
 """
 

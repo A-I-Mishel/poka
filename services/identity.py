@@ -1,7 +1,7 @@
 """User identity abstraction with a replaceable provider model.
 
 Resolution order:
-1. POKA_USER_ID environment variable (local dev, tests, operators).
+1. PLUTO_USER_ID environment variable (local dev, tests, operators).
 2. Fresh random token (per-request ephemeral identity).
 
 Source 1 is stable across sessions. Source 2 is per-visitor until the
@@ -33,12 +33,12 @@ class AuthRequired(Exception):
 
 def auth_mode() -> str:
     """Return 'private' only when explicitly configured, else 'open'."""
-    mode = get_secret("POKA_AUTH_MODE", "open") or "open"
+    mode = get_secret("PLUTO_AUTH_MODE", "open") or "open"
     return "private" if mode.strip().lower() == "private" else "open"
 
 
 def _env_identity() -> Optional[UserIdentity]:
-    raw = (get_secret("POKA_USER_ID", "") or "").strip()
+    raw = (get_secret("PLUTO_USER_ID", "") or "").strip()
     if not raw:
         return None
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", raw).strip(" .")[:64]

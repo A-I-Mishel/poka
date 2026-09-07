@@ -1,4 +1,4 @@
-# ---- Poka web UI build ----
+# ---- Pluto web UI build ----
 FROM node:24-alpine AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
@@ -6,7 +6,7 @@ RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-# ---- Poka API + serving ----
+# ---- Pluto API + serving ----
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

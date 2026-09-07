@@ -5,7 +5,7 @@ Layout:
     data/users/<safe-user-id>/memory.md
     data/users/<safe-user-id>/structured.json
 
-DATA_ROOT defaults to ./data and can be overridden with POKA_DATA_DIR
+DATA_ROOT defaults to ./data and can be overridden with PLUTO_DATA_DIR
 (useful for tests). All writes are atomic (tmp + os.replace). Corrupt
 files are quarantined next to the original and reported as warnings
 instead of silently resetting user data.
@@ -68,7 +68,7 @@ class StorageError(Exception):
 
 def data_root() -> Path:
     """Return the configured data root directory."""
-    return Path(os.getenv("POKA_DATA_DIR", "data"))
+    return Path(os.getenv("PLUTO_DATA_DIR", "data"))
 
 
 def sanitize_user_key(raw: Any) -> str:

@@ -1,6 +1,6 @@
 """Phase 6A foundation tests: briefs registry + artifact spec capture.
 
-Hermetic: tmp POKA_DATA_DIR, direct stores, real generation tools with
+Hermetic: tmp PLUTO_DATA_DIR, direct stores, real generation tools with
 a request-scoped user (no LLM calls). No UI, no network.
 """
 
@@ -34,7 +34,7 @@ def _isolated_cwd(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def fenv(tmp_path, monkeypatch):
-    monkeypatch.setenv("POKA_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
     ctx.set_current_user_id("f-user")
     yield tmp_path / "data"
     ctx.set_current_user_id(None)

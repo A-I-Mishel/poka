@@ -1,6 +1,6 @@
-# Poka — Smart Task Agent
+# Pluto — Smart Task Agent
 
-Poka is a multi-purpose AI assistant (React web app + FastAPI backend)
+Pluto is a multi-purpose AI assistant (React web app + FastAPI backend)
 for students and professionals: chat with file attachments, web
 research with citations, PDF/CSV analysis, PowerPoint and Word
 generation, and persistent per-user memory — backed by a cascading
@@ -60,11 +60,11 @@ python -m pytest tests/ -q
 |---|---|---|
 | `OPENCODE_API_KEY` | yes (or Gemini key) | Tier 1–2 models via OpenCode |
 | `GEMINI_API_KEY` | yes (or OpenCode key) | Tier 3–4 Google Gemini models |
-| `POKA_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
-| `POKA_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
-| `POKA_USER_ID` | no | Pin a stable local/dev identity |
-| `POKA_DATA_DIR` | no (`data/`) | Storage root override (tests use tmp) |
-| `POKA_FRONTEND_ORIGIN` | on the API host | Allowed CORS origin(s) of the UI |
+| `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
+| `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
+| `PLUTO_USER_ID` | no | Pin a stable local/dev identity |
+| `PLUTO_DATA_DIR` | no (`data/`) | Storage root override (tests use tmp) |
+| `PLUTO_FRONTEND_ORIGIN` | on the API host | Allowed CORS origin(s) of the UI |
 | `VITE_API_URL` | on Vercel | Public URL of the API (empty = same origin) |
 
 Locally these live in `.env` (gitignored). On Render/Vercel put them
@@ -72,11 +72,11 @@ under Environment Variables. Never commit keys.
 
 ## Authentication modes
 
-- **open** (default): local/dev/trusted use. Identity is `POKA_USER_ID`
+- **open** (default): local/dev/trusted use. Identity is `PLUTO_USER_ID`
   when set, else a per-request ephemeral id. Clients may send
   `Authorization: Bearer <token>`; it is verified only against
-  `POKA_ACCESS_TOKENS`.
-- **private**: only `POKA_USER_ID` or holders of a `POKA_ACCESS_TOKENS`
+  `PLUTO_ACCESS_TOKENS`.
+- **private**: only `PLUTO_USER_ID` or holders of a `PLUTO_ACCESS_TOKENS`
   token (sent as `Authorization: Bearer <token>`) are admitted.
   Everyone else gets HTTP 401. Tokens are compared with
   `secrets.compare_digest`, never logged, and only a hash-derived user
@@ -136,10 +136,10 @@ failures raise instead of masquerading as corruption.
   (`uvicorn backend.main:app`), or any Python host / the `Dockerfile`
   (builds the React UI and serves it from the API).
 - **UI**: Vercel from `frontend/` (Vite). Set `VITE_API_URL` to the
-  public API URL and `POKA_FRONTEND_ORIGIN` on the API host to the
+  public API URL and `PLUTO_FRONTEND_ORIGIN` on the API host to the
   Vercel URL.
-- Public deployments must set `POKA_AUTH_MODE=private` plus
-  `POKA_ACCESS_TOKENS`: the default `open` mode is for local/dev/
+- Public deployments must set `PLUTO_AUTH_MODE=private` plus
+  `PLUTO_ACCESS_TOKENS`: the default `open` mode is for local/dev/
   trusted use only.
 
 ## Tests

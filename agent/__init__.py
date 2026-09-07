@@ -1,4 +1,4 @@
-"""Poka agent runtime: tiered LLM cascade with tools, memory, and budgets.
+"""Pluto agent runtime: tiered LLM cascade with tools, memory, and budgets.
 
 Package layout (dependency order: UI -> application -> agent -> services):
 

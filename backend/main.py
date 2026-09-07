@@ -1,4 +1,4 @@
-"""Poka API: FastAPI backend reusing the agent/services stack directly.
+"""Pluto API: FastAPI backend reusing the agent/services stack directly.
 
 Run (from the repo root)::
 
@@ -18,12 +18,12 @@ load_dotenv()
 
 from backend.routers import artifacts, briefs, chat, chats, memory, meta, projects, uploads  # noqa: E402
 
-app = FastAPI(title="Poka API", version="0.1.0")
+app = FastAPI(title="Pluto API", version="0.1.0")
 
 _frontend_origins = [
     origin.strip()
     for origin in (
-        os.getenv("POKA_FRONTEND_ORIGIN", "http://localhost:5173").split(",")
+        os.getenv("PLUTO_FRONTEND_ORIGIN", "http://localhost:5173").split(",")
     )
     if origin.strip()
 ]
@@ -51,7 +51,7 @@ for _router in (
 @app.get("/api")
 def root():
     """API index (the UI is served separately in development)."""
-    return {"ok": True, "name": "Poka API", "docs": "/docs"}
+    return {"ok": True, "name": "Pluto API", "docs": "/docs"}
 
 
 # Single-server demo mode: when frontend/dist exists, serve it.

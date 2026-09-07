@@ -1,7 +1,7 @@
 """Centralized secret/config-value reading.
 
 Single seam for every credential lookup in the app (provider API keys,
-POKA_ACCESS_TOKENS, POKA_AUTH_MODE, POKA_USER_ID): environment variables
+PLUTO_ACCESS_TOKENS, PLUTO_AUTH_MODE, PLUTO_USER_ID): environment variables
 / .env.
 
 Do NOT duplicate this logic: services.auth, services.identity, and
@@ -20,7 +20,7 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Return a secret from the environment, else default.
 
     Args:
-        name: Secret name, e.g. "GEMINI_API_KEY" or "POKA_ACCESS_TOKENS".
+        name: Secret name, e.g. "GEMINI_API_KEY" or "PLUTO_ACCESS_TOKENS".
         default: Value when the secret is set nowhere.
 
     Returns:

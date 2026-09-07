@@ -1,6 +1,6 @@
 """Backend API tests: FastAPI routes over the real agent/services stack.
 
-Hermetic like the rest of the suite: tmp POKA_DATA_DIR, env identity,
+Hermetic like the rest of the suite: tmp PLUTO_DATA_DIR, env identity,
 stubbed agent (no quota, no network). Covers auth, chat send/stream +
 persistence, uploads, artifacts, projects, briefs, and memory.
 """
@@ -25,9 +25,9 @@ def _isolated_cwd(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def api_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POKA_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("POKA_USER_ID", "api-user")
-    monkeypatch.delenv("POKA_AUTH_MODE", raising=False)
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PLUTO_USER_ID", "api-user")
+    monkeypatch.delenv("PLUTO_AUTH_MODE", raising=False)
     return tmp_path
 
 
@@ -215,8 +215,8 @@ def test_memory_notes_roundtrip(client):
 
 
 def test_private_mode_requires_token(client, monkeypatch):
-    monkeypatch.setenv("POKA_AUTH_MODE", "private")
-    monkeypatch.delenv("POKA_USER_ID", raising=False)
+    monkeypatch.setenv("PLUTO_AUTH_MODE", "private")
+    monkeypatch.delenv("PLUTO_USER_ID", raising=False)
     assert client.get("/api/health").status_code == 401
     bad = client.get("/api/health", headers={"Authorization": "Bearer nope"})
     assert bad.status_code == 401
