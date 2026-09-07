@@ -67,7 +67,7 @@ const I = {
   ),
 };
 
-function BugIcon({ size = 14 }: { size?: number }) {
+function PlanetIcon({ size = 14 }: { size?: number }) {
   return (
     <svg
       width={size}
@@ -79,17 +79,9 @@ function BugIcon({ size = 14 }: { size?: number }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="m8 2 1.88 1.88" />
-      <path d="M14.12 3.88 16 2" />
-      <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" />
-      <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6" />
-      <path d="M12 20v-9" />
-      <path d="M6.53 9C4.6 8.8 3 7.1 3 5" />
-      <path d="M6 13H2" />
-      <path d="M3 21c0-2.1 1.7-3.9 3.8-4" />
-      <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" />
-      <path d="M22 13h-4" />
-      <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
+      <circle cx="12" cy="12" r="6" />
+      <ellipse cx="12" cy="12" rx="10" ry="3.8" transform="rotate(-20 12 12)" />
+      <circle cx="10.2" cy="10.4" r="0.7" fill="#2d2350" stroke="none" />
     </svg>
   );
 }
@@ -566,7 +558,7 @@ export default function App() {
       <aside className={`sidebar${sidebarOpen ? " drawer-open" : ""}`}>
         <div className="logo">
           <div className="logo-icon">
-            <BugIcon size={16} />
+            <PlanetIcon size={16} />
           </div>
           <div>
             <div className="logo-name">Pluto</div>
@@ -848,7 +840,7 @@ export default function App() {
                 {messages.length === 0 && !sending && (
                   <div className="empty-state">
                     <div className="empty-icon">
-                      <BugIcon size={26} />
+                      <PlanetIcon size={26} />
                     </div>
                     Start a new conversation…
                   </div>
@@ -885,7 +877,7 @@ export default function App() {
                   ) : (
                     <div className="msg ai" key={i}>
                       <div className="avatar">
-                      <BugIcon size={13} />
+                      <PlanetIcon size={13} />
                     </div>
                       <div className="col">
                         <div className="bubble">
@@ -986,7 +978,7 @@ export default function App() {
                 {thinking && messages[messages.length - 1]?.role === "user" && (
                   <div className="msg ai">
                     <div className="avatar">
-                      <BugIcon size={13} />
+                      <PlanetIcon size={13} />
                     </div>
                     <div className="col">
                       <div className="bubble thinking-dots">
