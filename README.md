@@ -69,6 +69,9 @@ python -m pytest tests/ -q
 | `PLUTO_FRONTEND_ORIGIN` | on the API host | Allowed CORS origin(s) of the UI |
 | `VITE_API_URL` | on Vercel | Public URL of the API (empty = same origin) |
 | `PLUTO_KB_EMBED_MODEL` | no | Embedding model for document search (default `models/gemini-embedding-001`) |
+| `GOOGLE_CLIENT_ID` | for Gmail | Google OAuth client ID (Desktop app) |
+| `GOOGLE_CLIENT_SECRET` | for Gmail | Google OAuth client secret |
+| `GOOGLE_REFRESH_TOKEN` | for Gmail | Refresh token from `scripts/get_google_refresh_token.py` |
 
 Locally these live in `.env` (gitignored). On Render/Vercel put them
 under Environment Variables. Never commit keys.
@@ -112,6 +115,14 @@ row-capped before pandas runs, with a controlled `csv_inspect` op set
 (no arbitrary code execution); presentations are slide-capped (50) with
 truncation notes and documents are validated by reopening before
 delivery.
+
+Gmail (`search_gmail`, `read_gmail`, `create_gmail_draft`,
+`send_gmail`): one configured account via Google OAuth (Desktop app
+client + `scripts/get_google_refresh_token.py` for the refresh
+token). Mail is untrusted DATA; sending is irreversible, so
+`send_gmail` refuses without explicit user confirmation
+(`confirm=true`) — drafts are the safe default. Without credentials
+the tools report unconfigured instead of failing.
 
 Document knowledge base (vector retrieval, answers "what do my
 documents say"): text-bearing uploads (PDF/CSV) are chunked and
