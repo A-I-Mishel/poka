@@ -21,6 +21,7 @@ from services.limits import (
     MAX_EXTERNAL_TOKENS,
     MAX_QUERY_CHARS,
     MAX_TOOL_RESULT_TOKENS,
+    MAX_TOOL_ROUNDS,
     TOOL_TIMEOUT_SECONDS,
 )
 from services.obs import timed as obs_timed
@@ -43,8 +44,7 @@ from agent.prompts import _as_text, _build_system_prompt, strip_internal_reasoni
 tools: List[Any] = [web_search, search_documents, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
-MAX_TOOL_ROUNDS: int = 4
-
+MAX_TOOL_ROUNDS = MAX_TOOL_ROUNDS  # re-exported from services.limits
 
 def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_key: Any = None) -> Any:
     """Invoke a tool with the submitting request's user bound.
@@ -309,6 +309,13 @@ def run_tool_loop(
 
     while rounds_used < max_rounds:
         budget.check_time()
+        try:
+            budget.count_round()
+        except BudgetExhausted:
+            # Shared round budget spent (e.g. nested loops in Deep
+            # Mode): stop chaining and synthesize from results so far,
+            # exactly like reaching max_rounds.
+            break
         tier_name: Optional[str] = None
         bound: Any = bound_fixed
         if llm_provider is not None:

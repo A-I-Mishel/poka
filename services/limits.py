@@ -90,6 +90,14 @@ TIER_COOLDOWN_QUOTA_SECONDS: float = 6 * 3600.0
 TIER_COOLDOWN_PERMANENT_SECONDS: float = 3600.0
 TIMEOUT_STRIKES_BEFORE_COOL: int = 2
 
+# Tool-loop round caps: normal requests stop early; Deep Mode chains
+# tools until the model stops asking, bounded by the deep request
+# budget below (plus the unchanged wall-clock deadline).
+MAX_TOOL_ROUNDS: int = 4
+MAX_DEEP_TOOL_ROUNDS: int = 12
+MAX_DEEP_LLM_CALLS: int = 30
+MAX_DEEP_TOOL_CALLS: int = 20
+
 # Project context (explicit user-controlled per-project text).
 # Conservative: operational instructions, not a document store (~1000
 # tokens against a 24k budget alongside memory and history).

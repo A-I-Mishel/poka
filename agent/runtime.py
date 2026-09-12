@@ -20,6 +20,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from config import TASK_TEMPERATURES, get_tier_llm
 from services.context import get_current_user_id
+from services.limits import MAX_DEEP_LLM_CALLS, MAX_DEEP_TOOL_CALLS, MAX_DEEP_TOOL_ROUNDS
 from services.context_budget import CTX_SUMMARY_TOKENS, fit_text
 from services.memory import (
     format_memory_for_prompt,
@@ -179,6 +180,13 @@ def answer_with_fallback(
     started_at: float = time.time()
     user_id = get_current_user_id()
     budget = RequestBudget()
+    if deep_mode:
+        # Deep Mode chains tools until the model stops asking: raise
+        # the round/LLM/tool caps together (the wall-clock deadline
+        # and per-call timeouts still bound the request absolutely).
+        budget.max_rounds = MAX_DEEP_TOOL_ROUNDS
+        budget.max_llm = MAX_DEEP_LLM_CALLS
+        budget.max_tools = MAX_DEEP_TOOL_CALLS
     # One shared stream per turn: every final-answer invoke below
     # reuses it, so resets coordinate across vision, cascade attempts,
     # tool rounds, and final synthesis.
@@ -400,13 +408,14 @@ def answer_with_fallback(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
-                    final_tier,
+                    final_tier, MAX_DEEP_TOOL_ROUNDS,
                 )
             else:
                 draft = run_tool_loop(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, force_web_search,
-                    MAX_TOOL_ROUNDS, budget, used_tools, used_sources,
+                    MAX_DEEP_TOOL_ROUNDS if deep_mode else MAX_TOOL_ROUNDS,
+                    budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
                     final_tier,
                 )

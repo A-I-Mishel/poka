@@ -16,6 +16,7 @@ from services.limits import (
     MAX_REFLECTION_CALLS,
     MAX_SEARCH_CALLS_PER_REQUEST,
     MAX_TOOL_CALLS_PER_REQUEST,
+    MAX_TOOL_ROUNDS,
     MAX_TOTAL_REQUEST_TIME,
 )
 
@@ -33,12 +34,14 @@ class RequestBudget:
     max_search: int = MAX_SEARCH_CALLS_PER_REQUEST
     max_reflect: int = MAX_REFLECTION_CALLS
     max_plan: int = MAX_PLANNING_CALLS
+    max_rounds: int = MAX_TOOL_ROUNDS
     deadline: float = field(default_factory=lambda: time.time() + MAX_TOTAL_REQUEST_TIME)
     llm_calls: int = 0
     tool_calls: int = 0
     search_calls: int = 0
     reflect_calls: int = 0
     plan_calls: int = 0
+    rounds: int = 0
     timeouts: int = 0
     external_tokens: int = 0
 
@@ -64,6 +67,18 @@ class RequestBudget:
                 raise BudgetExhausted(f"Search budget exhausted ({self.max_search}).")
         if self.tool_calls > self.max_tools:
             raise BudgetExhausted(f"Tool budget exhausted ({self.max_tools}).")
+
+    def count_round(self) -> None:
+        """Charge one tool-loop round; shared across nested loops.
+
+        Lets Deep Mode chain past the per-loop round cap while one
+        request-wide bound still holds. Callers treat exhaustion like
+        loop end (synthesize from results), never as a hard error.
+        """
+        self.check_time()
+        self.rounds += 1
+        if self.rounds > self.max_rounds:
+            raise BudgetExhausted(f"Tool round budget exhausted ({self.max_rounds}).")
 
     def count_reflect(self) -> None:
         """Charge one reflection call."""
