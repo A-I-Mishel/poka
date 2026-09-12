@@ -226,3 +226,59 @@ def test_ephemeral_reads_create_no_vaults(open_env):
         assert client.get("/api/health").status_code == 200
         assert client.get("/api/projects").status_code == 200
     assert _vault_names(open_env) == []
+
+
+def test_chat_limit_returns_429_not_500(open_env, monkeypatch):
+    """Hitting the chat quota must yield HTTP 429 (regression: an
+    undefined name in the deny path turned it into a 500)."""
+    import agent
+    from backend.main import app
+    from services import ratelimit as rl
+
+    def _answer(user_input, history=None, **kwargs):
+        return {
+            "output": "echo",
+            "active_tier": "Stub Tier",
+            "task_type": "simple",
+            "tools_used": [],
+            "sources": [],
+        }
+
+    monkeypatch.setattr(agent, "answer_with_fallback", _answer)
+    old = rl.get_rate_limiter()
+    rl.configure_rate_limiter(rl.MemoryRateLimiter({"chat": (2, 3600.0)}))
+    try:
+        with TestClient(app) as client:
+            assert client.post("/api/chat/send", json={"content": "one"}).status_code == 200
+            assert client.post("/api/chat/send", json={"content": "two"}).status_code == 200
+            limited = client.post("/api/chat/send", json={"content": "three"})
+            assert limited.status_code == 429, limited.text
+            assert "Chat rate limit exceeded" in limited.json()["detail"]
+    finally:
+        rl.configure_rate_limiter(old)
+
+
+def test_deep_limit_returns_429_not_500(open_env, monkeypatch):
+    import agent
+    from backend.main import app
+    from services import ratelimit as rl
+
+    def _answer(user_input, history=None, **kwargs):
+        return {
+            "output": "echo",
+            "active_tier": "Stub Tier",
+            "task_type": "simple",
+            "tools_used": [],
+            "sources": [],
+        }
+
+    monkeypatch.setattr(agent, "answer_with_fallback", _answer)
+    old = rl.get_rate_limiter()
+    rl.configure_rate_limiter(rl.MemoryRateLimiter({"deep": (0, 3600.0)}))
+    try:
+        with TestClient(app) as client:
+            limited = client.post("/api/chat/send", json={"content": "hi", "deep_mode": True})
+            assert limited.status_code == 429, limited.text
+            assert "Deep Mode rate limit exceeded" in limited.json()["detail"]
+    finally:
+        rl.configure_rate_limiter(old)

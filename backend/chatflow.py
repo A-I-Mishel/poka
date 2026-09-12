@@ -156,7 +156,7 @@ def _check_limits(limit_key: str, deep_mode: bool) -> None:
 
     verdict = get_rate_limiter().check(limit_key, "chat")
     if not verdict.allowed:
-        obs_event("ratelimit.deny", action="chat", user=uid,
+        obs_event("ratelimit.deny", action="chat", user=limit_key,
                   retry_after_s=round(verdict.retry_after, 1))
         raise HTTPException(
             status_code=429,
@@ -165,7 +165,7 @@ def _check_limits(limit_key: str, deep_mode: bool) -> None:
     if deep_mode:
         deep_verdict = get_rate_limiter().check(limit_key, "deep")
         if not deep_verdict.allowed:
-            obs_event("ratelimit.deny", action="deep", user=uid,
+            obs_event("ratelimit.deny", action="deep", user=limit_key,
                       retry_after_s=round(deep_verdict.retry_after, 1))
             raise HTTPException(
                 status_code=429,
