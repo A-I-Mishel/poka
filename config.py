@@ -1,4 +1,4 @@
-"""Multi-tier LLM cascade: Muse Spark 1.3 -> Nemotron 3.5 (OpenCode free) -> Gemini 3.6 -> Gemini 3.5."""
+"""Multi-tier LLM cascade: OpenCode free models -> Groq -> Gemini -> OpenRouter free fallbacks."""
 
 import hashlib
 import secrets
@@ -29,6 +29,12 @@ LING_MODEL: str = "ling-3.0-flash-fin-free"
 # current production flagship. Override with GROQ_MODEL if needed.
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 GROQ_MODEL: str = "openai/gpt-oss-120b"
+# OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
+# Free models (Sept 2026; promos rotate — see
+# https://openrouter.ai/models for the current free list).
+OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
+OPENROUTER_GEMMA_MODEL: str = "google/gemma-4-31b-it:free"
 TEMPERATURE: float = 0.7
 
 # Client cache: clients hold only model config + credentials (no user
@@ -239,6 +245,44 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
         return None
 
 
+def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
+    """Build an OpenRouter client for one model (shared factory).
+
+    Same OpenAI-compatible shape as the Groq tier; only the base URL,
+    key, and model slug differ. Missing key -> None (tier skipped).
+    """
+    key: Optional[str] = _get_secret("OPENROUTER_API_KEY")
+    if _is_placeholder(key, "your_openrouter_key_here"):
+        return None
+    assert key is not None
+    try:
+        return _cached_client(
+            tier,
+            temperature,
+            key,
+            lambda: ChatOpenAI(
+                model=model,
+                api_key=key,
+                base_url=OPENROUTER_BASE_URL,
+                temperature=temperature,
+                # Native HTTP timeout: truly aborts hung provider calls.
+                request_timeout=MODEL_TIMEOUT_SECONDS,
+            ),
+        )
+    except Exception:
+        return None
+
+
+def get_tier_openrouter_ultra_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Nemotron 3 Ultra 550B (free tier)."""
+    return _get_openrouter_llm("OpenRouter Nemotron Ultra", OPENROUTER_ULTRA_MODEL, temperature)
+
+
+def get_tier_openrouter_gemma_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Gemma 4 31B (free tier)."""
+    return _get_openrouter_llm("OpenRouter Gemma", OPENROUTER_GEMMA_MODEL, temperature)
+
+
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Muse Spark 1.3": get_tier1_llm,
     "Nemotron 3.5": get_tier1b_llm,
@@ -250,6 +294,8 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Groq": get_tier_groq_llm,
     "Gemini 3.6 Flash": get_tier2_llm,
     "Gemini 3.5 Flash": get_tier3_llm,
+    "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
+    "OpenRouter Gemma": get_tier_openrouter_gemma_llm,
 }
 
 
@@ -280,6 +326,8 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Groq", get_tier_groq_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
+    ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
+    ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
 ]
 
 

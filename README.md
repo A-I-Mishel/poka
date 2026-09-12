@@ -60,6 +60,8 @@ python -m pytest tests/ -q
 |---|---|---|
 | `OPENCODE_API_KEY` | yes (or Gemini key) | Tier 1–2 models via OpenCode |
 | `GEMINI_API_KEY` | yes (or OpenCode key) | Tier 3–4 Google Gemini models |
+| `GROQ_API_KEY` | no | Groq fast-inference tier |
+| `OPENROUTER_API_KEY` | no | OpenRouter fallback tiers (free models) |
 | `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
 | `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
 | `PLUTO_USER_ID` | no | Pin a stable local/dev identity |
@@ -88,8 +90,12 @@ under Environment Variables. Never commit keys.
 Cascade (first live tier wins, failed tiers cool down):
 1. Muse Spark 1.3 (OpenCode, temperature 0.7)
 2. Nemotron 3.5 Lightning (OpenCode free tier)
-3. Gemini 3.6 Flash (Google, free tier ~20 req/day)
-4. Gemini 3.5 Flash (Google fallback)
+3. DeepSeek V4 Flash, Nemotron 3 Ultra, Big Pickle, MiMo V2.5,
+   Ling 3.0 Flash (OpenCode free tier, rotating promos)
+4. Groq (fast inference; model via `GROQ_MODEL`)
+5. Gemini 3.6 Flash (Google, free tier ~20 req/day)
+6. Gemini 3.5 Flash (Google fallback)
+7. OpenRouter Nemotron Ultra + OpenRouter Gemma (free fallbacks)
 
 Per-task temperatures apply when a tier answers (creative 0.85,
 factual/research lower). Deep Mode (UI toggle) enables planning +

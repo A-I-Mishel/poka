@@ -23,6 +23,8 @@ from config import (
     get_tier_ling_llm,
     get_tier_mimo_llm,
     get_tier_nemotron_ultra_llm,
+    get_tier_openrouter_gemma_llm,
+    get_tier_openrouter_ultra_llm,
 )
 
 TIER_AGENT_GETTERS: List[
@@ -38,4 +40,6 @@ TIER_AGENT_GETTERS: List[
     ("Groq", get_tier_groq_llm),  # type: ignore[arg-type]
     ("Gemini 3.6 Flash", get_tier2_llm),  # type: ignore[arg-type]
     ("Gemini 3.5 Flash", get_tier3_llm),  # type: ignore[arg-type]
+    ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),  # type: ignore[arg-type]
+    ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),  # type: ignore[arg-type]
 ]
