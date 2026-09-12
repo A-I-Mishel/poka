@@ -29,6 +29,7 @@ def plan_then_execute(
     tier_trace: Optional[List[str]] = None,
     on_token: Optional[Callable[[str], None]] = None,
     on_reset: Optional[Callable[[], None]] = None,
+    final_tier: Optional[List[str]] = None,
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
@@ -44,7 +45,7 @@ def plan_then_execute(
             llm_instance, prompt, chat_history, memory_notes,
             relevant_context, False, MAX_TOOL_ROUNDS, budget,
             used_tools, used_sources, project_context,
-            llm_provider, tier_trace, on_token, on_reset,
+            llm_provider, tier_trace, on_token, on_reset, final_tier,
         )
 
     if budget is not None:

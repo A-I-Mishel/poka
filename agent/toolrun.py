@@ -148,6 +148,7 @@ def run_tool_loop(
     tier_trace: Optional[List[str]] = None,
     on_token: Optional[Callable[[str], None]] = None,
     on_reset: Optional[Callable[[], None]] = None,
+    final_tier: Optional[List[str]] = None,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -185,6 +186,12 @@ def run_tool_loop(
     None (historical silent behavior). A TokenStream instance passed
     as on_token is shared (never re-wrapped) so resets coordinate
     across nested loops.
+
+    When final_tier is provided, the tier that produced the returned
+    answer is recorded into it (single-element replace): the round
+    tier for direct answers, the last round's tier for final
+    synthesis, or the round behind salvaged partial text. Callers use
+    it to attribute the answer truthfully after mid-task failover.
     """
     if budget is None:
         budget = RequestBudget()
@@ -287,12 +294,19 @@ def run_tool_loop(
 
     bound_fixed = llm_instance.bind_tools(list(tools))
     last_text: str = ""
+    last_text_tier: Optional[str] = None
     last_results: List[str] = []
     last_llm: Any = llm_instance
     provider_error: Optional[Exception] = None
     rounds_used = 0
+    round_tier: Optional[str] = None
     tokens = on_token if isinstance(on_token, TokenStream) else TokenStream(on_token, on_reset)
     live = tokens if tokens.streaming else None
+
+    def _note_final_tier(name: Optional[str]) -> None:
+        if final_tier is not None and name:
+            final_tier[:] = [name]
+
     while rounds_used < max_rounds:
         budget.check_time()
         tier_name: Optional[str] = None
@@ -327,6 +341,7 @@ def run_tool_loop(
             _note_tier_failure(tier_name, e)
             continue
         rounds_used += 1
+        round_tier = tier_name
         if tier_name is not None:
             if tier_trace is not None and tier_name not in tier_trace:
                 tier_trace.append(tier_name)
@@ -337,8 +352,10 @@ def run_tool_loop(
         text: str = _as_text(response.content).strip()
         if text:
             last_text = text
+            last_text_tier = round_tier
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
         if not tool_calls:
+            _note_final_tier(round_tier)
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")
         try:
             last_results = []
@@ -405,10 +422,12 @@ def run_tool_loop(
         )
         text = _as_text(final.content).strip()
         if text:
+            _note_final_tier(round_tier)
             return _with_sources(text)
     except Exception:
         pass
     if last_text.strip():
+        _note_final_tier(last_text_tier)
         return _with_sources(
             last_text.rstrip()
             + "\n\n[Note: I could only produce a partial answer — "

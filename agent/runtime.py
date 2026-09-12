@@ -352,17 +352,21 @@ def answer_with_fallback(
         return _provider
 
     tooled_tiers: List[str] = []
+    final_tier_box: List[str] = []
 
     def _answer_tooled(tier_name: str, llm: BaseLanguageModel) -> str:
         provider = _make_tier_provider(pinned=(tier_name, llm))
         mark = len(used_tools)
         mark_sources = len(used_sources)
+        final_tier_box[:] = []
+        final_tier: List[str] = final_tier_box
         try:
             if use_planning:
                 draft = plan_then_execute(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
+                    final_tier,
                 )
             else:
                 draft = run_tool_loop(
@@ -370,9 +374,17 @@ def answer_with_fallback(
                     relevant_context, force_web_search,
                     MAX_TOOL_ROUNDS, budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
+                    final_tier,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
-                return reflect_and_improve(llm, user_input, draft, langchain_history, budget)
+                improved = reflect_and_improve(llm, user_input, draft, langchain_history, budget)
+                if improved != draft:
+                    # The visible answer is the rewrite, produced on this
+                    # attempt's tier — not whichever tier ran the draft.
+                    draft = improved
+                    final_tier[:] = [tier_name]
+            elif not final_tier:
+                final_tier[:] = [tier_name]
             return draft
         except Exception:
             del used_tools[mark:]
@@ -382,9 +394,14 @@ def answer_with_fallback(
     try:
         answer_attempts = []
         active_tier, output = _run_cascade_step(_answer_tooled, first, tiers, answer_attempts)
-        # Mid-task failover may have finished on a different tier than
-        # the cascade attempt that started the work: report the truth.
-        if tooled_tiers:
+        # Attribute the tier that produced the visible answer: the final
+        # call's tier when tracked, else the last involved tier. The old
+        # tooled_tiers[-1] could name a tier whose text was superseded
+        # (failover A->B->A reported B; reflection rewrites report the
+        # rewriter, not the draft's tier).
+        if final_tier_box:
+            active_tier = final_tier_box[0]
+        elif tooled_tiers:
             active_tier = tooled_tiers[-1]
         output = strip_internal_reasoning(output)
         latency_ms = int((time.time() - started_at) * 1000)
