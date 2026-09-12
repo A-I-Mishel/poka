@@ -344,12 +344,15 @@ def answer_with_fallback(
         return llm
 
     def _make_tier_provider(pinned: Optional[Tuple[str, BaseLanguageModel]] = None):
-        """Stateful per-attempt failover across usable tiers (each once).
+        """Stateful per-attempt failover across usable tiers.
 
         The pinned (name, model) pair — this cascade attempt's tier, if
         any — is served first; afterwards tiers come from cascade order
-        minus cooled-down and already-tried ones. Getter failures cool
-        their tier and move on. Exhaustion raises a friendly error.
+        minus failed and cooled-down ones. Getter failures cool their
+        tier and move on. Healthy tiers are reusable across rounds
+        (multi-round loops must not starve on a short tier table);
+        only failed tiers are remembered and skipped. Exhaustion raises
+        a friendly error.
         """
         from agent.cascade import (
             _friendly_cascade_error,
@@ -357,7 +360,7 @@ def answer_with_fallback(
             classify_provider_error,
         )
 
-        attempted: set = set()
+        failed: set = set()
         yielded_pinned = False
         last_error: Optional[Exception] = None
 
@@ -365,28 +368,28 @@ def answer_with_fallback(
             nonlocal yielded_pinned, last_error
             if pinned is not None and not yielded_pinned:
                 yielded_pinned = True
-                attempted.add(pinned[0])
                 return pinned[0], _size_llm_for_task(pinned[0], pinned[1])
             ordered = [
                 item for item in _usable_tiers(first, tiers)
-                if item[0] not in attempted
+                if item[0] not in failed
             ]
             if not ordered:
                 if last_error is not None:
                     raise RuntimeError(_friendly_cascade_error(last_error))
                 raise RuntimeError("All LLM tiers failed at runtime.")
             for name, getter in ordered:
-                attempted.add(name)
                 try:
                     llm_instance = getter()
                 except Exception as e:
                     last_error = e
+                    failed.add(name)
                     try:
                         _record_tier_failure(name, classify_provider_error(e)[0])
                     except Exception:
                         pass
                     continue
                 if llm_instance is None:
+                    failed.add(name)
                     continue
                 return name, _size_llm_for_task(name, llm_instance)
             raise RuntimeError(_friendly_cascade_error(last_error))

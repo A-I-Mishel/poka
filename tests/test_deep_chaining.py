@@ -104,3 +104,32 @@ def test_fast_mode_still_stops_at_four():
     )
     assert out["output"] == "synth done"
     assert len(llm.calls) == 5
+
+
+def test_single_tier_chains_multiple_rounds():
+    """One healthy tier must serve every round (provider reuses it)."""
+    script = [("thinking %d" % i, BOGUS) for i in range(3)]
+    script.append("final answer here")
+    llm = ScriptLLM(script)
+    out = agent.answer_with_fallback(
+        "search the web for mars",
+        tiers=[("only", lambda: llm)],
+        raw_messages=[],
+    )
+    assert out["output"] == "final answer here"
+    assert len(llm.calls) == 4
+
+
+def test_unconfigured_tier_skipped_not_fatal():
+    """A None-returning tier is skipped; healthy tiers keep chaining."""
+    script = [("thinking %d" % i, BOGUS) for i in range(2)]
+    script.append("final answer here")
+    llm = ScriptLLM(script)
+    tiers = [("ghost", lambda: None), ("real", lambda: llm)]
+    out = agent.answer_with_fallback(
+        "search the web for mars",
+        tiers=tiers,
+        raw_messages=[],
+    )
+    assert out["output"] == "final answer here"
+    assert len(llm.calls) == 3
