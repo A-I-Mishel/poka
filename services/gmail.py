@@ -137,7 +137,7 @@ def search_messages(service: Any, query: str, max_results: int = MAX_SEARCH_RESU
             .execute()
         )
     except Exception as e:
-        obs_event("gmail.error", op="search")
+        obs_event("gmail.error", action="search")
         raise RuntimeError(f"Gmail search failed: {e}")
     out: List[Dict[str, str]] = []
     for m in (resp or {}).get("messages", []) or []:
@@ -174,7 +174,7 @@ def read_message(service: Any, message_id: str) -> Dict[str, str]:
             .execute()
         )
     except Exception as e:
-        obs_event("gmail.error", op="read")
+        obs_event("gmail.error", action="read")
         raise RuntimeError(f"Gmail read failed: {e}")
     headers = _headers((full or {}).get("payload", {}))
     return {
@@ -205,7 +205,7 @@ def create_draft(service: Any, to: str, subject: str, body: str) -> Dict[str, st
             .execute()
         )
     except Exception as e:
-        obs_event("gmail.error", op="draft")
+        obs_event("gmail.error", action="draft")
         raise RuntimeError(f"Gmail draft failed: {e}")
     return {"id": str((draft or {}).get("id", ""))}
 
@@ -220,6 +220,6 @@ def send_message(service: Any, to: str, subject: str, body: str) -> Dict[str, st
             .execute()
         )
     except Exception as e:
-        obs_event("gmail.error", op="send")
+        obs_event("gmail.error", action="send")
         raise RuntimeError(f"Gmail send failed: {e}")
     return {"id": str((sent or {}).get("id", ""))}

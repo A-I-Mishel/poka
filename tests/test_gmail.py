@@ -175,3 +175,25 @@ def test_unconfigured_degrades(monkeypatch):
 def test_no_user_denied():
     ctx.set_current_user_id(None)
     assert search_gmail.invoke({"query": "x"}).startswith("STATUS=DENIED")
+
+
+class FailingGmailService(FakeGmailService):
+    def users(self):
+        raise RuntimeError("quota hit")
+
+
+def test_backend_errors_surface_cleanly():
+    gmail_svc.configure_service(FailingGmailService({}))
+    with pytest.raises(RuntimeError, match="Gmail search failed"):
+        gmail_svc.search_messages(gmail_svc.get_service(), "x")
+    with pytest.raises(RuntimeError, match="Gmail read failed"):
+        gmail_svc.read_message(gmail_svc.get_service(), "abc")
+    with pytest.raises(RuntimeError, match="Gmail draft failed"):
+        gmail_svc.create_draft(gmail_svc.get_service(), "a@b.c", "s", "body")
+    with pytest.raises(RuntimeError, match="Gmail send failed"):
+        gmail_svc.send_message(gmail_svc.get_service(), "a@b.c", "s", "body")
+
+
+def test_tool_maps_backend_errors_to_failed():
+    gmail_svc.configure_service(FailingGmailService({}))
+    assert search_gmail.invoke({"query": "x"}).startswith("STATUS=FAILED")
