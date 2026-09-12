@@ -61,3 +61,34 @@ def test_multi_bucket_routes():
 def test_trivial_routes_unchanged():
     assert rule_route("") == "simple"
     assert rule_route("hello") == "simple"
+
+
+class _InvokeFake:
+    """Minimal invoke-only model double (no streaming, no tools)."""
+
+    def __init__(self, text="hi"):
+        self._text = text
+
+    def invoke(self, messages):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(content=self._text)
+
+
+def test_classifier_failure_falls_back_to_simple(monkeypatch):
+    """A dead classifier must pick the cheap direct path, not research."""
+    import agent.runtime as runtime
+
+    def _dead_classifier(user_input, llm_instance, budget=None):
+        raise RuntimeError("all tiers down for classification")
+
+    monkeypatch.setattr(runtime, "classify_task", _dead_classifier)
+    fake = _InvokeFake("hi there")
+    out = runtime.answer_with_fallback(
+        "what is the meaning of flibbertigibbet?",
+        tiers=[("fake", lambda: fake)],
+        raw_messages=[],
+    )
+    assert out["task_type"] == "simple"
+    assert out["output"] == "hi there"
+    assert out["tools_used"] == []

@@ -208,7 +208,9 @@ def answer_with_fallback(
                 lambda _name, llm: classify_task(user_input, llm, budget), first, tiers
             )
         except (RuntimeError, BudgetExhausted):
-            task_type = "research"
+            # Classifier is down: fall back to the cheapest path (a
+            # direct answer, no tools), never the expensive research path.
+            task_type = "simple"
     logger.info("req=%s task=%s", request_id, task_type)
 
     langchain_history: List[BaseMessage] = history
