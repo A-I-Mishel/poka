@@ -9,6 +9,7 @@ Public contract: answer_with_fallback() returns an AgentResult dict with
 names the first responding tier.
 """
 
+import hashlib
 import logging
 import time
 import uuid
@@ -42,6 +43,31 @@ from agent.vision import _try_vision_answer
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY_MESSAGES: int = 6
+
+# Shaped-history cache: (user id, history hash) -> messages. Long chats
+# re-summarized every turn otherwise (one wasted LLM call per turn).
+# Keyed by full content hash, not just message count: edits and
+# regenerates can keep the count while changing the text. Bounded FIFO
+# so ephemeral open-mode identities cannot grow it without limit.
+_SUMMARY_CACHE: Dict[str, tuple] = {}
+_SUMMARY_CACHE_MAX: int = 128
+
+
+def _history_key(user_id: Any, messages: List[Dict[str, Any]]) -> str:
+    digest = hashlib.sha1()
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        digest.update(str(msg.get("role", "")).encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        digest.update(str(msg.get("content", "")).encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+    return "%s\0%s" % (str(user_id or ""), digest.hexdigest())
+
+
+def _clear_summary_cache() -> None:
+    """Drop cached shaped histories (tests/ops)."""
+    _SUMMARY_CACHE.clear()
 
 
 class AgentResult(TypedDict):
@@ -216,10 +242,18 @@ def answer_with_fallback(
     langchain_history: List[BaseMessage] = history
     try:
         if history_list and len(history_list) > MAX_HISTORY_MESSAGES:
-            def _summarize(_name: str, llm: BaseLanguageModel) -> List[BaseMessage]:
-                return summarize_history(history_list, llm, budget=budget)
+            cache_key = _history_key(user_id, history_list)
+            cached = _SUMMARY_CACHE.get(cache_key)
+            if cached is not None:
+                langchain_history = cached
+            else:
+                def _summarize(_name: str, llm: BaseLanguageModel) -> List[BaseMessage]:
+                    return summarize_history(history_list, llm, budget=budget)
 
-            _, langchain_history = _run_cascade_step(_summarize, first, tiers)
+                _, langchain_history = _run_cascade_step(_summarize, first, tiers)
+                _SUMMARY_CACHE[cache_key] = langchain_history
+                while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
+                    _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
         elif history_list:
             langchain_history = _messages_to_langchain(history_list)
     except (RuntimeError, BudgetExhausted):

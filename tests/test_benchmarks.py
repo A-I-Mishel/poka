@@ -39,12 +39,14 @@ def _clean_agent_state():
     agent._TIER_FAILS.clear()
     agent._TIER_SKIP_UNTIL.clear()
     agent._TIER_TIMEOUTS.clear()
+    agent._clear_summary_cache()
     agent.ROUTER_STATS["rule"] = 0
     agent.ROUTER_STATS["llm"] = 0
     yield
     agent._TIER_FAILS.clear()
     agent._TIER_SKIP_UNTIL.clear()
     agent._TIER_TIMEOUTS.clear()
+    agent._clear_summary_cache()
 
 
 class FakeLLM:

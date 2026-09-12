@@ -66,6 +66,7 @@ from agent.runtime import (
     AgentResult,
     answer_with_fallback,
     MAX_HISTORY_MESSAGES,
+    _clear_summary_cache,
     probe_live_tier,
     summarize_history,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "_BoundedExecutor",
     "_build_system_prompt",
     "_call_bounded",
+    "_clear_summary_cache",
     "_execute_tool_call",
     "_friendly_cascade_error",
     "_invoke_bounded",

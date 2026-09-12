@@ -74,10 +74,16 @@ def attachments_overview(entries: List[Dict[str, str]]) -> str:
     )
 
 
-def build_chat_history(messages: List[Dict[str, Any]], limit: int = 10) -> List[BaseMessage]:
-    """Convert stored messages to LangChain history (content only)."""
+def build_chat_history(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
+    """Convert stored messages to LangChain history (content only).
+
+    Untrimmed by design: history shaping (summarize vs verbatim) is
+    owned entirely by agent.runtime, which sees the raw conversation.
+    This list is only a fallback when shaping fails, so trimming here
+    would silently discard context the runtime could have used.
+    """
     history: List[BaseMessage] = []
-    for msg in messages[-limit:]:
+    for msg in messages:
         if not isinstance(msg, dict):
             continue
         content = str(msg.get("content", ""))
