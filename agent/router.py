@@ -23,9 +23,28 @@ _GREETING_RE = re.compile(
 _UPLOAD_ID_RE = re.compile(r"[0-9a-f]{16}")
 
 
+def _match_keyword(text: str, word: str) -> bool:
+    """Match one keyword against already-lowercased text.
+
+    Plain words match whole words only ("read" must not match
+    "already", "plot" must not match "exploit"); a trailing "*"
+    marks a stem ("summar*" matches summarize/summary); entries
+    starting with a non-letter (".pdf") or multi-word phrases match
+    literally with boundary guards.
+    """
+    w = word.strip().lower()
+    if not w:
+        return False
+    if w.endswith("*") and len(w) > 1:
+        return re.search(r"\b" + re.escape(w[:-1]) + r"\w*", text) is not None
+    if w[0].isalnum():
+        return re.search(r"\b" + re.escape(w) + r"\b", text) is not None
+    return w in text
+
+
 def _signals(text: str, words: Sequence[str]) -> bool:
-    """True when any keyword appears in the text."""
-    return any(w in text for w in words)
+    """True when any keyword matches the text (see _match_keyword)."""
+    return any(_match_keyword(text, w) for w in words)
 
 
 def rule_route(user_input: str) -> Optional[str]:
@@ -42,9 +61,9 @@ def rule_route(user_input: str) -> Optional[str]:
     if _GREETING_RE.match(text) and len(text) <= 40:
         return "simple"
     hits = set()
-    if _UPLOAD_ID_RE.search(text) or _signals(text, ["pdf", ".pdf", "read", "summar", "document"]):
+    if _UPLOAD_ID_RE.search(text) or _signals(text, ["pdf", ".pdf", "read", "summar*", "document"]):
         hits.add("research")
-    if _signals(text, ["csv", "analyz", "spreadsheet", "dataset", "chart", "plot", "data table"]):
+    if _signals(text, ["csv", "analyz*", "spreadsheet", "dataset", "chart", "plot", "data table"]):
         hits.add("data")
     if _signals(
         text,
