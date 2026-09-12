@@ -129,6 +129,12 @@ Calendar (`list_calendar_events`, `create_calendar_event`,
 must carry the calendar scope — re-run the helper after adding it).
 Creating is low-risk; deletion needs `confirm=true`.
 
+Database (`list_tables`, `describe_table`, `query_database`,
+`import_csv_table`, `execute_sql`): per-user SQLite vault file, zero
+setup or credentials. Reads are SELECT-only and capped; writes need
+`confirm=true`; table names are validated identifiers and
+ATTACH/DETACH are rejected.
+
 Document knowledge base (vector retrieval, answers "what do my
 documents say"): text-bearing uploads (PDF/CSV) are chunked and
 embedded at upload time (best-effort, never fails the upload) into the

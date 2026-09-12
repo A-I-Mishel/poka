@@ -69,6 +69,7 @@ RATE_LIMITS: dict = {
     "kb_search": (60, 3600.0),
     "gmail": (30, 3600.0),
     "calendar": (30, 3600.0),
+    "database": (30, 3600.0),
 }
 
 # Knowledge base (vector retrieval over user documents). All tunables
