@@ -30,4 +30,4 @@ Phase 3 — quality + capabilities (current)
   README.md, pillow pinned
 
 Repo: github.com/A-I-Mishel/poka (main). Live: Vercel UI (poka-nine.vercel.app) + Render API.
-Tests: 112 green (35 phase-1 + 40 phase-2 + 37 phase-3), zero quota spent.
+Tests: green via pytest (stubbed models, temp dirs — no API quota spent).
