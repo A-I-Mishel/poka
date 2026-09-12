@@ -36,8 +36,16 @@ from services.obs import event as obs_event
 from agent.budget import RequestBudget
 
 _BOUNDED_MAX_WORKERS: int = 8
+# Queue bound: at most 2x workers may wait. Beyond that the server is
+# saturated and callers must fail fast (ExecutorBusyError -> HTTP 503)
+# instead of piling unbounded work into memory.
+_BOUNDED_QUEUE_MULTIPLE: int = 2
 
 logger = logging.getLogger(__name__)
+
+
+class ExecutorBusyError(RuntimeError):
+    """Raised when the bounded pool's queue is full: fail fast, retry later."""
 
 
 class TokenStream:
@@ -98,7 +106,8 @@ class _BoundedExecutor:
     """
 
     def __init__(self, max_workers: int, name: str) -> None:
-        self._tasks: "queue.Queue" = queue.Queue()
+        self._name = name
+        self._tasks: "queue.Queue" = queue.Queue(maxsize=max(1, max_workers * _BOUNDED_QUEUE_MULTIPLE))
         self._threads: List[threading.Thread] = []
         for i in range(max_workers):
             thread = threading.Thread(
@@ -121,9 +130,18 @@ class _BoundedExecutor:
                 self._tasks.task_done()
 
     def submit(self, fn: Callable[[], Any]) -> "concurrent.futures.Future":
-        """Queue fn for a pool worker; returns its Future immediately."""
+        """Queue fn for a pool worker; returns its Future immediately.
+
+        Raises ExecutorBusyError when the bounded queue is full instead
+        of queueing forever: the caller is saturated and must shed load.
+        """
         future: concurrent.futures.Future = concurrent.futures.Future()
-        self._tasks.put((fn, future))
+        try:
+            self._tasks.put_nowait((fn, future))
+        except queue.Full:
+            raise ExecutorBusyError(
+                f"Executor '{self._name}' is saturated; please retry in a moment."
+            )
         return future
 
 

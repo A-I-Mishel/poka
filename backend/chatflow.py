@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 import agent
+from agent.executor import ExecutorBusyError
 from services.files import FileValidationError
 from services.limits import (
     MAX_ATTACHMENTS_PER_MESSAGE,
@@ -271,9 +272,10 @@ def run_chat(ctx: UserContext, content: str,
     """Run one user turn end-to-end; returns send-response payload.
 
     Persists both messages before returning. Raises HTTPException for
-    rate limits, ValueError for bad input/attachments, RuntimeError
-    (user-safe message) when every tier fails. on_token/on_reset
-    stream live answer tokens (see agent.executor.TokenStream).
+    rate limits (429) and saturation (503), ValueError for bad
+    input/attachments, RuntimeError (user-safe message) when every tier
+    fails. on_token/on_reset stream live answer tokens (see
+    agent.executor.TokenStream).
     """
     text = str(content or "").strip()
     if not text:
@@ -308,7 +310,7 @@ def run_chat(ctx: UserContext, content: str,
         dict(m) for m in current if isinstance(m, dict)]
     memory_notes, project_context = _memory_and_project(store, project_id)
 
-    assistant_msg, tier, task_type = _complete_turn(
+    assistant_msg, tier, task_type = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, image_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier, on_token, on_reset)
@@ -321,6 +323,29 @@ def run_chat(ctx: UserContext, content: str,
         "task_type": task_type,
         "warnings": warnings,
     }
+
+
+def _complete_turn_guarded(ctx: UserContext, send_text: str,
+                           prior_history: List[BaseMessage],
+                           prior_raw: List[Dict[str, Any]],
+                           image_ids: List[str], memory_notes: str,
+                           project_context: str, deep_mode: bool,
+                           force_search: bool,
+                           active_tier: Optional[str],
+                           on_token: Any = None,
+                           on_reset: Any = None) -> Tuple[Dict[str, Any], str, str]:
+    """_complete_turn with saturation mapped to HTTP 503 (fail fast)."""
+    from fastapi import HTTPException
+
+    try:
+        return _complete_turn(
+            ctx, send_text, prior_history, prior_raw, image_ids,
+            memory_notes, project_context, deep_mode, force_search,
+            active_tier, on_token, on_reset)
+    except ExecutorBusyError:
+        raise HTTPException(
+            status_code=503,
+            detail="Server is busy, please retry in a moment.")
 
 
 def regenerate_chat(ctx: UserContext, index: int,
@@ -373,7 +398,7 @@ def regenerate_chat(ctx: UserContext, index: int,
     prior_raw = [dict(m) for m in prior]
     memory_notes, project_context = _memory_and_project(store, project_id)
 
-    fresh_msg, tier, task_type = _complete_turn(
+    fresh_msg, tier, task_type = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, image_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier)

@@ -40,6 +40,7 @@ from agent.executor import (
     _BoundedExecutor,
     _call_bounded,
     _invoke_bounded,
+    ExecutorBusyError,
 )
 from agent.planning import plan_then_execute
 from agent.prompts import (
@@ -81,6 +82,7 @@ from agent.vision import _try_vision_answer
 __all__ = [
     "AgentResult",
     "BudgetExhausted",
+    "ExecutorBusyError",
     "MAX_HISTORY_MESSAGES",
     "MAX_TOOL_ROUNDS",
     "REFLECTION_ENABLED",
