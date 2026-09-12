@@ -36,7 +36,7 @@ def main() -> int:
         print("Missing dependency: pip install google-auth-oauthlib")
         return 2
 
-    from services.gmail import SCOPES
+    from services.google import ALL_SCOPES as SCOPES
 
     flow = InstalledAppFlow.from_client_config(
         {

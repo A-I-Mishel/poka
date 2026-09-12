@@ -124,6 +124,11 @@ token). Mail is untrusted DATA; sending is irreversible, so
 (`confirm=true`) — drafts are the safe default. Without credentials
 the tools report unconfigured instead of failing.
 
+Calendar (`list_calendar_events`, `create_calendar_event`,
+`delete_calendar_event`): same Google OAuth client (refresh token
+must carry the calendar scope — re-run the helper after adding it).
+Creating is low-risk; deletion needs `confirm=true`.
+
 Document knowledge base (vector retrieval, answers "what do my
 documents say"): text-bearing uploads (PDF/CSV) are chunked and
 embedded at upload time (best-effort, never fails the upload) into the

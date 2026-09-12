@@ -16,14 +16,9 @@ without credentials or network).
 import base64
 from typing import Any, Dict, List, Optional
 
+from services.google import GMAIL_SCOPES as SCOPES
 from services.obs import event as obs_event
 from services.secrets import get_secret
-
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.compose",
-]
 
 MAX_BODY_CHARS: int = 20000
 MAX_SEARCH_RESULTS: int = 10
