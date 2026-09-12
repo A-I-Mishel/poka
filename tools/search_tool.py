@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse
 from langchain_core.tools import tool
 
-from services.context import get_current_user_id
+from services.context import get_current_user_id, get_limit_key
 from services.limits import MAX_QUERY_CHARS, MAX_SEARCH_CHARS
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
@@ -145,7 +145,7 @@ def web_search(query: str) -> str:
         return "STATUS=INVALID tool=web_search: empty query."
     user_id = get_current_user_id()
     if user_id:
-        verdict = get_rate_limiter().check(user_id, "search")
+        verdict = get_rate_limiter().check(get_limit_key() or user_id, "search")
         if not verdict.allowed:
             obs_event(
                 "ratelimit.deny", action="search", user=user_id,

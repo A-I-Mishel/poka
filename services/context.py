@@ -11,6 +11,10 @@ _current_user_id: ContextVar[Optional[str]] = ContextVar(
     "pluto_user_id", default=None
 )
 
+_limit_key: ContextVar[Optional[str]] = ContextVar(
+    "pluto_limit_key", default=None
+)
+
 
 def set_current_user_id(user_id: Optional[str]) -> None:
     """Bind a user ID to the current request context."""
@@ -20,3 +24,17 @@ def set_current_user_id(user_id: Optional[str]) -> None:
 def get_current_user_id() -> Optional[str]:
     """Return the user ID bound to the current request, if any."""
     return _current_user_id.get()
+
+
+def set_limit_key(key: Optional[str]) -> None:
+    """Bind a rate-limit identity for the current request context.
+
+    Stable for logged-in/pinned users (their user ID); client-IP based
+    for ephemeral open-mode visitors so limits actually bind.
+    """
+    _limit_key.set(key)
+
+
+def get_limit_key() -> Optional[str]:
+    """Return the rate-limit identity bound to the current request, if any."""
+    return _limit_key.get()

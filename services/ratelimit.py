@@ -1,8 +1,12 @@
-"""Per-user rate limiting behind an swappable backend interface.
+"""Rate limiting behind a swappable backend interface.
 
+Checks are keyed by a limiting identity, not necessarily a user ID:
+stable identities (env/token) use their user ID, while ephemeral
+open-mode visitors share their client IP so limits actually bind
+(a fresh random ID per request would never hit any limit).
 Default backend is in-process memory (correct per process, documented
 limitation for multi-process deploys). To scale out, implement
-RateLimiter against Redis (INCR + EXPIRE per user:action window) and
+RateLimiter against Redis (INCR + EXPIRE per key:action window) and
 swap it via configure_rate_limiter(). Limits live in services.limits.
 """
 
@@ -22,6 +26,35 @@ class RateLimitResult:
     allowed: bool
     retry_after: float = 0.0
     reason: str = ""
+
+
+def extract_client_ip(x_forwarded_for: Optional[str], peer: Optional[str]) -> str:
+    """Best-effort client IP for rate limiting.
+
+    Prefers the last X-Forwarded-For entry (appended by the closest
+    proxy, so a client cannot forge it past that proxy), else the
+    direct peer address. Caveat: with no trusted proxy in front, XFF
+    is fully client-controlled — this is abuse friction, not a
+    security boundary.
+    """
+    if x_forwarded_for:
+        entries = [p.strip() for p in str(x_forwarded_for).split(",") if p.strip()]
+        if entries:
+            return entries[-1][:45]
+    return (str(peer or "").strip() or "unknown")[:45]
+
+
+def limit_key_for(source: str, user_id: Optional[str], client_ip_addr: Optional[str]) -> str:
+    """Stable limiter identity for one request.
+
+    Stable sources ("env", "token") key on the user ID; anything else
+    (ephemeral open-mode visitors) keys on the client IP so repeated
+    requests from the same visitor share one bucket.
+    """
+    if source in ("env", "token") and (user_id or "").strip():
+        return (user_id or "").strip()
+    ip = (client_ip_addr or "").strip() or "unknown"
+    return f"ip:{ip}"
 
 
 class RateLimiter:
@@ -51,7 +84,13 @@ class MemoryRateLimiter(RateLimiter):
         self._hits: Dict[Tuple[str, str], Deque[float]] = {}
 
     def check(self, user_id: str, action: str) -> RateLimitResult:
-        """Allow/deny one action unit for a user in its sliding window."""
+        """Allow/deny one action unit for a limiting identity in its window.
+
+        `user_id` is an opaque limiting identity: a stable user ID, or an
+        `ip:<addr>` key for ephemeral visitors (see limit_key_for).
+        Entries whose newest hit predates their window are evicted on
+        every check, so one-shot identities cannot accumulate forever.
+        """
         max_calls, window = self._limits.get(action, (10**9, 60.0))
         now = time.time()
         key = (user_id or "anonymous", action)
@@ -67,7 +106,17 @@ class MemoryRateLimiter(RateLimiter):
                     reason=f"Rate limit exceeded for {action} ({max_calls}/{int(window)}s).",
                 )
             queue.append(now)
+            self._prune_locked(now)
             return RateLimitResult(allowed=True)
+
+    def _prune_locked(self, now: float) -> None:
+        """Evict identities with no hits inside their window (caller holds the lock)."""
+        dead = [
+            key for key, queue in self._hits.items()
+            if not queue or queue[-1] <= now - self._limits.get(key[1], (10**9, 60.0))[1]
+        ]
+        for key in dead:
+            del self._hits[key]
 
     def reset(self, user_id: Optional[str] = None) -> None:
         """Clear counters, optionally scoped to one user."""

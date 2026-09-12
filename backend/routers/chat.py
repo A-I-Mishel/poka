@@ -1,9 +1,8 @@
 """Chat send + SSE stream endpoints."""
 
 import json
-import os
-import re
-import time
+import queue
+import threading
 from typing import Any, Dict, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -58,83 +57,85 @@ def regenerate(req: schemas.RegenerateRequest,
         raise HTTPException(status_code=502, detail=str(e))
 
 
-def _word_chunks(text: str, max_chunks: int = 40):
-    """Split text into ~max_chunks word-preserving pieces."""
-    parts = re.split(r"(\s+)", text or "")
-    words = [i for i, c in enumerate(parts) if c and not c.isspace()]
-    if not words:
-        return
-    per = max(1, len(words) // max_chunks)
-    for n in range(per, len(words) + per, per):
-        end = words[min(n, len(words)) - 1] + 1
-        yield "".join(parts[:end])
-
-
-def _stream_delay() -> float:
-    """Per-chunk pause so delivery reads as streaming, not a dump.
-
-    Same knob as the old UI's typewriter (PLUTO_STREAM_DELAY, seconds;
-    0 disables pacing). Short answers render instantly regardless.
-    """
-    try:
-        return max(0.0, float(os.environ.get("PLUTO_STREAM_DELAY", "0.025")))
-    except (TypeError, ValueError):
-        return 0.025
+_KEEPALIVE_SECONDS = 15.0
 
 
 @router.post("/stream")
 def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
-    """Run one turn, streaming the answer as SSE token deltas.
+    """Run one turn, streaming the answer's real tokens as SSE.
 
-    Events (JSON per line): ``meta`` (tier/task), ``token`` (cumulative
-    text so far), ``done`` (full SendResponse payload), ``error``.
-    The answer still comes from the standard pipeline; streaming only
-    affects delivery, never content.
+    Events (JSON per line): ``token`` (cumulative answer text — genuine
+    provider tokens forwarded live, never replayed), ``reset`` (a new
+    model call supersedes earlier text: discard it and keep waiting),
+    ``meta`` (tier/task, once the turn completes), ``done`` (full
+    send-response payload, same shape as /send), ``error``. ``: ping``
+    comments keep idle connections alive during long generations.
+    History is persisted exactly once, when the turn completes — a
+    disconnect can never leave partial messages behind.
     """
     user_id = ctx.user_id
+    limit_key = ctx.limit_key or ctx.user_id
+    source = ctx.source or ""
     params: Dict[str, Any] = req.model_dump()
 
     def _events() -> Iterator[str]:
-        # This generator runs on a different worker thread than the
-        # endpoint: re-bind the user, then reuse the request's stores
-        # (plain path holders, safe across threads).
-        bind_request_user(user_id)
-        thread_ctx = ctx
-        try:
-            payload = run_chat(
-                thread_ctx,
-                params["content"],
-                upload_ids=params.get("upload_ids") or [],
-                project_id=params.get("project_id"),
-                deep_mode=bool(params.get("deep_mode", False)),
-                force_search=bool(params.get("force_search", False)),
-                active_tier=params.get("active_tier"),
-            )
-        except HTTPException as e:
+        events: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+        outcome: Dict[str, Any] = {}
+
+        def _run() -> None:
+            # Separate worker: the generator thread must stay free to
+            # yield tokens while the pipeline runs. Re-bind the user
+            # (contextvars do not cross threads), then reuse the
+            # request's stores (plain path holders, safe across threads).
+            bind_request_user(user_id, limit_key, source)
+            try:
+                outcome["payload"] = run_chat(
+                    ctx,
+                    params["content"],
+                    upload_ids=params.get("upload_ids") or [],
+                    project_id=params.get("project_id"),
+                    deep_mode=bool(params.get("deep_mode", False)),
+                    force_search=bool(params.get("force_search", False)),
+                    active_tier=params.get("active_tier"),
+                    on_token=lambda text: events.put({"type": "token", "text": text}),
+                    on_reset=lambda: events.put({"type": "reset"}),
+                )
+            except HTTPException as e:
+                outcome["error"] = str(e.detail)
+            except (ValueError, RuntimeError) as e:
+                outcome["error"] = str(e)
+            except Exception:
+                outcome["error"] = "Internal error."
+            finally:
+                events.put({"type": "end"})
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        while True:
+            try:
+                evt = events.get(timeout=_KEEPALIVE_SECONDS)
+            except queue.Empty:
+                yield ": ping\n\n"
+                continue
+            kind = evt.get("type")
+            if kind == "end":
+                break
+            if kind == "reset":
+                yield "data: " + json.dumps({"type": "reset"}) + "\n\n"
+            elif kind == "token":
+                yield "data: " + json.dumps(
+                    {"type": "token", "text": evt.get("text", "")}) + "\n\n"
+        worker.join()
+        if "error" in outcome:
             yield "data: " + json.dumps(
-                {"type": "error", "detail": str(e.detail)}) + "\n\n"
+                {"type": "error", "detail": outcome["error"]}) + "\n\n"
             return
-        except ValueError as e:
-            yield "data: " + json.dumps(
-                {"type": "error", "detail": str(e)}) + "\n\n"
-            return
-        except RuntimeError as e:
-            yield "data: " + json.dumps(
-                {"type": "error", "detail": str(e)}) + "\n\n"
-            return
-        message = payload["message"]
+        payload = outcome["payload"]
         yield "data: " + json.dumps({
             "type": "meta",
             "active_tier": payload.get("active_tier", ""),
             "task_type": payload.get("task_type", ""),
         }) + "\n\n"
-        chunks = list(_word_chunks(str(message.get("content", ""))))
-        delay = _stream_delay() if len(chunks) > 1 else 0.0
-        for partial in chunks:
-            yield "data: " + json.dumps(
-                {"type": "token", "text": partial}) + "\n\n"
-            if delay > 0:
-                time.sleep(delay)
         yield "data: " + json.dumps({"type": "done", "result": payload}) + "\n\n"
 
     return StreamingResponse(_events(), media_type="text/event-stream")

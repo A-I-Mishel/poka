@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from services.context import get_current_user_id, set_current_user_id
+from services.context import get_current_user_id, get_limit_key, set_limit_key, set_current_user_id
 from services.context_budget import CTX_HISTORY_TOKENS, CTX_MEMORY_TOKENS, fit_history, fit_text
 from services.limits import (
     MAX_EXTERNAL_TOKENS,
@@ -26,7 +26,7 @@ from services.limits import (
 from services.obs import timed as obs_timed
 from services.storage import MAX_SOURCES, clean_source_record
 from services.tokens import count_tokens, truncate_tokens
-from tools import web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect
+from tools import web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect, search_documents
 from tools.search_tool import extract_cited_sources
 
 from agent.budget import BudgetExhausted, RequestBudget
@@ -35,26 +35,29 @@ from agent.cascade import (
     _record_tier_success,
     classify_provider_error,
 )
-from agent.executor import _call_bounded
+from agent.executor import TokenStream, _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text, _build_system_prompt, strip_internal_reasoning
 
-tools: List[Any] = [web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect]
+tools: List[Any] = [web_search, search_documents, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
 MAX_TOOL_ROUNDS: int = 4
 
 
-def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any]) -> Any:
+def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_key: Any = None) -> Any:
     """Invoke a tool with the submitting request's user bound.
 
-    Worker threads do not inherit contextvars, so the user ID captured
-    on the calling thread is explicitly restored here. Without this,
-    every tool would see "no user" and deny vault access.
+    Worker threads do not inherit contextvars, so the user ID (and the
+    rate-limit identity) captured on the calling thread are explicitly
+    restored here. Without this, every tool would see "no user" and
+    deny vault access, and limits would fall back to per-tool-call keys.
     """
     if user_id is not None:
         set_current_user_id(user_id)
+    if limit_key is not None:
+        set_limit_key(limit_key)
     return tool.invoke(args)
 
 
@@ -90,9 +93,10 @@ def _execute_tool_call(tool_call: Any, budget: Optional[RequestBudget] = None) -
         budget.count_tool(is_search=(name == "web_search"))
     try:
         user_id = get_current_user_id()
+        limit_key = get_limit_key()
         with obs_timed(f"tool.{name}") as rec:
             out = _call_bounded(
-                lambda: _run_tool_with_context(user_id, tool, args),
+                lambda: _run_tool_with_context(user_id, tool, args, limit_key),
                 TOOL_TIMEOUT_SECONDS,
                 f"Tool {name}",
             )
@@ -123,7 +127,7 @@ def _note_tier_failure(tier_name: Any, error: Any) -> None:
     if not isinstance(tier_name, str) or not tier_name:
         return
     try:
-        _record_tier_failure(tier_name, classify_provider_error(error)[1])
+        _record_tier_failure(tier_name, classify_provider_error(error)[0])
     except Exception:
         pass
 
@@ -142,6 +146,8 @@ def run_tool_loop(
     project_context: str = "",
     llm_provider: Optional[Callable[[], Tuple[str, Any]]] = None,
     tier_trace: Optional[List[str]] = None,
+    on_token: Optional[Callable[[str], None]] = None,
+    on_reset: Optional[Callable[[], None]] = None,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -171,6 +177,14 @@ def run_tool_loop(
     so callers can report which tier actually finished the work.
     BudgetExhausted is never treated as a tier failure and always
     propagates — it is our limit, not the provider's.
+
+    on_token receives cumulative answer text live as model calls
+    stream it; on_reset fires before a new call supersedes an earlier
+    one in the same turn (tool rounds, final synthesis), so consumers
+    never concatenate stale text with fresh text. Both default to
+    None (historical silent behavior). A TokenStream instance passed
+    as on_token is shared (never re-wrapped) so resets coordinate
+    across nested loops.
     """
     if budget is None:
         budget = RequestBudget()
@@ -277,6 +291,8 @@ def run_tool_loop(
     last_llm: Any = llm_instance
     provider_error: Optional[Exception] = None
     rounds_used = 0
+    tokens = on_token if isinstance(on_token, TokenStream) else TokenStream(on_token, on_reset)
+    live = tokens if tokens.streaming else None
     while rounds_used < max_rounds:
         budget.check_time()
         tier_name: Optional[str] = None
@@ -298,7 +314,9 @@ def run_tool_loop(
                 continue
             last_llm = round_llm
         try:
-            response = agent._invoke_bounded(bound, messages, budget=budget)
+            if live is not None:
+                live.reset_for_new_call()
+            response = agent._invoke_bounded(bound, messages, budget=budget, on_token=live)
         except BudgetExhausted:
             raise
         except Exception as e:
@@ -365,6 +383,8 @@ def run_tool_loop(
     # Budget exhausted: one final no-tools synthesis call on the last
     # working tier, else a salvaged partial answer, else a clean status.
     try:
+        if live is not None:
+            live.reset_for_new_call()
         final = agent._invoke_bounded(
             last_llm,
             [
@@ -381,6 +401,7 @@ def run_tool_loop(
             ],
             timeout=60.0,
             budget=budget,
+            on_token=live,
         )
         text = _as_text(final.content).strip()
         if text:

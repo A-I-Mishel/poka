@@ -21,6 +21,6 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: PLUTO_FRONTEND_ORIGIN
-        value: https://pluto.vercel.app
+        value: https://poka-nine.vercel.app
       - key: PLUTO_AUTH_MODE
         value: open

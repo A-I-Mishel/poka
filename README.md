@@ -1,6 +1,6 @@
 # Pluto — Smart Task Agent
 
-Pluto is a multi-purpose AI assistant (React web app + FastAPI backend)
+Pluto is a multi-purpose AI assistant (web app + FastAPI backend)
 for students and professionals: chat with file attachments, web
 research with citations, PDF/CSV analysis, PowerPoint and Word
 generation, and persistent per-user memory — backed by a cascading
@@ -9,7 +9,7 @@ multi-model agent.
 ## Architecture
 
 ```
-frontend/  (React + Vite UI, deployed on Vercel)
+frontend/  (Vite + vanilla JS UI, deployed on Vercel)
   |
   v  (HTTP /api, VITE_API_URL points at the backend)
 backend/  (FastAPI: chat, chats, uploads, artifacts, projects,
@@ -66,6 +66,7 @@ python -m pytest tests/ -q
 | `PLUTO_DATA_DIR` | no (`data/`) | Storage root override (tests use tmp) |
 | `PLUTO_FRONTEND_ORIGIN` | on the API host | Allowed CORS origin(s) of the UI |
 | `VITE_API_URL` | on Vercel | Public URL of the API (empty = same origin) |
+| `PLUTO_KB_EMBED_MODEL` | no | Embedding model for document search (default `models/gemini-embedding-001`) |
 
 Locally these live in `.env` (gitignored). On Render/Vercel put them
 under Environment Variables. Never commit keys.
@@ -106,6 +107,16 @@ row-capped before pandas runs, with a controlled `csv_inspect` op set
 truncation notes and documents are validated by reopening before
 delivery.
 
+Document knowledge base (vector retrieval, answers "what do my
+documents say"): text-bearing uploads (PDF/CSV) are chunked and
+embedded at upload time (best-effort, never fails the upload) into the
+uploader's vault (`kb.json`); the `search_documents` tool ranks chunks
+by cosine similarity. Embeddings come from Gemini (`GEMINI_API_KEY`,
+model via `PLUTO_KB_EMBED_MODEL`); per-user isolation holds — one
+user's vectors are never searched for another. Heuristic memory
+(regex facts + keyword overlap) is separate and answers "what has this
+user told me before".
+
 ## Storage architecture
 
 Per-user vaults under `data/users/<safe-id>/`: `chats.json`,
@@ -120,10 +131,12 @@ failures raise instead of masquerading as corruption.
 
 ## Security model
 
-- Per-user isolation for chats, memory, uploads, outputs, and memory
-  facts (semantic retrieval is per-user only; no global vector index).
+- Per-user isolation for chats, memory, uploads, outputs, memory
+  facts, and document vectors (heuristic keyword-overlap retrieval and
+  vector search are both per-user only).
 - Path traversal rejected at every boundary; storage names generated.
-- Rate limits per user (chat/search/upload/generate/deep).
+- Rate limits per limiting identity (chat/search/upload/generate/deep):
+  stable user ID when known, client IP for ephemeral open-mode visitors.
 - Request/tool/model budgets bound every request.
 - Untrusted content (web/PDF/CSV/OCR/image/memory) is delimited DATA,
   never instructions; memory is injected in an isolated section.

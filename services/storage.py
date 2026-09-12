@@ -82,15 +82,26 @@ def sanitize_user_key(raw: Any) -> str:
     return text[:64]
 
 
-def user_dir(user_id: str) -> Path:
-    """Resolve a user's directory, rejecting any traversal outside users/."""
+def user_dir(user_id: str, create: bool = True) -> Path:
+    """Resolve a user's directory, rejecting any traversal outside users/.
+
+    Directories are created only when `create` is true: stores resolve
+    paths on every request but must not litter the disk for visitors
+    who never persist anything (e.g. ephemeral open-mode identities).
+    All write helpers ensure parents before writing; all reads tolerate
+    missing files.
+    """
     key = sanitize_user_key(user_id)
     base = (data_root() / "users").resolve()
-    base.mkdir(parents=True, exist_ok=True)
+    if create:
+        base.mkdir(parents=True, exist_ok=True)
+    else:
+        base = data_root() / "users"
     candidate = (base / key).resolve()
-    if candidate != base and base not in candidate.parents:
+    if candidate != base.resolve() and base.resolve() not in candidate.parents:
         raise StorageError("User storage path escapes the users directory.")
-    candidate.mkdir(parents=True, exist_ok=True)
+    if create:
+        candidate.mkdir(parents=True, exist_ok=True)
     return candidate
 
 
@@ -468,14 +479,15 @@ def _clean_project_record(value: Any) -> Optional[Dict[str, Any]]:
 class UserStore:
     """All persistent state owned by one user ID."""
 
-    def __init__(self, user_id: str) -> None:
+    def __init__(self, user_id: str, run_migration: bool = True) -> None:
         self.user_id: str = sanitize_user_key(user_id)
-        self.root: Path = user_dir(self.user_id)
+        self.root: Path = user_dir(self.user_id, create=False)
         self.chats_path: Path = self.root / "chats.json"
         self.memory_path: Path = self.root / "memory.md"
         self.structured_path: Path = self.root / "structured.json"
         self.projects_path: Path = self.root / "projects.json"
-        self.migrate_legacy()
+        if run_migration:
+            self.migrate_legacy()
 
     # -- chats -------------------------------------------------
     def load_chats(self) -> Tuple[Dict[str, Any], List[str]]:

@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 
 from backend import schemas
 from backend.deps import UserContext, current_user
+from services import kb as kb_svc
 from services.files import FileValidationError
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 async def upload(file: UploadFile = File(...),
                  ctx: UserContext = Depends(current_user)):
     """Validate and vault one file; returns its attachment reference."""
-    verdict = get_rate_limiter().check(ctx.user_id, "upload")
+    verdict = get_rate_limiter().check(ctx.limit_key or ctx.user_id, "upload")
     if not verdict.allowed:
         obs_event("ratelimit.deny", action="upload", user=ctx.user_id,
                   retry_after_s=round(verdict.retry_after, 1))
@@ -35,6 +36,13 @@ async def upload(file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail=f"Upload rejected: {e}")
     except Exception:
         raise HTTPException(status_code=400, detail="Upload rejected: unexpected storage error.")
+    # Best-effort knowledge-base ingest (never fails the upload):
+    # text-bearing documents become vector-searchable for "what do my
+    # documents say" questions. Images/unsupported types are skipped.
+    try:
+        kb_svc.ingest_document(ctx.user_id, meta.id, str(meta.display_name), data)
+    except Exception:
+        pass
     return {
         "id": meta.id,
         "kind": str(getattr(meta, "kind", "image") or "image"),

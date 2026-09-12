@@ -1,0 +1,79 @@
+"""Document knowledge-base search: vector retrieval over user uploads.
+
+Answers "what do my documents say" by cosine search over per-user chunk
+embeddings (services.kb). Results are untrusted DATA like any tool
+output; provenance (document name + score) travels with every passage.
+"""
+
+import logging
+
+from langchain_core.tools import tool
+
+from services import kb as kb_svc
+from services.context import get_current_user_id, get_limit_key
+from services.files import FileStore
+from services.limits import KB_MAX_SNIPPET_CHARS, KB_TOP_K, MAX_QUERY_CHARS
+from services.obs import event as obs_event
+from services.ratelimit import get_rate_limiter
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+@tool
+def search_documents(query: str) -> str:
+    """Search the user's uploaded documents for passages about the query.
+
+    Use when the user asks what their documents, files, PDFs, or data
+    say — or to verify a claim against uploaded material. Do NOT use
+    for general knowledge, definitions, or anything not in the uploads.
+
+    Args:
+        query: Specific search query (5-10 words). Be precise.
+
+    Returns:
+        Numbered passages with document names and match scores, or a
+        structured failure marker (never silent).
+    """
+    query = str(query or "")[:MAX_QUERY_CHARS]
+    if not query.strip():
+        return "STATUS=INVALID tool=search_documents: empty query."
+    user_id = get_current_user_id()
+    if not user_id:
+        return "STATUS=DENIED tool=search_documents: no user context."
+    verdict = get_rate_limiter().check(get_limit_key() or user_id, "kb_search")
+    if not verdict.allowed:
+        obs_event(
+            "ratelimit.deny", action="kb_search", user=user_id,
+            retry_after_s=round(verdict.retry_after, 1),
+        )
+        return (
+            "STATUS=DENIED tool=search_documents: document search rate limit "
+            f"exceeded, retry in {verdict.retry_after:.0f}s."
+        )
+    try:
+        existing = {m.id for m in FileStore(user_id).list_uploads()}
+    except Exception:
+        existing = None
+    try:
+        hits = kb_svc.search(user_id, query, top_k=KB_TOP_K, valid_ids=existing)
+    except Exception as e:
+        logger.warning("Document search failed: %s", e)
+        return "STATUS=DEGRADED tool=search_documents: document search failed."
+    if not hits:
+        return (
+            "STATUS=EMPTY tool=search_documents: no matching document passages. "
+            "Only uploaded PDF/CSV documents are searchable."
+        )
+    lines = []
+    for i, hit in enumerate(hits, 1):
+        text = str(hit.get("text", "") or "")
+        if len(text) > 1200:
+            text = text[:1200] + "…"
+        lines.append(
+            f"[{i}] {hit.get('name', 'document')} "
+            f"(match {float(hit.get('score', 0.0)):.2f}):\n{text}"
+        )
+    formatted = "\n\n".join(lines)
+    if len(formatted) > KB_MAX_SNIPPET_CHARS:
+        formatted = formatted[:KB_MAX_SNIPPET_CHARS] + "\n[Note: results truncated.]"
+    return formatted

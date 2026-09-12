@@ -23,6 +23,7 @@ from services.vision import (
 from agent.budget import BudgetExhausted, RequestBudget
 from agent.cascade import _usable_tiers
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
+from agent.executor import TokenStream
 from agent.prompts import _as_text, strip_internal_reasoning
 
 logger = logging.getLogger(__name__)
@@ -35,12 +36,17 @@ def _try_vision_answer(
     budget: RequestBudget,
     first: Optional[str],
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]],
+    on_token: Optional[Callable[[str], None]] = None,
+    on_reset: Optional[Callable[[], None]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Attempt a vision-grounded answer on a vision-capable tier.
 
     Returns the result dict on success, None when no capable tier is
     configured or all vision attempts fail (caller falls back to the
     normal text cascade). Vision failures never cool tiers for text use.
+    on_token streams the single vision answer live; on_reset fires when
+    a retry on another tier supersedes a partial stream. A TokenStream
+    passed as on_token is shared (never re-wrapped).
     """
     data_urls: List[str] = []
     for ref in (image_upload_ids or [])[:3]:
@@ -62,6 +68,8 @@ def _try_vision_answer(
         return None
     prompt = vision_trust_preamble() + "\n\nUser request:\n" + user_input
     payload = build_vision_messages(prompt, data_urls)
+    tokens = on_token if isinstance(on_token, TokenStream) else TokenStream(on_token, on_reset)
+    live = tokens if tokens.streaming else None
     for name, getter in _usable_tiers(first, tiers):
         if not vision_supported_tier(name):
             continue
@@ -76,8 +84,11 @@ def _try_vision_answer(
                 budget.count_llm()
             except BudgetExhausted:
                 return None  # let the normal cascade produce the budget message
+            if live is not None:
+                live.reset_for_new_call()
             response = agent._invoke_bounded(
-                llm_instance, [HumanMessage(content=payload)], budget=None
+                llm_instance, [HumanMessage(content=payload)], budget=None,
+                on_token=live,
             )
             text = strip_internal_reasoning(_as_text(response.content).strip())
             if not text:

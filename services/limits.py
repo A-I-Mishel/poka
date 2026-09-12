@@ -58,14 +58,37 @@ MAX_TOOL_RESULT_TOKENS: int = 3000
 MAX_EXTERNAL_TOKENS: int = 12000
 MAX_QUERY_CHARS: int = 300
 
-# Rate limits: action -> (max calls, window seconds), scoped per user
+# Rate limits: action -> (max calls, window seconds), scoped per limiting
+# identity (stable user ID, or client IP for ephemeral open-mode visitors).
 RATE_LIMITS: dict = {
     "chat": (100, 3600.0),
     "search": (60, 3600.0),
     "upload": (30, 3600.0),
     "generate": (20, 3600.0),
     "deep": (20, 3600.0),
+    "kb_search": (60, 3600.0),
 }
+
+# Knowledge base (vector retrieval over user documents). All tunables
+# live here — never hardcoded at call sites.
+KB_CHUNK_CHARS: int = 1200
+KB_CHUNK_OVERLAP: int = 150
+KB_MAX_CHUNKS_PER_DOC: int = 40
+KB_MAX_DOC_BYTES: int = 400000
+KB_TOP_K: int = 5
+KB_MAX_SNIPPET_CHARS: int = 12000
+KB_INGEST_EXTS: frozenset = frozenset({"pdf", "csv"})
+
+# Tier cooldowns (agent cascade): driven by classify_provider_error kinds.
+# Timeouts are congestion, not outage (brief cool, 2nd consecutive strike);
+# quota errors mean hours of darkness (daily resets — no 10-minute re-probes);
+# auth/invalid config never heals by retrying (long); server/network/unknown
+# are transient (default window).
+TIER_COOLDOWN_TIMEOUT_SECONDS: float = 60.0
+TIER_COOLDOWN_TRANSIENT_SECONDS: float = 600.0
+TIER_COOLDOWN_QUOTA_SECONDS: float = 6 * 3600.0
+TIER_COOLDOWN_PERMANENT_SECONDS: float = 3600.0
+TIMEOUT_STRIKES_BEFORE_COOL: int = 2
 
 # Project context (explicit user-controlled per-project text).
 # Conservative: operational instructions, not a document store (~1000

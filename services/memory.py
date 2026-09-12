@@ -43,7 +43,7 @@ def set_memory_dir(directory: str) -> None:
     """Direct structured-memory reads/writes at directory/structured_memory.json.
 
     Binding is per-thread; hosts must call this on every request thread
-    before use (app.py does so at the top of each run).
+    before use (backend/deps.py does so for every API request).
     """
     _state.directory = directory or ""
 

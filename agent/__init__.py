@@ -30,6 +30,7 @@ from agent.cascade import (
     _tier_skipped,
     _TIER_FAILS,
     _TIER_SKIP_UNTIL,
+    _TIER_TIMEOUTS,
     _usable_tiers,
     classify_provider_error,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "_GREETING_RE",
     "_TIER_FAILS",
     "_TIER_SKIP_UNTIL",
+    "_TIER_TIMEOUTS",
     "_UPLOAD_ID_RE",
     "_as_text",
     "_bounded_pool",

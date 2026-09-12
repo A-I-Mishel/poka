@@ -38,11 +38,13 @@ def env(tmp_path, monkeypatch):
 def _clean_agent_state():
     agent._TIER_FAILS.clear()
     agent._TIER_SKIP_UNTIL.clear()
+    agent._TIER_TIMEOUTS.clear()
     agent.ROUTER_STATS["rule"] = 0
     agent.ROUTER_STATS["llm"] = 0
     yield
     agent._TIER_FAILS.clear()
     agent._TIER_SKIP_UNTIL.clear()
+    agent._TIER_TIMEOUTS.clear()
 
 
 class FakeLLM:
@@ -73,7 +75,7 @@ class CallCounter:
         self.context_tokens = 0
         real = agent._invoke_bounded
 
-        def counting(llm, messages, timeout=90.0, budget=None):
+        def counting(llm, messages, timeout=90.0, budget=None, **kwargs):
             self.llm_calls += 1
             try:
                 self.context_tokens += sum(
@@ -81,7 +83,7 @@ class CallCounter:
                 )
             except Exception:
                 pass
-            return real(llm, messages, timeout=timeout, budget=budget)
+            return real(llm, messages, timeout=timeout, budget=budget, **kwargs)
 
         monkeypatch.setattr(agent, "_invoke_bounded", counting)
 

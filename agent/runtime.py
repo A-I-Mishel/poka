@@ -30,6 +30,7 @@ from services.obs import event as obs_event
 
 from agent.budget import BudgetExhausted, RequestBudget
 from agent.cascade import ROUTER_STATS, _run_cascade_step, _usable_tiers
+from agent.executor import TokenStream
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.planning import plan_then_execute
 from agent.prompts import _as_text, _build_system_prompt, _memory_data_block, _messages_to_langchain, strip_internal_reasoning
@@ -105,6 +106,8 @@ def answer_with_fallback(
     force_web_search: bool = False,
     image_upload_ids: Optional[List[str]] = None,
     project_context: str = "",
+    on_token: Optional[Callable[[str], None]] = None,
+    on_reset: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
     """Answer with the full stack: memorize, classify, plan, execute, reflect.
 
@@ -126,11 +129,15 @@ def answer_with_fallback(
         deep_mode: When True, run planning + reflection (more calls).
         force_web_search: When True, execute a web search first (policy,
             not just a prompt hint).
-        image_upload_ids: Upload IDs of attached images to analyze with a
-            vision-capable tier when one is configured.
-        project_context: Explicit user-controlled text for the current
-            project, wrapped as untrusted data in the system prompt.
-            Empty means Personal / no project context.
+    image_upload_ids: Upload IDs of attached images to analyze with a
+    vision-capable tier when one is configured.
+    project_context: Explicit user-controlled text for the current
+    project, wrapped as untrusted data in the system prompt.
+    Empty means Personal / no project context.
+    on_token: Receives cumulative answer text live (real provider
+    tokens, never replayed). on_reset fires before a new model call
+    supersedes an earlier one in the same turn. Both default to None
+    (historical silent behavior).
 
     Returns:
         Dict with 'output', 'active_tier', 'task_type', 'request_id',
@@ -146,6 +153,11 @@ def answer_with_fallback(
     started_at: float = time.time()
     user_id = get_current_user_id()
     budget = RequestBudget()
+    # One shared stream per turn: every final-answer invoke below
+    # reuses it, so resets coordinate across vision, cascade attempts,
+    # tool rounds, and final synthesis.
+    tokens = TokenStream(on_token, on_reset)
+    live = tokens if tokens.streaming else None
 
     # Vision fast-path: attached images go to a vision-capable tier with
     # real image content (never a "you cannot view images" dead end when
@@ -153,7 +165,8 @@ def answer_with_fallback(
     # otherwise — never claims analysis that did not happen.
     if image_upload_ids:
         vision_hit = _try_vision_answer(
-            request_id, user_input, image_upload_ids, budget, first, tiers
+            request_id, user_input, image_upload_ids, budget, first, tiers,
+            live, on_reset,
         )
         if vision_hit is not None:
             return vision_hit
@@ -222,6 +235,7 @@ def answer_with_fallback(
                     HumanMessage(content=user_input),
                 ],
                 budget=budget,
+                on_token=live,
             )
             return _as_text(response.content)
 
@@ -324,7 +338,7 @@ def answer_with_fallback(
                 except Exception as e:
                     last_error = e
                     try:
-                        _record_tier_failure(name, classify_provider_error(e)[1])
+                        _record_tier_failure(name, classify_provider_error(e)[0])
                     except Exception:
                         pass
                     continue
@@ -346,14 +360,14 @@ def answer_with_fallback(
                 draft = plan_then_execute(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, budget, used_tools, used_sources,
-                    project_context, provider, tooled_tiers,
+                    project_context, provider, tooled_tiers, live, on_reset,
                 )
             else:
                 draft = run_tool_loop(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, force_web_search,
                     MAX_TOOL_ROUNDS, budget, used_tools, used_sources,
-                    project_context, provider, tooled_tiers,
+                    project_context, provider, tooled_tiers, live, on_reset,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
                 return reflect_and_improve(llm, user_input, draft, langchain_history, budget)

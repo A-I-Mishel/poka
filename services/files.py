@@ -153,11 +153,20 @@ class FileStore:
 
     def __init__(self, user_id: str) -> None:
         self.user_id: str = user_id
-        self.root: Path = user_dir(user_id)
+        self.root: Path = user_dir(user_id, create=False)
         self.uploads_dir: Path = self.root / "uploads"
         self.outputs_dir: Path = self.root / "outputs"
         self.uploads_registry: Path = self.root / "uploads.json"
         self.outputs_registry: Path = self.root / "outputs.json"
+
+    def _ensure_dirs(self) -> None:
+        """Create the vault directories on first actual write.
+
+        Construction must stay side-effect free: stores are built on
+        every request (including read-only ones), and ephemeral
+        open-mode visitors must not litter the disk.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -194,6 +203,7 @@ class FileStore:
 
     def _update_registry(self, path: Path, mutate: Any) -> None:
         """Atomically read-modify-write a registry under one lock hold."""
+        self._ensure_dirs()
         with path_lock(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -280,6 +290,7 @@ class FileStore:
         dest = self.uploads_dir / stored
         if not self._inside(self.uploads_dir, dest):
             raise FileValidationError("Unsafe filename rejected.")
+        self._ensure_dirs()
         try:
             _atomic_write_bytes(dest, bytes(data))
         except OSError as e:
@@ -364,6 +375,7 @@ class FileStore:
         dest = self.outputs_dir / stored
         if not self._inside(self.outputs_dir, dest):
             raise StorageError("Unsafe output filename rejected.")
+        self._ensure_dirs()
         try:
             _atomic_write_bytes(dest, bytes(data))
         except OSError as e:

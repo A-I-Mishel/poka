@@ -13,14 +13,24 @@ from langchain_core.language_models.base import BaseLanguageModel
 
 import agent  # package-attr routing: tier-table doubles on agent stay effective
 from agent.budget import BudgetExhausted
+from services.limits import (
+    TIER_COOLDOWN_PERMANENT_SECONDS,
+    TIER_COOLDOWN_QUOTA_SECONDS,
+    TIER_COOLDOWN_TIMEOUT_SECONDS,
+    TIER_COOLDOWN_TRANSIENT_SECONDS,
+    TIMEOUT_STRIKES_BEFORE_COOL,
+)
 
-# Skip a failing tier immediately so the next message goes straight to
-# the next live model (cool-down still expires so recovered tiers return).
-# Permanent failures (bad credentials, invalid requests) cool down longer.
+# Skip a failing tier so the next message goes straight to the next
+# live model (cool-down still expires so recovered tiers return).
+# Cool-down length is driven by the classify_provider_error kind:
+# timeouts are congestion (brief, 2nd consecutive strike); quota errors
+# mean hours of darkness; auth/invalid config never heals by retrying.
 SKIP_AFTER_FAILS: int = 1
-SKIP_SECONDS: float = 600.0
-SKIP_SECONDS_PERMANENT: float = 3600.0
+SKIP_SECONDS: float = TIER_COOLDOWN_TRANSIENT_SECONDS
+SKIP_SECONDS_PERMANENT: float = TIER_COOLDOWN_PERMANENT_SECONDS
 _TIER_FAILS: Dict[str, int] = {}
+_TIER_TIMEOUTS: Dict[str, int] = {}
 _TIER_SKIP_UNTIL: Dict[str, float] = {}
 
 # Deterministic router stats (process-aggregate metrics, no user data).
@@ -82,16 +92,39 @@ def _tier_skipped(name: str) -> bool:
 def _record_tier_success(name: str) -> None:
     """Clear failure state after a tier answers successfully."""
     _TIER_FAILS.pop(name, None)
+    _TIER_TIMEOUTS.pop(name, None)
     _TIER_SKIP_UNTIL.pop(name, None)
 
 
-def _record_tier_failure(name: str, permanent: bool = False) -> None:
-    """Count a failure; cool the tier down (longer when permanent)."""
+def _cooldown_for_kind(kind: str) -> float:
+    """Cool-down window for one classify_provider_error kind."""
+    if kind == "timeout":
+        return TIER_COOLDOWN_TIMEOUT_SECONDS
+    if kind == "rate_limit":
+        return TIER_COOLDOWN_QUOTA_SECONDS
+    if kind in ("auth", "invalid"):
+        return TIER_COOLDOWN_PERMANENT_SECONDS
+    return TIER_COOLDOWN_TRANSIENT_SECONDS
+
+
+def _record_tier_failure(name: str, kind: str = "unknown") -> None:
+    """Count a failure; cool the tier down for its kind's window.
+
+    Timeouts are congestion, not outage: the first consecutive timeout
+    is a free pass (the tier stays live), the Nth consecutive one cools
+    briefly. Any success or non-timeout failure resets the streak.
+    """
+    if kind == "timeout":
+        streak: int = _TIER_TIMEOUTS.get(name, 0) + 1
+        _TIER_TIMEOUTS[name] = streak
+        if streak >= TIMEOUT_STRIKES_BEFORE_COOL:
+            _TIER_SKIP_UNTIL[name] = time.time() + TIER_COOLDOWN_TIMEOUT_SECONDS
+        return
+    _TIER_TIMEOUTS.pop(name, None)
     fails: int = _TIER_FAILS.get(name, 0) + 1
     _TIER_FAILS[name] = fails
-    window = SKIP_SECONDS_PERMANENT if permanent else SKIP_SECONDS
     if fails >= SKIP_AFTER_FAILS:
-        _TIER_SKIP_UNTIL[name] = time.time() + window
+        _TIER_SKIP_UNTIL[name] = time.time() + _cooldown_for_kind(kind)
 
 
 def _friendly_cascade_error(last_error: Any) -> str:
@@ -153,8 +186,7 @@ def _run_cascade_step(
             raise
         except Exception as e:
             last_error = e
-            _, permanent = classify_provider_error(e)
-            _record_tier_failure(name, permanent)
+            _record_tier_failure(name, classify_provider_error(e)[0])
             continue
         if llm_instance is None:
             continue
@@ -166,7 +198,6 @@ def _run_cascade_step(
             raise
         except Exception as e:
             last_error = e
-            _, permanent = classify_provider_error(e)
-            _record_tier_failure(name, permanent)
+            _record_tier_failure(name, classify_provider_error(e)[0])
             continue
     raise RuntimeError(_friendly_cascade_error(last_error))

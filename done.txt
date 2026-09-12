@@ -21,12 +21,13 @@ Phase 3 — quality + capabilities (current)
 - csv_inspect controlled ops (9 ops, no arbitrary code)
 - build_presentation (5 layouts, overflow splits, notes, QC reopen check)
 - build_document (markdown→structured DOCX, inline runs, QC reopen check)
-- Semantic memory: types, polarity/negation, confidence, scoring,
+- Heuristic memory (regex extraction + keyword-overlap scoring, no embeddings):
+  types, polarity/negation, confidence, scoring,
   deletion API + UI control, DATA-delimited prompt injection
 - ui/theme.py extraction; "Take a photo" wording; link-safe highlighting;
   UTC-internal timestamps; 7-day unreferenced-upload retention
 - CI (compile+pytest blocking, pip-audit advisory), MIT LICENSE,
   README.md, pillow pinned
 
-Repo: github.com/A-I-Mishel/pluto (main). Live: Streamlit Cloud + localhost:8501.
+Repo: github.com/A-I-Mishel/poka (main). Live: Vercel UI (poka-nine.vercel.app) + Render API.
 Tests: 112 green (35 phase-1 + 40 phase-2 + 37 phase-3), zero quota spent.

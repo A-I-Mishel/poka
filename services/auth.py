@@ -23,7 +23,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Optional
 
-from services.identity import UserIdentity, get_current_user
+from services.identity import AuthRequired, UserIdentity, get_current_user
 from services.secrets import get_secret
 
 
@@ -66,15 +66,33 @@ def verify_access_token(token: object) -> Optional[str]:
     return None
 
 
-def authenticate() -> AuthResult:
-    """Authenticate the current visitor per the configured mode.
+def authenticate(presented_token: Optional[object] = None) -> AuthResult:
+    """Authenticate one visitor: the single source of truth for identity.
 
-    Open mode preserves the env-then-ephemeral chain. Private mode
-    admits only the env identity, else raises.
+    Resolution order (the whole app funnels through here):
+    1. A presented access token, verified via verify_access_token()
+       (works in every auth mode; stable pseudonymous id).
+    2. Otherwise the mode chain from get_current_user(): env identity,
+       else a per-request ephemeral id in open mode; env-only in
+       private mode.
 
     Raises:
-        AuthRequired: In private mode with no usable credential.
+        AuthRequired: Bad presented token ("Invalid access token."),
+            or private mode with no usable credential
+            ("Authentication required.").
     """
-    identity = get_current_user()
-    anonymous = identity.source == "ephemeral"
-    return AuthResult(identity=identity, authenticated=not anonymous, method=identity.source)
+    if presented_token:
+        user_id = verify_access_token(presented_token)
+        if user_id is None:
+            raise AuthRequired("Invalid access token.")
+        identity = UserIdentity(id=user_id, email=None, source="token")
+        return AuthResult(identity=identity, authenticated=True, method="token")
+    try:
+        identity = get_current_user()
+    except AuthRequired:
+        raise AuthRequired("Authentication required.")
+    return AuthResult(
+        identity=identity,
+        authenticated=identity.source != "ephemeral",
+        method=identity.source,
+    )

@@ -150,11 +150,11 @@ def _resolve_attachments(ctx: UserContext,
     return attachments, image_ids
 
 
-def _check_limits(uid: str, deep_mode: bool) -> None:
+def _check_limits(limit_key: str, deep_mode: bool) -> None:
     """Enforce chat (+deep) rate limits; raises HTTPException(429)."""
     from fastapi import HTTPException
 
-    verdict = get_rate_limiter().check(uid, "chat")
+    verdict = get_rate_limiter().check(limit_key, "chat")
     if not verdict.allowed:
         obs_event("ratelimit.deny", action="chat", user=uid,
                   retry_after_s=round(verdict.retry_after, 1))
@@ -163,7 +163,7 @@ def _check_limits(uid: str, deep_mode: bool) -> None:
             detail=f"Chat rate limit exceeded, retry in {verdict.retry_after:.0f}s.",
         )
     if deep_mode:
-        deep_verdict = get_rate_limiter().check(uid, "deep")
+        deep_verdict = get_rate_limiter().check(limit_key, "deep")
         if not deep_verdict.allowed:
             obs_event("ratelimit.deny", action="deep", user=uid,
                       retry_after_s=round(deep_verdict.retry_after, 1))
@@ -194,7 +194,9 @@ def _complete_turn(ctx: UserContext, send_text: str,
                    image_ids: List[str], memory_notes: str,
                    project_context: str, deep_mode: bool,
                    force_search: bool,
-                   active_tier: Optional[str]) -> Tuple[Dict[str, Any], str, str]:
+                   active_tier: Optional[str],
+                   on_token: Any = None,
+                   on_reset: Any = None) -> Tuple[Dict[str, Any], str, str]:
     """Run the agent and build the assistant message (no persistence)."""
     from agent.prompts import strip_internal_reasoning
 
@@ -213,6 +215,8 @@ def _complete_turn(ctx: UserContext, send_text: str,
         force_web_search=bool(force_search),
         image_upload_ids=image_ids,
         project_context=project_context,
+        on_token=on_token,
+        on_reset=on_reset,
     )
     output = strip_internal_reasoning(str(result.get("output", "")))
     tier = str(result.get("active_tier", "") or "")
@@ -261,18 +265,21 @@ def run_chat(ctx: UserContext, content: str,
              project_id: Optional[str] = None,
              deep_mode: bool = False,
              force_search: bool = False,
-             active_tier: Optional[str] = None) -> Dict[str, Any]:
+             active_tier: Optional[str] = None,
+             on_token: Any = None,
+             on_reset: Any = None) -> Dict[str, Any]:
     """Run one user turn end-to-end; returns send-response payload.
 
     Persists both messages before returning. Raises HTTPException for
     rate limits, ValueError for bad input/attachments, RuntimeError
-    (user-safe message) when every tier fails.
+    (user-safe message) when every tier fails. on_token/on_reset
+    stream live answer tokens (see agent.executor.TokenStream).
     """
     text = str(content or "").strip()
     if not text:
         raise ValueError("Message is empty.")
     store = ctx.user_store
-    _check_limits(ctx.user_id, bool(deep_mode))
+    _check_limits(ctx.limit_key or ctx.user_id, bool(deep_mode))
     chats, current, warnings = _load_state(store)
 
     attachments, image_ids = _resolve_attachments(ctx, upload_ids or [])
@@ -304,7 +311,7 @@ def run_chat(ctx: UserContext, content: str,
     assistant_msg, tier, task_type = _complete_turn(
         ctx, send_text, prior_history, prior_raw, image_ids,
         memory_notes, project_context, bool(deep_mode),
-        bool(force_search), active_tier)
+        bool(force_search), active_tier, on_token, on_reset)
 
     current = current + [user_msg, assistant_msg]
     store.save_chats(chats, current)
@@ -329,7 +336,7 @@ def regenerate_chat(ctx: UserContext, index: int,
     one is appended. Raises ValueError for bad indexes/shapes.
     """
     store = ctx.user_store
-    _check_limits(ctx.user_id, bool(deep_mode))
+    _check_limits(ctx.limit_key or ctx.user_id, bool(deep_mode))
     chats, current, warnings = _load_state(store)
     msgs = [m for m in current if isinstance(m, dict)]
     if not isinstance(index, int) or not (0 <= index < len(msgs)):

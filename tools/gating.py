@@ -8,7 +8,7 @@ no generation and persists nothing.
 
 from typing import Optional, Tuple
 
-from services.context import get_current_user_id
+from services.context import get_current_user_id, get_limit_key
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
 
@@ -24,7 +24,7 @@ def claim_generation_slot(tool_name: str) -> Tuple[Optional[str], Optional[str]]
             f"STATUS=DENIED tool={tool_name}: no user context, "
             "cannot store generated files."
         )
-    verdict = get_rate_limiter().check(user_id, "generate")
+    verdict = get_rate_limiter().check(get_limit_key() or user_id, "generate")
     if not verdict.allowed:
         obs_event(
             "ratelimit.deny", action="generate", tool=tool_name,

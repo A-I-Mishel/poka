@@ -14,9 +14,14 @@ Design (see agent docstring for the cancellation model):
   over to the next tier immediately. The remaining tokens then use the
   regular total timeout. Models without .stream() (legacy/test
   doubles) use plain .invoke() with the total timeout only.
+- Live tokens: callers may pass on_token to receive cumulative answer
+  text as it arrives (real provider tokens, never replayed). Use
+  TokenStream to forward them and reset the consumer whenever a new
+  call supersedes an earlier one in the same turn.
 """
 
 import concurrent.futures
+import logging
 import os
 import queue
 import threading
@@ -24,12 +29,60 @@ from typing import Any, Callable, Iterator, List, Optional
 
 from langchain_core.language_models.base import BaseLanguageModel
 
+from agent.prompts import _as_text
 from services.limits import FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
 from services.obs import event as obs_event
 
 from agent.budget import RequestBudget
 
 _BOUNDED_MAX_WORKERS: int = 8
+
+logger = logging.getLogger(__name__)
+
+
+class TokenStream:
+    """Forward live model tokens; reset the consumer on supersede.
+
+    One instance spans a user turn: pass it (or its __call__) as
+    on_token to every final-answer invoke, and call reset_for_new_call
+    before each new invoke. The first call streams uninterrupted; when
+    a later call starts after tokens already flowed, the consumer is
+    reset first so stale text is never concatenated with fresh text.
+    Callback exceptions are swallowed (streaming is best-effort).
+    """
+
+    def __init__(
+        self,
+        on_token: Optional[Callable[[str], None]] = None,
+        on_reset: Optional[Callable[[], None]] = None,
+    ) -> None:
+        self._on_token = on_token
+        self._on_reset = on_reset
+        self._emitted = False
+
+    @property
+    def streaming(self) -> bool:
+        """Whether any consumer wants tokens (else skip all overhead)."""
+        return self._on_token is not None
+
+    def reset_for_new_call(self) -> None:
+        """Reset the consumer if a previous call already emitted tokens."""
+        if self.streaming and self._emitted:
+            self._emitted = False
+            if self._on_reset is not None:
+                try:
+                    self._on_reset()
+                except Exception:
+                    pass
+
+    def __call__(self, cumulative_text: str) -> None:
+        if not self.streaming:
+            return
+        self._emitted = True
+        try:
+            self._on_token(str(cumulative_text))
+        except Exception:
+            pass
 
 
 class _BoundedExecutor:
@@ -153,13 +206,23 @@ def _invoke_via_stream(
     llm_instance: BaseLanguageModel,
     messages: Any,
     first_token_timeout: float,
+    on_token: Optional[Callable[[str], None]] = None,
 ) -> Any:
     """Stream one model call with a first-token deadline.
 
-    Returns the merged response, or None when this model cannot stream
-    (no .stream attribute: legacy/test doubles) or streaming itself
-    breaks — the caller then falls back to plain .invoke().
+    Returns the merged response, or None when streaming could not
+    start (no .stream attribute, setup failure, first-chunk failure:
+    legacy/test doubles or a provider that rejects streaming) — the
+    caller then falls back to plain .invoke(). Those fallbacks are
+    logged at debug (routine and benign).
     A silent provider raises TimeoutError so the cascade fails over.
+    A failure AFTER the first chunk arrived propagates to the caller
+    (fail over to the next tier): re-invoking the same request would
+    double latency and provider load, and a rate limit would fail
+    again anyway.
+    When on_token is given it receives cumulative answer text per
+    chunk (deduped: only on growth, so tool-call-only deltas stay
+    silent); callback exceptions never break the invoke.
     """
     stream_fn = getattr(llm_instance, "stream", None)
     if not callable(stream_fn):
@@ -167,20 +230,43 @@ def _invoke_via_stream(
     try:
         iterator = stream_fn(messages)
     except Exception:
+        logger.debug("stream setup failed, falling back to invoke", exc_info=True)
         return None
+
+    def _emit(merged: Any, last_len: List[int]) -> None:
+        if on_token is None:
+            return
+        try:
+            text = _as_text(merged.content)
+        except Exception:
+            return
+        if len(text) > last_len[0]:
+            last_len[0] = len(text)
+            try:
+                on_token(text)
+            except Exception:
+                pass
+
     try:
         first = _next_chunk_before(iterator, first_token_timeout)
     except TimeoutError:
         raise
     except Exception:
+        logger.debug("first chunk failed, falling back to invoke", exc_info=True)
         return None
     chunks = [first]
-    try:
-        for chunk in iterator:
-            chunks.append(chunk)
-        return _merge_stream_chunks(chunks)
-    except Exception:
-        return None
+    merged = first
+    last_len = [0]
+    _emit(merged, last_len)
+    for chunk in iterator:
+        chunks.append(chunk)
+        try:
+            merged = merged + chunk
+        except Exception:
+            logger.debug("chunk merge failed mid-stream", exc_info=True)
+            merged = chunk
+        _emit(merged, last_len)
+    return _merge_stream_chunks(chunks)
 
 
 def _invoke_bounded(
@@ -188,6 +274,7 @@ def _invoke_bounded(
     messages: Any,
     timeout: float = MODEL_TIMEOUT_SECONDS,
     budget: Optional[RequestBudget] = None,
+    on_token: Optional[Callable[[str], None]] = None,
 ) -> Any:
     """Invoke a model with bounded execution time, charging the budget.
 
@@ -195,6 +282,8 @@ def _invoke_bounded(
     first-token deadline raises TimeoutError (fast tier fallback),
     while the full answer still enjoys the total timeout. Models
     without streaming use plain invocation under the total timeout.
+    on_token receives cumulative answer text live (see
+    _invoke_via_stream); None keeps the historical silent behavior.
     """
     if budget is not None:
         budget.count_llm()
@@ -204,7 +293,7 @@ def _invoke_bounded(
     def _call() -> Any:
         if first_token_timeout > 0:
             streamed = _invoke_via_stream(
-                llm_instance, messages, first_token_timeout
+                llm_instance, messages, first_token_timeout, on_token
             )
             if streamed is not None:
                 return streamed
