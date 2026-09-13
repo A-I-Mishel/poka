@@ -430,5 +430,6 @@ TASK_TEMPERATURES: Dict[str, float] = {
     "research": 0.3,
     "creative": 0.85,
     "data": 0.2,
+    "code": 0.2,
     "multi_step": 0.4,
 }

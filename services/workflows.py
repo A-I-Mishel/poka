@@ -44,9 +44,13 @@ BLOCKED_PIPELINE_TOOLS = frozenset({"send_gmail"})
 # step output into them is injection (SQL/code), recipient confusion
 # (`to`), or destructive mis-targeting (`event_id`/`message_id`).
 # `draft_id` takes no templated input today but is locked for consistency.
+# Workspace/code-runner args (path/file/content/language/cli_args) are
+# code + identifiers too: untrusted step output must never become
+# executed code or a write target without owner review.
 STATIC_ARGS = frozenset({
     "code", "sql", "table", "upload_id", "server", "tool",
     "event_id", "message_id", "to", "draft_id",
+    "path", "file", "content", "language", "cli_args", "args",
 })
 
 

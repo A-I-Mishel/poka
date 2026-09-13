@@ -67,6 +67,15 @@ def rule_route(user_input: str) -> Optional[str]:
         hits.add("data")
     if _signals(
         text,
+        [".py", ".js", ".ts", ".java", ".go", ".rs", ".cpp", ".c", "python", "javascript",
+         "typescript", "java ", "golang", "rust ", "code", "coding", "script", "program",
+         "function", "debug", "traceback", "stack trace", "exception", "compile",
+         "run the code", "execute", "pytest", "npm", "node", "pip install", "fix the bug",
+         "refactor", "unit test"],
+    ):
+        hits.add("data")
+    if _signals(
+        text,
         ["presentation", "slides", "pptx", "powerpoint", "essay", "report",
          "resume", "write", "draft", "letter", "docx", "word document",
          ".pdf", "pdf file", "as pdf", "to pdf", "into pdf", "export",
@@ -97,7 +106,7 @@ def classify_task(
         "- simple: Direct question, no tools needed\n"
         "- research: Needs web search or document reading\n"
         "- creative: Needs file generation (presentation, essay)\n"
-        "- data: Needs CSV/data analysis\n"
+        "- data: Needs CSV/data analysis OR coding (write/run/debug code)\n"
         "- multi_step: Combines multiple tools\n\n"
         f"Request: {user_input}\nCategory:"
     )

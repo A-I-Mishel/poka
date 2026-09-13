@@ -1119,19 +1119,24 @@ function setActiveTier(tier, fromServer, reason) {
     S.model = tier;
     savePrefs();
     _lastFallbackKey = "";
-  } else if (fromServer && tier && TIERS.indexOf(tier) > -1 && S.model && tier !== S.model) {
-    /* Cascade fallback: S.model is the preferred tier (selector/footer),
-       tier is the tier that actually answered (per-message "time · tier"
-       label + persistent notice). Preference is kept so the next turn
-       retries it. Works for every model: reason comes from the failed
-       tier's classified error (rate-limited, timed out, ...). */
-    var why = reason || "unavailable";
-    var key = S.model + ">" + tier + ">" + why;
-    var now = Date.now();
-    if (key !== _lastFallbackKey || now - _lastFallbackAt > 5000) {
-      _lastFallbackKey = key;
-      _lastFallbackAt = now;
-      toast("Preferred " + S.model + " " + why + " — answered by " + tier);
+  } else if (fromServer && tier) {
+    /* Header must show what actually answered (server truth), not the
+       stale preference — e.g. preferred Gemma down, Groq answered, the
+       badge must read Groq. The per-message "time · tier" label and
+       fallback note already carry the same actual tier. */
+    if (S.model && tier !== S.model) {
+      var why = reason || "unavailable";
+      var key = S.model + ">" + tier + ">" + why;
+      var now = Date.now();
+      if (key !== _lastFallbackKey || now - _lastFallbackAt > 5000) {
+        _lastFallbackKey = key;
+        _lastFallbackAt = now;
+        toast("Preferred " + S.model + " " + why + " — answered by " + tier);
+      }
+    }
+    if (S.model !== tier) {
+      S.model = tier;
+      savePrefs();
     }
   }
   $("modelName").textContent = S.model || "…";

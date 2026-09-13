@@ -8,7 +8,7 @@ map). Persists per-user (host sets the directory; see set_memory_dir):
 - user_name: detected user name, if any
 - _processed_hashes: content digests already mined (incremental updates)
 
-Fact types: name, preference, task_pattern, project, temporary.
+Fact types: name, preference, task_pattern, project, temporary, style.
 Facts are DATA for prompts, never instructions (see format function).
 
 Persistence goes through services.storage (atomic writes, per-file
@@ -37,6 +37,20 @@ _state = threading.local()
 
 _NEGATION_RE = re.compile(r"\b(don't|dont|do not|never|hate|dislike|avoid)\b")
 _EXPLICIT_RE = re.compile(r"\b(remember this|remember that|my name is|always)\b")
+
+# Communication-style requests → stored as type="style" facts (DATA for
+# prompts, never instructions). First match text is the saved value;
+# pattern detects the request. Explicit "always/remember" upgrades
+# confidence via _new_fact like other facts.
+_STYLE_PATTERNS = (
+    ("prefer brief replies", r"\b(reply |respond |answer |be )(briefly|concise|short|to the point)\b"),
+    ("prefer detailed replies", r"\b(reply |respond |answer |be )(in detail|detailed|thorough|in-depth|indepth)\b"),
+    ("prefer formal tone", r"\b(be |reply |respond |stay |use )(formal|professional|polite)\b"),
+    ("prefer casual tone", r"\b(be |reply |respond |stay |use )(casual|informal|relaxed|friendly)\b"),
+    ("prefer simple language", r"\b(simple (english|words|language)|explain simply|like i'm (a kid|5))\b"),
+    ("prefer bullet points", r"\b(use |reply (with |in )?)bullet points\b"),
+    ("prefer step-by-step", r"\bstep[- ]by[- ]step\b"),
+)
 
 
 def set_memory_dir(directory: str) -> None:
@@ -110,7 +124,8 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
 
     Handles negation ("I don't like PowerPoint" never becomes a like),
     explicit confirmations ("remember this" → high confidence), project
-    context, and temporary markers.
+    context, temporary markers, and communication-style requests
+    ("reply briefly", "be formal" → type "style").
 
     Args:
         content: A single user message.
@@ -126,6 +141,10 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
     name_match = re.search(r"my name is (\w+)", content_lower)
     if name_match:
         facts.append(_new_fact("name", name_match.group(1).title(), content_lower))
+
+    for style_value, pattern in _STYLE_PATTERNS:
+        if re.search(pattern, content_lower):
+            facts.append(_new_fact("style", style_value, content_lower))
 
     pref_patterns = [
         r"i (?:prefer|like|want|need) (.+)",
@@ -290,7 +309,7 @@ def _score_fact(fact: Dict[str, Any], input_words: set, position: int, total: in
     score = 2.0 * overlap
     if fact.get("confidence") == "high":
         score += 2.0
-    if fact.get("type") in ("name", "preference"):
+    if fact.get("type") in ("name", "preference", "style"):
         score += 1.0
     if total > 0:
         score += position / total
@@ -330,6 +349,12 @@ def format_memory_for_prompt(mem: Dict[str, Any]) -> str:
     projects = [f["value"] for f in mem.get("facts", []) if f.get("type") == "project"]
     if projects:
         lines.append(f"Projects: {'; '.join(projects[-3:])}")
+
+    styles = [f["value"] for f in mem.get("facts", [])
+              if f.get("type") == "style"]
+    if styles:
+        unique_styles = list(dict.fromkeys(styles))[-3:]
+        lines.append(f"Communication style: {'; '.join(unique_styles)}")
 
     if not lines:
         return ""

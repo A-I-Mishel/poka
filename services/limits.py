@@ -89,6 +89,25 @@ MAX_PYTHON_CODE_CHARS: int = 4000
 MAX_PYTHON_OUTPUT_CHARS: int = 4000
 MAX_PYTHON_ITERATIONS: int = 100000
 
+# Per-user code workspace (services.workspace via tools.workspace_tool).
+# Private-mode writes + execution; list/read stay per-user isolated.
+# Quotas checked BEFORE writes so a runaway model call fails fast.
+MAX_WORKSPACE_FILES: int = 100
+MAX_WORKSPACE_BYTES: int = 50 * 1024 * 1024
+MAX_WORKSPACE_FILE_BYTES: int = 1 * 1024 * 1024
+MAX_WORKSPACE_READ_CHARS: int = 20000
+MAX_WORKSPACE_WRITE_CHARS: int = 100000
+MAX_WORKSPACE_PATH_CHARS: int = 200
+
+# Real code execution (services.coderun via tools.coderun_tool).
+# Private-mode only (trusted owner). Subprocess with timeout, cwd locked
+# to the user's workspace, minimal env, capped output. Hosts needing
+# hard isolation must containerize the API process.
+MAX_CODE_FILE_CHARS: int = 20000
+MAX_CODE_OUTPUT_CHARS: int = 12000
+MAX_CODE_EXEC_SECONDS: float = 30.0
+MAX_CODE_ARGS_CHARS: int = 1000
+
 # Execution bounds (seconds)
 MODEL_TIMEOUT_SECONDS: float = 90.0
 # First-response deadline: a tier that emits no token within this window
