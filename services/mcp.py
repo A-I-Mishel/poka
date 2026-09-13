@@ -47,6 +47,28 @@ def configure_connector(fn: Optional[Callable[[Dict[str, Any], str, Any], Any]])
     _connector = fn
 
 
+def _resolve_headers(mapping: Any) -> Dict[str, str]:
+    """Resolve remote-server headers, preferring env references.
+
+    Values shaped "env:NAME" resolve via the secret seam (never commit
+    literals); plain values pass through for backward compat but should
+    be migrated (a literal Bearer in PLUTO_MCP_SERVERS lives in env
+    config — rotate it if leaked).
+    """
+    resolved: Dict[str, str] = {}
+    if not isinstance(mapping, dict):
+        return resolved
+    for key, value in mapping.items():
+        text = str(value or "")
+        if text.startswith("env:"):
+            secret = get_secret(text[4:].strip(), "")
+            if secret:
+                resolved[str(key)] = secret
+        elif text:
+            resolved[str(key)] = text
+    return resolved
+
+
 def load_servers() -> List[Dict[str, Any]]:
     """Parse configured MCP servers; [] on missing/garbage (never raises)."""
     raw = (get_secret("PLUTO_MCP_SERVERS", "") or "").strip()
@@ -67,7 +89,7 @@ def load_servers() -> List[Dict[str, Any]]:
             continue
         if entry.get("url"):
             out.append({"name": name, "url": str(entry["url"]),
-                        "headers": entry.get("headers") or {}})
+                        "headers": _resolve_headers(entry.get("headers"))})
         elif entry.get("command"):
             out.append({"name": name, "command": str(entry["command"]),
                         "args": entry.get("args") or [],
