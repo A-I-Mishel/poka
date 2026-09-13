@@ -91,6 +91,11 @@ svg{display:block;flex-shrink:0}
 .meta .src-link{color:var(--t3);text-decoration:none;padding:4px 7px;border-radius:5px;opacity:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .msg:hover .meta .src-link{opacity:1}
 .meta .src-link:hover{background:var(--s2);color:var(--at)}
+.ver-bar{display:flex;align-items:center;gap:2px;margin:2px 0 10px 35px;font-size:11px;color:var(--t3)}
+.ver-bar button{padding:4px 9px;border-radius:5px;color:var(--t3);font-size:14px;line-height:1}
+.ver-bar button:hover:not(:disabled){background:var(--s2);color:var(--tx)}
+.ver-bar button:disabled{opacity:.3;cursor:default}
+.ver-bar span{min-width:32px;text-align:center}
 .edit-ta{width:75%;background:var(--s2);border:1px solid var(--bd2);border-radius:10px;padding:9px 13px;color:var(--tx);font:inherit;line-height:1.55;resize:vertical;min-height:56px;outline:none}
 .edit-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:6px;width:75%}
 .edit-save{width:32px;height:32px;border-radius:8px;background:var(--tx);color:var(--inv);display:grid;place-items:center}

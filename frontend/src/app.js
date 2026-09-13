@@ -500,6 +500,55 @@ function hydrateUploadImages() {
     }).catch(function () { im.remove(); });
   });
 }
+/* Regenerated replies: the backend appends each fresh answer, so a
+ * run of consecutive assistant messages is one reply's versions.
+ * Rendered as a single bubble with a ‹ 1/2 › switcher (latest shown
+ * by default); actions apply to the visible version via its index. */
+var verSel = {};
+function versionGroup(start, end) {
+  var n = end - start;
+  var key = "v" + start + "x" + n;
+  var pos = verSel[key];
+  if (!(pos >= 0 && pos < n)) pos = n - 1;
+  verSel[key] = pos;
+  var wrap = document.createElement("div");
+  wrap.className = "ver-group";
+  var holder = document.createElement("div");
+  wrap.appendChild(holder);
+  var lab = null, prev = null, next = null;
+  function paint() {
+    if (!lab) return;
+    lab.textContent = (verSel[key] + 1) + "/" + n;
+    prev.disabled = verSel[key] === 0;
+    next.disabled = verSel[key] === n - 1;
+  }
+  function show(p) {
+    verSel[key] = p;
+    holder.innerHTML = "";
+    holder.appendChild(msgEl(current[start + p], start + p));
+    paint();
+  }
+  show(pos);
+  if (n > 1) {
+    var bar = document.createElement("div");
+    bar.className = "ver-bar";
+    prev = document.createElement("button");
+    prev.textContent = "‹";
+    prev.title = "Previous version";
+    lab = document.createElement("span");
+    next = document.createElement("button");
+    next.textContent = "›";
+    next.title = "Next version";
+    prev.addEventListener("click", function () { if (verSel[key] > 0) show(verSel[key] - 1); });
+    next.addEventListener("click", function () { if (verSel[key] < n - 1) show(verSel[key] + 1); });
+    paint();
+    bar.appendChild(prev);
+    bar.appendChild(lab);
+    bar.appendChild(next);
+    wrap.appendChild(bar);
+  }
+  return wrap;
+}
 function renderChat() {
   chatTitle.textContent = openTitle();
   chatCol.innerHTML = "";
@@ -511,7 +560,24 @@ function renderChat() {
   day.className = "day";
   day.textContent = fmtDay(current[0] && current[0].time);
   chatCol.appendChild(day);
-  current.forEach(function (m, i) { chatCol.appendChild(msgEl(m, i)); });
+  var seen = {};
+  var i = 0;
+  while (i < current.length) {
+    var m = current[i];
+    if (m && m.role === "assistant") {
+      var j = i + 1;
+      while (j < current.length && current[j] && current[j].role === "assistant") j++;
+      if (j - i > 1) {
+        seen["v" + i + "x" + (j - i)] = true;
+        chatCol.appendChild(versionGroup(i, j));
+        i = j;
+        continue;
+      }
+    }
+    chatCol.appendChild(msgEl(m, i));
+    i++;
+  }
+  Object.keys(verSel).forEach(function (k) { if (!seen[k]) delete verSel[k]; });
   hydrateUploadImages();
   scrollBottom(true);
 }
