@@ -474,6 +474,7 @@ function streamInto(bodyEl, onMeta) {
             if (evt.type === "meta" && onMeta) onMeta(evt);
             else if (evt.type === "token") bodyEl.innerHTML = md(evt.text) + '<span class="caret"></span>';
             else if (evt.type === "reset") bodyEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+            else if (evt.type === "status") bodyEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span> ' + esc(evt.text || "");
             else if (evt.type === "done") result = evt.result;
             else if (evt.type === "error") throw new Error(evt.detail || "Stream error");
           });

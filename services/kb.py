@@ -5,6 +5,9 @@ this user told me"). Each user's chunk embeddings live in their own
 vault (kb.json, atomic writes under per-file locks); retrieval is
 cosine similarity over stored vectors — genuinely vector-based and
 dimension-agnostic. No vector server, no native deps: JSON + math.
+Per-user totals are capped (KB_MAX_DOCS_PER_USER /
+KB_MAX_TOTAL_CHUNKS_PER_USER): the whole file loads per search, so
+ingest degrades to "kb-full" instead of growing it without bound.
 
 Untrusted content throughout: stored chunk text is DATA for prompts,
 never instructions; failures degrade to "no results", never raise
@@ -23,6 +26,8 @@ from services.limits import (
     KB_INGEST_EXTS,
     KB_MAX_CHUNKS_PER_DOC,
     KB_MAX_DOC_BYTES,
+    KB_MAX_DOCS_PER_USER,
+    KB_MAX_TOTAL_CHUNKS_PER_USER,
     KB_TOP_K,
 )
 from services.obs import event as obs_event
@@ -165,6 +170,27 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
     chunks = chunk_text(text)[:KB_MAX_CHUNKS_PER_DOC]
     if not chunks:
         return {"ingested": False, "chunks": 0, "reason": "empty"}
+    # Growth guard (checked BEFORE spending embedding quota): fail open
+    # to no cap when the vault is unreadable — the store step below
+    # still reports store-failed honestly.
+    try:
+        existing = load_kb(user_id).get("docs") or {}
+        if not isinstance(existing, dict):
+            existing = {}
+        if uid not in existing and len(existing) >= KB_MAX_DOCS_PER_USER:
+            obs_event("kb.ingest_error", reason="kb-full")
+            return {"ingested": False, "chunks": 0, "reason": "kb-full"}
+        total = sum(
+            len(d.get("chunks") or [])
+            for d in existing.values() if isinstance(d, dict)
+        )
+        old = existing.get(uid)
+        old_count = len(old.get("chunks") or []) if isinstance(old, dict) else 0
+        if total - old_count + len(chunks) > KB_MAX_TOTAL_CHUNKS_PER_USER:
+            obs_event("kb.ingest_error", reason="kb-full")
+            return {"ingested": False, "chunks": 0, "reason": "kb-full"}
+    except Exception:
+        pass
     try:
         vectors = kb_embeddings.embed_texts(chunks)
     except Exception as e:

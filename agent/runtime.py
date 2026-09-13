@@ -135,6 +135,7 @@ def answer_with_fallback(
     project_context: str = "",
     on_token: Optional[Callable[[str], None]] = None,
     on_reset: Optional[Callable[[], None]] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """Answer with the full stack: memorize, classify, plan, execute, reflect.
 
@@ -165,6 +166,9 @@ def answer_with_fallback(
     tokens, never replayed). on_reset fires before a new model call
     supersedes an earlier one in the same turn. Both default to None
     (historical silent behavior).
+    on_progress: Receives one status line per tool round (tool names
+    only) so stream consumers can show activity while answer tokens
+    have not started flowing. Defaults to None (silent).
 
     Returns:
         Dict with 'output', 'active_tier', 'task_type', 'request_id',
@@ -411,7 +415,7 @@ def answer_with_fallback(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
-                    final_tier, MAX_DEEP_TOOL_ROUNDS,
+                    final_tier, MAX_DEEP_TOOL_ROUNDS, on_progress,
                 )
             else:
                 draft = run_tool_loop(
@@ -420,7 +424,7 @@ def answer_with_fallback(
                     MAX_DEEP_TOOL_ROUNDS if deep_mode else MAX_TOOL_ROUNDS,
                     budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
-                    final_tier,
+                    final_tier, on_progress,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
                 improved = reflect_and_improve(llm, user_input, draft, langchain_history, budget)

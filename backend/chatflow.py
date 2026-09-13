@@ -201,9 +201,10 @@ def _complete_turn(ctx: UserContext, send_text: str,
                    image_ids: List[str], memory_notes: str,
                    project_context: str, deep_mode: bool,
                    force_search: bool,
-                   active_tier: Optional[str],
-                   on_token: Any = None,
-                   on_reset: Any = None) -> Tuple[Dict[str, Any], str, str]:
+                    active_tier: Optional[str],
+                    on_token: Any = None,
+                    on_reset: Any = None,
+                    on_progress: Any = None) -> Tuple[Dict[str, Any], str, str]:
     """Run the agent and build the assistant message (no persistence)."""
     from agent.prompts import strip_internal_reasoning
 
@@ -224,6 +225,7 @@ def _complete_turn(ctx: UserContext, send_text: str,
         project_context=project_context,
         on_token=on_token,
         on_reset=on_reset,
+        on_progress=on_progress,
     )
     output = strip_internal_reasoning(str(result.get("output", "")))
     tier = str(result.get("active_tier", "") or "")
@@ -274,14 +276,16 @@ def run_chat(ctx: UserContext, content: str,
              force_search: bool = False,
              active_tier: Optional[str] = None,
              on_token: Any = None,
-             on_reset: Any = None) -> Dict[str, Any]:
+             on_reset: Any = None,
+             on_progress: Any = None) -> Dict[str, Any]:
     """Run one user turn end-to-end; returns send-response payload.
 
     Persists both messages before returning. Raises HTTPException for
     rate limits (429) and saturation (503), ValueError for bad
     input/attachments, RuntimeError (user-safe message) when every tier
     fails. on_token/on_reset stream live answer tokens (see
-    agent.executor.TokenStream).
+    agent.executor.TokenStream); on_progress streams per-tool-round
+    status lines (tool names only).
     """
     text = str(content or "").strip()
     if not text:
@@ -319,7 +323,8 @@ def run_chat(ctx: UserContext, content: str,
     assistant_msg, tier, task_type = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, image_ids,
         memory_notes, project_context, bool(deep_mode),
-        bool(force_search), active_tier, on_token, on_reset)
+        bool(force_search), active_tier, on_token, on_reset,
+        on_progress)
 
     current = current + [user_msg, assistant_msg]
     store.save_chats(chats, current)
@@ -339,7 +344,8 @@ def _complete_turn_guarded(ctx: UserContext, send_text: str,
                            force_search: bool,
                            active_tier: Optional[str],
                            on_token: Any = None,
-                           on_reset: Any = None) -> Tuple[Dict[str, Any], str, str]:
+                           on_reset: Any = None,
+                           on_progress: Any = None) -> Tuple[Dict[str, Any], str, str]:
     """_complete_turn with saturation mapped to HTTP 503 (fail fast)."""
     from fastapi import HTTPException
 
@@ -347,7 +353,7 @@ def _complete_turn_guarded(ctx: UserContext, send_text: str,
         return _complete_turn(
             ctx, send_text, prior_history, prior_raw, image_ids,
             memory_notes, project_context, deep_mode, force_search,
-            active_tier, on_token, on_reset)
+            active_tier, on_token, on_reset, on_progress)
     except ExecutorBusyError:
         raise HTTPException(
             status_code=503,

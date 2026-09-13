@@ -31,6 +31,7 @@ def plan_then_execute(
     on_reset: Optional[Callable[[], None]] = None,
     final_tier: Optional[List[str]] = None,
     max_rounds: int = MAX_TOOL_ROUNDS,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
@@ -47,6 +48,7 @@ def plan_then_execute(
             relevant_context, False, max_rounds, budget,
             used_tools, used_sources, project_context,
             llm_provider, tier_trace, on_token, on_reset, final_tier,
+            on_progress,
         )
 
     if budget is not None:

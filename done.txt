@@ -2,7 +2,10 @@ PLUTO — BUILD LOG (see README.md for the full picture)
 ==================================================
 
 Phase 1 — cascade, tools, deploy, theme, memory, message actions
-- 3→4-tier LLM cascade (Muse Spark 1.3 / Nemotron 3.5 / Gemini 3.6 / 3.5)
+- 12-tier LLM cascade (Muse Spark 1.3 / Nemotron 3.5 / DeepSeek V4 Flash /
+  Nemotron 3 Ultra / Big Pickle / MiMo V2.5 / Ling 3.0 Flash / Groq /
+  Gemini 3.6 Flash / Gemini 3.5 Flash / OpenRouter Nemotron Ultra /
+  OpenRouter Gemma)
 - Custom tool loop (Gemini thought_signature fix), runtime fallback
 - Streamlit Cloud deploy (Python 3.12, Secrets, gitignored .env)
 - Claude-style indigo dark UI; per-message Edit (truncate+prefill)
@@ -14,7 +17,7 @@ Phase 2 — cost + reliability
 - Startup probe removed (lazy cascade); tier cooldown on first failure
 - Structured tool statuses; friendly quota errors
 
-Phase 3 — quality + capabilities (current)
+Phase 3 — quality + capabilities
 - Structured web search (title/URL/snippet/date/domain) + Sources consulted
 - read_pdf_page tool; scanned-PDF detection with honest OCR message
 - Vision: owned-image analysis on Gemini tiers, honest fallback otherwise
@@ -28,6 +31,32 @@ Phase 3 — quality + capabilities (current)
   UTC-internal timestamps; 7-day unreferenced-upload retention
 - CI (compile+pytest blocking, pip-audit advisory), MIT LICENSE,
   README.md, pillow pinned
+
+Phase 4 — data + RAG
+- Per-user SQLite vault (list/describe/query/import/execute; SELECT-only
+  reads, confirm-gated writes, identifier-validated tables, no ATTACH)
+- Document KB: text-bearing uploads chunked + Gemini-embedded at upload
+  (best-effort, never fails upload) into the uploader's vault (kb.json);
+  search_documents ranks by cosine, per-user isolation held
+
+Phase 5 — Google integrations
+- Gmail (search/read/draft/send): single-account OAuth (Desktop client +
+  scripts/get_google_refresh_token.py); mail is untrusted DATA; send
+  needs confirm=true, drafts are the safe default
+- Calendar (list/create/delete): same OAuth client (calendar scope);
+  create low-risk, delete needs confirm=true
+
+Phase 6 — extensibility (current)
+- MCP gateway (list_mcp_tools/call_mcp_tool): stdio (local dev, minimal
+  child env: safe base + resolved secrets only) + remote HTTP/SSE
+  (hosted); PLUTO_MCP_ALLOW_TOOLS globs, default deny; 3rd-party output
+  is untrusted DATA; fresh session per call; output char-capped
+- Sandboxed run_python: pure-compute only (no imports/files/net/while),
+  iteration-budgeted; private-mode only + own rate limit
+- Saved workflows (/api/workflows): owner-saved fixed tool sequences,
+  no LLM planning at run; {{input}} + {{steps.N.output}} templates;
+  send_gmail blocked; code/SQL/identifiers (incl. event_id/message_id/
+  to/draft_id) reject step-output templates; confirm must be real bool
 
 Repo: github.com/A-I-Mishel/poka (main). Live: Vercel UI (poka-nine.vercel.app) + Render API.
 Tests: green via pytest (stubbed models, temp dirs — no API quota spent).

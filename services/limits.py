@@ -100,6 +100,12 @@ KB_CHUNK_CHARS: int = 1200
 KB_CHUNK_OVERLAP: int = 150
 KB_MAX_CHUNKS_PER_DOC: int = 40
 KB_MAX_DOC_BYTES: int = 400000
+# kb.json growth guard: vectors are stored as full floats and each
+# search loads the whole file, so per-user totals stay bounded (~100
+# docs). Ingest beyond either cap degrades to {"ingested": False,
+# "reason": "kb-full"} (never fails the upload).
+KB_MAX_DOCS_PER_USER: int = 100
+KB_MAX_TOTAL_CHUNKS_PER_USER: int = 2000
 KB_TOP_K: int = 5
 KB_MAX_SNIPPET_CHARS: int = 12000
 KB_INGEST_EXTS: frozenset = frozenset({"pdf", "csv"})

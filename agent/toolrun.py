@@ -149,6 +149,7 @@ def run_tool_loop(
     on_token: Optional[Callable[[str], None]] = None,
     on_reset: Optional[Callable[[], None]] = None,
     final_tier: Optional[List[str]] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -186,6 +187,11 @@ def run_tool_loop(
     None (historical silent behavior). A TokenStream instance passed
     as on_token is shared (never re-wrapped) so resets coordinate
     across nested loops.
+
+    on_progress receives one lightweight status line per tool round
+    (tool names only, never prompts or results) so stream consumers
+    can show "working" activity while no answer tokens flow yet.
+    It never raises into the loop (failures are swallowed).
 
     When final_tier is provided, the tier that produced the returned
     answer is recorded into it (single-element replace): the round
@@ -361,6 +367,20 @@ def run_tool_loop(
             last_text = text
             last_text_tier = round_tier
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
+        if on_progress is not None and tool_calls:
+            try:
+                names: List[str] = []
+                for tc in tool_calls:
+                    if isinstance(tc, dict):
+                        tc_name = tc.get("name", "")
+                    else:
+                        tc_name = getattr(tc, "name", "")
+                    if tc_name and str(tc_name) not in names:
+                        names.append(str(tc_name))
+                if names:
+                    on_progress("Using tools: " + ", ".join(names))
+            except Exception:
+                pass
         if not tool_calls:
             _note_final_tier(round_tier)
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")

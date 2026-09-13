@@ -67,9 +67,11 @@ def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
     Events (JSON per line): ``token`` (cumulative answer text — genuine
     provider tokens forwarded live, never replayed), ``reset`` (a new
     model call supersedes earlier text: discard it and keep waiting),
-    ``meta`` (tier/task, once the turn completes), ``done`` (full
-    send-response payload, same shape as /send), ``error``. ``: ping``
-    comments keep idle connections alive during long generations.
+    ``status`` (per-tool-round activity, tool names only — shown while
+    no answer tokens flow yet), ``meta`` (tier/task, once the turn
+    completes), ``done`` (full send-response payload, same shape as
+    /send), ``error``. ``: ping`` comments keep idle connections alive
+    during long generations.
     History is persisted exactly once, when the turn completes — a
     disconnect can never leave partial messages behind.
     """
@@ -99,6 +101,7 @@ def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
                     active_tier=params.get("active_tier"),
                     on_token=lambda text: events.put({"type": "token", "text": text}),
                     on_reset=lambda: events.put({"type": "reset"}),
+                    on_progress=lambda text: events.put({"type": "status", "text": text}),
                 )
             except HTTPException as e:
                 outcome["error"] = str(e.detail)
@@ -122,6 +125,9 @@ def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
                 break
             if kind == "reset":
                 yield "data: " + json.dumps({"type": "reset"}) + "\n\n"
+            elif kind == "status":
+                yield "data: " + json.dumps(
+                    {"type": "status", "text": evt.get("text", "")}) + "\n\n"
             elif kind == "token":
                 yield "data: " + json.dumps(
                     {"type": "token", "text": evt.get("text", "")}) + "\n\n"

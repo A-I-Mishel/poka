@@ -10,10 +10,12 @@ Security rules (enforced here, so every entry point inherits them):
 - `send_gmail` is blocked entirely: pipelines run non-interactively,
   and email exfiltrates off-device silently.
 - Code/identifier args (`code`, `sql`, `table`, `upload_id`, `server`,
-  `tool`) must be static: no `{{steps.N.output}}` templates
-  (`{{input}}` is allowed — it is owner-supplied at run time, like the
-  chat box). This closes template-driven code/SQL injection from
-  untrusted step output.
+  `tool`, `event_id`, `message_id`, `to`, `draft_id`) must be static:
+  no `{{steps.N.output}}` templates (`{{input}}` is allowed — it is
+  owner-supplied at run time, like the chat box). This closes
+  template-driven code/SQL injection and identifier confusion
+  (e.g. untrusted step output becoming a Gmail recipient or a
+  calendar-delete target) from untrusted step output.
 - `confirm` must be a real boolean at save time: a templated string
   would be truthy and forge standing permission for writes.
 - Any other `{{...}}` shape is rejected (typos fail loudly at save,
@@ -39,8 +41,13 @@ BLOCKED_PIPELINE_TOOLS = frozenset({"send_gmail"})
 
 # Args that must be static: no {{steps.N.output}} templates. These are
 # code, statements, identifiers, or tool routing — templating untrusted
-# step output into them is injection (SQL/code) or allowlist confusion.
-STATIC_ARGS = frozenset({"code", "sql", "table", "upload_id", "server", "tool"})
+# step output into them is injection (SQL/code), recipient confusion
+# (`to`), or destructive mis-targeting (`event_id`/`message_id`).
+# `draft_id` takes no templated input today but is locked for consistency.
+STATIC_ARGS = frozenset({
+    "code", "sql", "table", "upload_id", "server", "tool",
+    "event_id", "message_id", "to", "draft_id",
+})
 
 
 def _template_refs(text: str) -> Tuple[List[int], bool, bool]:

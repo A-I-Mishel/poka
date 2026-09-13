@@ -112,6 +112,57 @@ def _resolve_env(mapping: Any) -> Dict[str, str]:
     return resolved
 
 
+# Minimal, non-secret vars a stdio child needs to spawn (PATH, HOME, LANG,
+# plus OS-required entries). Everything else — provider API keys,
+# PLUTO_ACCESS_TOKENS, GOOGLE_REFRESH_TOKEN, etc. — must NOT leak.
+_SAFE_ENV_KEYS = (
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROCESSOR_ARCHITECTURE",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LANGUAGE",
+    "TZ",
+    "TERM",
+    "LOGNAME",
+    "USER",
+    "USERNAME",
+    "SHELL",
+    "COMSPEC",
+)
+
+
+def _base_env() -> Dict[str, str]:
+    """Small safe base env for stdio children (never the full os.environ)."""
+    base: Dict[str, str] = {}
+    for key in _SAFE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is None:
+            continue
+        if value.startswith("()"):
+            # Skip exported shell functions (security risk).
+            continue
+        base[key] = value
+    return base
+
+
+def _stdio_env(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """Build the exact env for a stdio MCP server: safe base + resolved secrets."""
+    return {**_base_env(), **_resolve_env(cfg.get("env"))}
+
+
 @asynccontextmanager
 async def _open_session(cfg: Dict[str, Any]):
     """Yield an initialized MCP ClientSession for one server config."""
@@ -135,7 +186,11 @@ async def _open_session(cfg: Dict[str, Any]):
         params = StdioServerParameters(
             command=str(cfg["command"]),
             args=[str(a) for a in (cfg.get("args") or [])],
-            env={**os.environ, **_resolve_env(cfg.get("env"))},
+            # NOTE: the installed `mcp` SDK merges `env` over its own
+            # get_default_environment(), so passing only the minimal base +
+            # resolved secrets is sufficient — and prevents leaking the full
+            # process env (API keys, tokens) to third-party server binaries.
+            env=_stdio_env(cfg),
         )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
@@ -189,7 +244,12 @@ def _format_content(content: Any) -> str:
     if not content:
         return ""
     items = content if isinstance(content, list) else [content]
-    return "\n".join(t for t in (_format_block(b) for b in items) if t)
+    text = "\n".join(t for t in (_format_block(b) for b in items) if t)
+    # Bound third-party output before it reaches the tool funnel (which
+    # applies its own MAX_TOOL_RESULT_TOKENS cap downstream).
+    if len(text) > MAX_OUTPUT_CHARS:
+        text = text[:MAX_OUTPUT_CHARS] + "\n[Note: MCP output truncated.]"
+    return text
 
 
 def list_server_tools(server: str) -> List[Dict[str, str]]:
