@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from backend.routers import artifacts, briefs, chat, chats, memory, meta, projects, uploads  # noqa: E402
+from backend.routers import artifacts, briefs, chat, chats, memory, meta, projects, uploads, workflows  # noqa: E402
 
 app = FastAPI(title="Pluto API", version="0.1.0")
 
@@ -42,6 +42,7 @@ for _router in (
     artifacts.router,
     projects.router,
     briefs.router,
+    workflows.router,
     memory.router,
     meta.router,
 ):

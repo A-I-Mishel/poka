@@ -450,6 +450,94 @@ def _clean_brief_record(value: Any) -> Optional[Dict[str, Any]]:
     return record
 
 
+def _clean_workflow_step(value: Any) -> Optional[Dict[str, Any]]:
+    """Validate one pipeline step on the load path; None when malformed.
+
+    Tool names keep bounded strings; args keep scalar values only
+    (strings truncated) — dropping a non-scalar can only make the step
+    fail safe at run time (a missing `confirm` denies, a missing query
+    fails), never escalate it.
+    """
+    from services.limits import MAX_WORKFLOW_ARG_CHARS
+
+    if not isinstance(value, dict):
+        return None
+    tool = value.get("tool", "")
+    if not isinstance(tool, str) or not tool.strip():
+        return None
+    args = value.get("args", {})
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return None
+    clean_args: Dict[str, Any] = {}
+    for key, val in args.items():
+        if not isinstance(key, str) or not key:
+            return None
+        if isinstance(val, str):
+            clean_args[key] = val[:MAX_WORKFLOW_ARG_CHARS]
+        elif isinstance(val, (int, float, bool)) or val is None:
+            clean_args[key] = val
+        # Non-scalars are dropped (fail safe — see docstring).
+    return {"tool": tool.strip()[:MAX_TOOL_NAME_LEN], "args": clean_args}
+
+
+def _clean_workflow_record(value: Any) -> Optional[Dict[str, Any]]:
+    """Validate one saved pipeline; None when identity/steps fail.
+
+    Strict on steps: a malformed step drops the WHOLE record (dropping
+    single steps would renumber {{steps.N}} refs and silently change
+    what the pipeline does). Records were validated at save time, so a
+    drop here means on-disk corruption, never a user typo.
+    """
+    from services.limits import (
+        MAX_WORKFLOW_DESC_CHARS,
+        MAX_WORKFLOW_NAME_CHARS,
+        MAX_WORKFLOW_STEPS,
+    )
+
+    if not isinstance(value, dict):
+        return None
+    wid = value.get("id")
+    if not is_valid_id(wid):
+        return None
+    name = value.get("name", "")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    description = value.get("description", "")
+    if not isinstance(description, str):
+        description = ""
+    raw_steps = value.get("steps", [])
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return None
+    if len(raw_steps) > MAX_WORKFLOW_STEPS:
+        return None
+    steps = []
+    for entry in raw_steps:
+        step = _clean_workflow_step(entry)
+        if step is None:
+            return None
+        steps.append(step)
+    if not steps:
+        return None
+    created = value.get("created", 0.0)
+    if not isinstance(created, (int, float)) or isinstance(created, bool) \
+            or not created >= 0:
+        created = 0.0
+    updated = value.get("updated", created)
+    if not isinstance(updated, (int, float)) or isinstance(updated, bool) \
+            or not updated >= 0:
+        updated = float(created)
+    return {
+        "id": wid,
+        "name": name.strip()[:MAX_WORKFLOW_NAME_CHARS],
+        "description": description.strip()[:MAX_WORKFLOW_DESC_CHARS],
+        "steps": steps,
+        "created": float(created),
+        "updated": float(updated),
+    }
+
+
 def _clean_project_record(value: Any) -> Optional[Dict[str, Any]]:
     """Validate one project record; None when identity-bearing fields fail.
 
@@ -789,6 +877,173 @@ class UserStore:
             return len(kept) != len(briefs), kept
 
         return bool(self._mutate_briefs(_drop))
+
+    # -- workflows -------------------------------------------------
+    # Owner-saved fixed tool pipelines (services/workflows.py validates
+    # step semantics; these methods only persist cleaned records).
+
+    def _workflows_path(self) -> Path:
+        return self.root / "workflows.json"
+
+    def load_workflows(self) -> Tuple[Dict[str, Any], List[str]]:
+        """Return ({"version": 1, "workflows": [...]}, warnings).
+
+        A missing file is normal (no warning). Corrupt files are
+        quarantined centrally with a warning; malformed records are
+        dropped (a bad step drops its record — see
+        _clean_workflow_record).
+        """
+        warnings: List[str] = []
+        try:
+            data, corrupt = _read_json(self._workflows_path())
+        except StorageError as e:
+            return {"version": 1, "workflows": []}, [
+                f"Workflows unavailable ({e})"
+            ]
+        if corrupt:
+            warnings.append("Workflows file was corrupted; a backup copy was kept.")
+        if not isinstance(data, dict):
+            return {"version": 1, "workflows": []}, warnings
+        raw = data.get("workflows", [])
+        workflows: List[Dict[str, Any]] = []
+        if isinstance(raw, list):
+            for entry in raw:
+                record = _clean_workflow_record(entry)
+                if record is not None:
+                    workflows.append(record)
+        return {"version": 1, "workflows": workflows}, warnings
+
+    def save_workflows(self, workflows: Any) -> None:
+        """Persist the workflow list (cleaned). Raises StorageError."""
+        stored: List[Dict[str, Any]] = []
+        if isinstance(workflows, list):
+            for entry in workflows:
+                record = _clean_workflow_record(entry)
+                if record is not None:
+                    stored.append(record)
+        _write_json(self._workflows_path(), {"version": 1, "workflows": stored})
+
+    def _mutate_workflows(self, fn: Any) -> Any:
+        """Read-modify-write the registry under one lock hold."""
+        with path_lock(self._workflows_path()):
+            data, _ = _read_json(self._workflows_path())
+            raw = data.get("workflows", []) if isinstance(data, dict) else []
+            workflows = [
+                r for r in
+                (_clean_workflow_record(e) for e in raw)
+                if r is not None
+            ] if isinstance(raw, list) else []
+            result, updated = fn(workflows)
+            _write_json(self._workflows_path(), {"version": 1, "workflows": updated})
+            return result
+
+    def create_workflow(
+        self,
+        name: Any,
+        steps: Any,
+        description: Any = "",
+        known_tools: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Validate and store a pipeline; returns the stored record.
+
+        Raises ValueError for invalid definitions or a full registry.
+        """
+        from services import workflows as workflows_svc
+        from services.limits import MAX_WORKFLOWS_PER_USER
+
+        clean_name, clean_desc, clean_steps = workflows_svc.validate_workflow(
+            name, steps, description, known_tools
+        )
+
+        def _add(workflows: List[Dict[str, Any]]) -> Any:
+            if len(workflows) >= MAX_WORKFLOWS_PER_USER:
+                raise ValueError(
+                    f"Workflow limit reached ({MAX_WORKFLOWS_PER_USER}). "
+                    "Delete one first."
+                )
+            now = time.time()
+            record: Dict[str, Any] = {
+                "id": new_conversation_id(),
+                "name": clean_name,
+                "description": clean_desc,
+                "steps": clean_steps,
+                "created": now,
+                "updated": now,
+            }
+            return dict(record), workflows + [record]
+
+        return self._mutate_workflows(_add)
+
+    def get_workflow(self, workflow_id: Any) -> Optional[Dict[str, Any]]:
+        """Return a copy of one workflow, or None (unknown/malformed IDs)."""
+        if not is_valid_id(workflow_id):
+            return None
+        data, _ = self.load_workflows()
+        for entry in data["workflows"]:
+            if entry["id"] == workflow_id:
+                return dict(entry)
+        return None
+
+    def list_workflows(self) -> List[Dict[str, Any]]:
+        """Workflows newest-first."""
+        data, _ = self.load_workflows()
+        matching = [dict(entry) for entry in data["workflows"]]
+        matching.sort(key=lambda e: e.get("created", 0.0), reverse=True)
+        return matching
+
+    def update_workflow(
+        self,
+        workflow_id: Any,
+        name: Any,
+        steps: Any,
+        description: Any = "",
+        known_tools: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Full-replace a pipeline (re-validated); returns the record.
+
+        The id/created survive; updated is bumped. Raises ValueError
+        for unknown IDs or invalid definitions.
+        """
+        from services import workflows as workflows_svc
+
+        if not is_valid_id(workflow_id):
+            raise ValueError("Workflow not found.")
+        clean_name, clean_desc, clean_steps = workflows_svc.validate_workflow(
+            name, steps, description, known_tools
+        )
+
+        def _replace(workflows: List[Dict[str, Any]]) -> Any:
+            updated_list: List[Dict[str, Any]] = []
+            found: Optional[Dict[str, Any]] = None
+            for entry in workflows:
+                if entry["id"] == workflow_id:
+                    found = {
+                        "id": entry["id"],
+                        "name": clean_name,
+                        "description": clean_desc,
+                        "steps": clean_steps,
+                        "created": entry.get("created", 0.0),
+                        "updated": time.time(),
+                    }
+                    updated_list.append(found)
+                else:
+                    updated_list.append(entry)
+            if found is None:
+                raise ValueError("Workflow not found.")
+            return dict(found), updated_list
+
+        return self._mutate_workflows(_replace)
+
+    def delete_workflow(self, workflow_id: Any) -> bool:
+        """Delete one workflow; False for unknown IDs."""
+        if not is_valid_id(workflow_id):
+            return False
+
+        def _drop(workflows: List[Dict[str, Any]]) -> Any:
+            kept = [e for e in workflows if e["id"] != workflow_id]
+            return len(kept) != len(workflows), kept
+
+        return bool(self._mutate_workflows(_drop))
 
     # -- project context ---------------------------------------------
     # Explicit user-controlled per-project text. Stored outside

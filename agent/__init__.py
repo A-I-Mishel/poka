@@ -50,6 +50,7 @@ from agent.prompts import (
     _memory_data_block,
     _messages_to_langchain,
     _project_context_block,
+    sanitize_messages_for_provider,
     strip_internal_reasoning,
     system_prompt,
 )
@@ -79,6 +80,7 @@ from agent.toolrun import (
     tools,
 )
 from agent.vision import _try_vision_answer
+from agent.workflows import run_workflow
 
 __all__ = [
     "AgentResult",
@@ -129,6 +131,8 @@ __all__ = [
     "reflect_and_improve",
     "rule_route",
     "run_tool_loop",
+    "run_workflow",
+    "sanitize_messages_for_provider",
     "should_reflect",
     "strip_internal_reasoning",
     "summarize_history",

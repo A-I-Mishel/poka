@@ -13,11 +13,11 @@ frontend/  (Vite + vanilla JS UI, deployed on Vercel)
   |
   v  (HTTP /api, VITE_API_URL points at the backend)
 backend/  (FastAPI: chat, chats, uploads, artifacts, projects,
-           briefs, memory, meta routers + chatflow pipeline)
+            briefs, workflows, memory, meta routers + chatflow pipeline)
   |
   v
 agent/  (budget, executor, prompts, providers, cascade, router,
-         toolrun, planning, reflection, vision, runtime)
+          toolrun, planning, reflection, vision, workflows, runtime)
   |
   v
 services/  (auth, identity, storage, files, memory, secrets, limits,
@@ -145,6 +145,14 @@ literals); `PLUTO_MCP_ALLOW_TOOLS` globs decide what the model may
 touch (default deny). Third-party output is untrusted DATA; each call
 opens a fresh session.
 
+Sandboxed Python (`run_python`): pure computation only (arithmetic,
+strings, collections, functions, `print` for output). No imports, no
+files, no network, no `while` loops, no private/dunder access; loops
+and `range()` are iteration-budgeted. Private mode only
+(`PLUTO_AUTH_MODE=private`) — open mode is denied outright — plus its
+own rate limit. This is a prompt-injection-grade sandbox, not a kernel
+boundary: hosts needing hard isolation must containerize the API.
+
 Document knowledge base (vector retrieval, answers "what do my
 documents say"): text-bearing uploads (PDF/CSV) are chunked and
 embedded at upload time (best-effort, never fails the upload) into the
@@ -154,6 +162,15 @@ model via `PLUTO_KB_EMBED_MODEL`); per-user isolation holds — one
 user's vectors are never searched for another. Heuristic memory
 (regex facts + keyword overlap) is separate and answers "what has this
 user told me before".
+
+Workflows (saved fixed pipelines, `/api/workflows`): named,
+owner-saved tool sequences run deterministically with no LLM planning
+— steps execute in order through the normal tool funnel (budgets,
+timeouts, STATUS markers). String args may embed `{{input}}`
+(run-time input) and `{{steps.N.output}}` (earlier steps' reported
+output); the first non-OK step stops the run. `send_gmail` is blocked,
+and code/SQL/identifiers accept no step-output templates, so templated
+tool output cannot become code injection or silent exfiltration.
 
 ## Storage architecture
 

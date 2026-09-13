@@ -86,6 +86,27 @@ class BriefFromMessage(BaseModel):
     project_id: Optional[str] = None
 
 
+class WorkflowStep(BaseModel):
+    tool: str = Field(min_length=1, max_length=64)
+    args: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    steps: List[WorkflowStep] = Field(min_length=1, max_length=10)
+
+
+class WorkflowUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    steps: List[WorkflowStep] = Field(min_length=1, max_length=10)
+
+
+class WorkflowRunRequest(BaseModel):
+    input: str = Field(default="", max_length=2000)
+
+
 class HealthResponse(BaseModel):
     ok: bool = True
     tiers: List[str] = Field(default_factory=list)
