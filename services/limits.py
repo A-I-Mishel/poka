@@ -38,6 +38,7 @@ MODEL_TIMEOUT_SECONDS: float = 90.0
 # every model call (classify, answer, tools, reflection, vision).
 FIRST_TOKEN_TIMEOUT_SECONDS: float = 3.0
 TOOL_TIMEOUT_SECONDS: float = 90.0
+MCP_TIMEOUT_SECONDS: float = 60.0
 PROBE_TIMEOUT_SECONDS: float = 20.0
 
 # Request budgets (per single user message)
@@ -70,6 +71,7 @@ RATE_LIMITS: dict = {
     "gmail": (30, 3600.0),
     "calendar": (30, 3600.0),
     "database": (30, 3600.0),
+    "mcp": (20, 3600.0),
 }
 
 # Knowledge base (vector retrieval over user documents). All tunables

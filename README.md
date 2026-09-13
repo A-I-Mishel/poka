@@ -72,6 +72,8 @@ python -m pytest tests/ -q
 | `GOOGLE_CLIENT_ID` | for Gmail | Google OAuth client ID (Desktop app) |
 | `GOOGLE_CLIENT_SECRET` | for Gmail | Google OAuth client secret |
 | `GOOGLE_REFRESH_TOKEN` | for Gmail | Refresh token from `scripts/get_google_refresh_token.py` |
+| `PLUTO_MCP_SERVERS` | no | JSON list of MCP servers (stdio and/or remote URLs) |
+| `PLUTO_MCP_ALLOW_TOOLS` | with MCP servers | Comma globs like `github.*,docs.search` (default deny) |
 
 Locally these live in `.env` (gitignored). On Render/Vercel put them
 under Environment Variables. Never commit keys.
@@ -134,6 +136,14 @@ Database (`list_tables`, `describe_table`, `query_database`,
 setup or credentials. Reads are SELECT-only and capped; writes need
 `confirm=true`; table names are validated identifiers and
 ATTACH/DETACH are rejected.
+
+MCP gateway (`list_mcp_tools`, `call_mcp_tool`): use tools from any
+configured MCP server — stdio servers for local dev (need node/npx),
+remote HTTP/SSE servers for hosted deploys. Servers come from
+`PLUTO_MCP_SERVERS` (server secrets via named env vars, never
+literals); `PLUTO_MCP_ALLOW_TOOLS` globs decide what the model may
+touch (default deny). Third-party output is untrusted DATA; each call
+opens a fresh session.
 
 Document knowledge base (vector retrieval, answers "what do my
 documents say"): text-bearing uploads (PDF/CSV) are chunked and
