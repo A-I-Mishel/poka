@@ -104,10 +104,29 @@ function renderAcct() {
 async function refreshMe() {
   ACCT.username = "";
   if (!getToken()) { renderAcct(); return; }
+  /* Direct fetch (not req()): req() would pop a nested login dialog on
+   * 401, and a stale/revoked/wiped session must not loop the dialog on
+   * every call. A 401 here means the stored session is dead (logout,
+   * server data reset without a persistent disk, ...) — drop it so the
+   * next action retries cleanly as logged-out instead of re-sending a
+   * known-bad token forever. */
   try {
-    var me = await req("/api/auth/me");
+    var res = await fetch(apiUrl("/api/auth/me"), { headers: authHeaders() });
+    if (res.status === 401) {
+      setToken("");
+      ACCT.username = "";
+      renderAcct();
+      return;
+    }
+    if (!res.ok) throw new Error(res.statusText);
+    var me = await res.json();
     ACCT.username = (me && me.username) || "";
-  } catch (e) { ACCT.username = ""; }
+  } catch (e) {
+    /* Network failure: keep the stored token (it may still be good) but
+     * report logged-out until the next successful check. Only a definite
+     * 401 above clears it. */
+    ACCT.username = "";
+  }
   renderAcct();
 }
 async function authCall(path, body) {
@@ -179,7 +198,13 @@ async function authSubmit(path) {
     try { await refreshProjects(); } catch (e) {}
     try { await refreshChats(); } catch (e) { toast("Cannot load chats: " + e.message); }
   } catch (e) {
-    err.textContent = e.message;
+    var msg = String((e && e.message) || "Sign in failed.");
+    if (path.indexOf("signup") > -1 && msg.toLowerCase().indexOf("taken") > -1) {
+      msg += " Try Log in with that name instead.";
+    } else if (path.indexOf("login") > -1 && msg.toLowerCase().indexOf("invalid username or password") > -1) {
+      msg += " If the server was just redeployed without persistent storage, the account no longer exists — sign up again.";
+    }
+    err.textContent = msg;
     err.classList.remove("hidden");
   }
 }
@@ -227,6 +252,7 @@ $("dlgInput").addEventListener("keydown", function (e) {
 async function req(path, init, retried) {
   var opts = init || {};
   var headers = Object.assign({ "Content-Type": "application/json" }, authHeaders(), opts.headers || {});
+  var hadToken = !!headers.Authorization;
   var res;
   try {
     res = await fetch(apiUrl(path), Object.assign({}, opts, { headers: headers }));
@@ -234,6 +260,14 @@ async function req(path, init, retried) {
     throw new Error("Cannot reach the Pluto API (" + (API_BASE || "same origin") + "). " + e.message);
   }
   if (res.status === 401 && !retried) {
+    /* A 401 with a presented token means that token is dead (revoked,
+     * or the server lost data/accounts.json after a restart without a
+     * persistent disk). Drop it before prompting: otherwise Cancel leaves
+     * the known-bad token behind and every later request 401-loops back
+     * into the dialog, which feels like "login never works, I must sign
+     * up again". After clearing, Cancel continues logged-out (visitor
+     * vault in open mode); a successful login stores the fresh token. */
+    if (hadToken) setToken("");
     var tok = await authAsync("Log in to continue");
     if (!tok) throw new Error("Authentication required.");
     setToken(tok);
@@ -633,8 +667,11 @@ async function uploadPending() {
   for (var i = 0; i < pendingFiles.length; i++) {
     var form = new FormData();
     form.append("file", pendingFiles[i]);
-    var res = await fetch(apiUrl("/api/uploads"), { method: "POST", headers: authHeaders(), body: form });
+    var upHeaders = authHeaders();
+    var upHadToken = !!upHeaders.Authorization;
+    var res = await fetch(apiUrl("/api/uploads"), { method: "POST", headers: upHeaders, body: form });
     if (res.status === 401) {
+      if (upHadToken) setToken("");
       var tok2 = await authAsync("Log in to continue");
       if (!tok2) throw new Error("Authentication required.");
       setToken(tok2);

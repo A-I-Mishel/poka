@@ -32,3 +32,18 @@ services:
         value: https://poka-nine.vercel.app
       - key: PLUTO_AUTH_MODE
         value: open
+      # Persistent storage for accounts + chats + uploads + memory.
+      # Without this, data/accounts.json lives on the ephemeral filesystem
+      # and every redeploy/restart wipes all accounts: old tokens 401 and
+      # /login fails with "Invalid username or password", forcing users to
+      # sign up again with the same name. The disk keeps PLUTO_DATA_DIR
+      # alive across deploys. NOTE: Render disks need a paid instance
+      # (Starter or higher) — on the free tier the filesystem is ephemeral
+      # and logins will keep resetting; either upgrade or self-host with a
+      # Docker volume (see README) for durable logins.
+      - key: PLUTO_DATA_DIR
+        value: /var/pluto-data
+    disk:
+      name: pluto-data
+      mountPath: /var/pluto-data
+      sizeGB: 1
