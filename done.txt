@@ -1,62 +1,53 @@
 PLUTO — BUILD LOG (see README.md for the full picture)
 ==================================================
 
-Phase 1 — cascade, tools, deploy, theme, memory, message actions
-- 12-tier LLM cascade (Muse Spark 1.3 / Nemotron 3.5 / DeepSeek V4 Flash /
-  Nemotron 3 Ultra / Big Pickle / MiMo V2.5 / Ling 3.0 Flash / Groq /
-  Gemini 3.6 Flash / Gemini 3.5 Flash / OpenRouter Nemotron Ultra /
-  OpenRouter Gemma)
-- Custom tool loop (Gemini thought_signature fix), runtime fallback
-- Streamlit Cloud deploy (Python 3.12, Secrets, gitignored .env)
-- Claude-style indigo dark UI; per-message Edit (truncate+prefill)
-- Persistent chats + memory notes; hover Copy buttons
-- Fixed: st.secrets breaking set_page_config; Enter rebinding; lost code
+Phase 1 — foundation
+- FastAPI backend + vanilla-JS frontend (Vite); Vercel + Render deploys
+- 12-tier cascade (Muse Spark / Nemotron 3.5 / DeepSeek V4 /
+  Nemotron 3 Ultra / Big Pickle / MiMo V2.5 / Ling 3.0 / Groq /
+  Gemini 3.6 / 3.5 Flash / OpenRouter x2)
+- Custom tool loop (Gemini thought_signature fix), budgeted execution
 
 Phase 2 — cost + reliability
-- Deep Mode toggle + conditional reflection (Fast default)
-- Startup probe removed (lazy cascade); tier cooldown on first failure
-- Structured tool statuses; friendly quota errors
+- Deep Mode: planning + reflection; kind-based tier cooldowns
+  (timeouts forgiven x2 strikes, quota 6h, auth 1h)
+- Per-user budgets: LLM calls, tool calls, search calls, wall clock
+- Real SSE streaming (live tokens, reset events, per-round status)
 
 Phase 3 — quality + capabilities
-- Structured web search (title/URL/snippet/date/domain) + Sources consulted
-- read_pdf_page tool; scanned-PDF detection with honest OCR message
-- Vision: owned-image analysis on Gemini tiers, honest fallback otherwise
-- csv_inspect controlled ops (9 ops, no arbitrary code)
-- build_presentation (5 layouts, overflow splits, notes, QC reopen check)
-- build_document (markdown→structured DOCX, inline runs, QC reopen check)
-- Heuristic memory (regex extraction + keyword-overlap scoring, no embeddings):
-  types, polarity/negation, confidence, scoring,
-  deletion API + UI control, DATA-delimited prompt injection
-- ui/theme.py extraction; "Take a photo" wording; link-safe highlighting;
-  UTC-internal timestamps; 7-day unreferenced-upload retention
-- CI (compile+pytest blocking, pip-audit advisory), MIT LICENSE,
-  README.md, pillow pinned
+- Structured web search + sources; read_pdf_page; vision fast-path
+- csv_inspect (9 controlled ops); build_presentation; build_document
+- Heuristic memory (regex + keyword scoring, no embeddings) with
+  polarity/confidence
 
-Phase 4 — data + RAG
-- Per-user SQLite vault (list/describe/query/import/execute; SELECT-only
-  reads, confirm-gated writes, identifier-validated tables, no ATTACH)
-- Document KB: text-bearing uploads chunked + Gemini-embedded at upload
-  (best-effort, never fails upload) into the uploader's vault (kb.json);
-  search_documents ranks by cosine, per-user isolation held
+Phase 4 — RAG knowledge base
+- Per-user vector store (JSON + cosine), Gemini embeddings
+- Ingest on upload; search_documents tool; growth caps
+  (docs + total chunks, kb-full past the cap)
 
-Phase 5 — Google integrations
-- Gmail (search/read/draft/send): single-account OAuth (Desktop client +
-  scripts/get_google_refresh_token.py); mail is untrusted DATA; send
-  needs confirm=true, drafts are the safe default
-- Calendar (list/create/delete): same OAuth client (calendar scope);
-  create low-risk, delete needs confirm=true
+Phase 5 — integrations + sandbox
+- Gmail (search/read/draft/send) + Calendar tools, confirm-gated writes
+- MCP client: allowlist-gated, minimal child env, output char-cap
+- run_python: AST-validated sandbox, private mode only
+- SQLite database tool (list/describe/query/import)
 
-Phase 6 — extensibility (current)
-- MCP gateway (list_mcp_tools/call_mcp_tool): stdio (local dev, minimal
-  child env: safe base + resolved secrets only) + remote HTTP/SSE
-  (hosted); PLUTO_MCP_ALLOW_TOOLS globs, default deny; 3rd-party output
-  is untrusted DATA; fresh session per call; output char-capped
-- Sandboxed run_python: pure-compute only (no imports/files/net/while),
-  iteration-budgeted; private-mode only + own rate limit
-- Saved workflows (/api/workflows): owner-saved fixed tool sequences,
-  no LLM planning at run; {{input}} + {{steps.N.output}} templates;
-  send_gmail blocked; code/SQL/identifiers (incl. event_id/message_id/
-  to/draft_id) reject step-output templates; confirm must be real bool
+Phase 6 — workflows
+- Owner-saved tool pipelines: templating, static-arg injection guards
+  (code/sql/table/upload_id/server/tool + event_id/message_id/to/
+  draft_id), blocked sinks (send_gmail), step caps
 
-Repo: github.com/A-I-Mishel/poka (main). Live: Vercel UI (poka-nine.vercel.app) + Render API.
-Tests: green via pytest (stubbed models, temp dirs — no API quota spent).
+Phase 7 — accounts (current)
+- Username/password signup/login/logout/me; PBKDF2 hashing (per-user
+  salt, cleartext never stored), opaque Bearer session tokens
+  (hashes only at rest), per-IP attempt limits
+- Stable acct-<hex> ids isolate chats/memory/uploads/vectors per
+  account in both auth modes; sidebar login dialog
+- Logged-out browsers keep a stable visitor id (X-Pluto-Visitor), so
+  open-mode chats persist instead of resetting every request
+
+Fixes: IP-keyed rate limits (open mode), bounded executor queue (503),
+auth unification, word-boundary router, history summary cache,
+truthful tier attribution.
+
+Repo: github.com/A-I-Mishel/poka (main)
+Tests: pytest suite (mocked providers, zero quota spent)

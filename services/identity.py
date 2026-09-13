@@ -24,7 +24,7 @@ class UserIdentity:
 
     id: str
     email: Optional[str]
-    source: str  # "env" | "ephemeral" | "token"
+    source: str  # "env" | "ephemeral" | "token" | "account"
 
 
 class AuthRequired(Exception):

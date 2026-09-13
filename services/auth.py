@@ -12,6 +12,13 @@ a stable pseudonymous user id (sha256 of the token), so holders keep
 their own isolated data and revocation = rotating the secret. Raw
 tokens are never logged and never persisted to disk.
 
+Account sessions (services.accounts username/password, POST
+/api/auth/signup + /login): a verified session token yields the
+account's stable `acct-<hex>` user id (source "account"), checked
+before access tokens. Wrong session and wrong access tokens fail
+identically ("Invalid access token.") so callers cannot probe which
+credential kind a token is.
+
 To plug a real provider (OAuth/OIDC IdP, DB users): implement
 verify_<provider>() returning a stable user id and call it from
 authenticate() before the token step. The rest of the app only sees
@@ -33,7 +40,7 @@ class AuthResult:
 
     identity: UserIdentity
     authenticated: bool
-    method: str  # env | token | ephemeral
+    method: str  # env | token | session | ephemeral
 
 
 def _configured_tokens() -> list:
@@ -66,13 +73,31 @@ def verify_access_token(token: object) -> Optional[str]:
     return None
 
 
+def verify_session_token(token: object) -> Optional[str]:
+    """Verify an account session token; return its user id or None.
+
+    Never raises: registry trouble reads as "no session" (callers fall
+    through to the access-token check, then to the mode chain).
+    """
+    try:
+        from services import accounts as accounts_svc
+    except Exception:
+        return None
+    try:
+        return accounts_svc.verify_session(token)
+    except Exception:
+        return None
+
+
 def authenticate(presented_token: Optional[object] = None) -> AuthResult:
     """Authenticate one visitor: the single source of truth for identity.
 
     Resolution order (the whole app funnels through here):
-    1. A presented access token, verified via verify_access_token()
+    1. A presented session token, verified via verify_session_token()
+       (username/password accounts; stable `acct-<hex>` id).
+    2. A presented access token, verified via verify_access_token()
        (works in every auth mode; stable pseudonymous id).
-    2. Otherwise the mode chain from get_current_user(): env identity,
+    3. Otherwise the mode chain from get_current_user(): env identity,
        else a per-request ephemeral id in open mode; env-only in
        private mode.
 
@@ -82,6 +107,10 @@ def authenticate(presented_token: Optional[object] = None) -> AuthResult:
             ("Authentication required.").
     """
     if presented_token:
+        user_id = verify_session_token(presented_token)
+        if user_id is not None:
+            identity = UserIdentity(id=user_id, email=None, source="account")
+            return AuthResult(identity=identity, authenticated=True, method="session")
         user_id = verify_access_token(presented_token)
         if user_id is None:
             raise AuthRequired("Invalid access token.")

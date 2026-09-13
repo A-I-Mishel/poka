@@ -47,11 +47,11 @@ def extract_client_ip(x_forwarded_for: Optional[str], peer: Optional[str]) -> st
 def limit_key_for(source: str, user_id: Optional[str], client_ip_addr: Optional[str]) -> str:
     """Stable limiter identity for one request.
 
-    Stable sources ("env", "token") key on the user ID; anything else
-    (ephemeral open-mode visitors) keys on the client IP so repeated
-    requests from the same visitor share one bucket.
+    Stable sources ("env", "token", "account") key on the user ID;
+    anything else (ephemeral open-mode visitors) keys on the client IP
+    so repeated requests from the same visitor share one bucket.
     """
-    if source in ("env", "token") and (user_id or "").strip():
+    if source in ("env", "token", "account") and (user_id or "").strip():
         return (user_id or "").strip()
     ip = (client_ip_addr or "").strip() or "unknown"
     return f"ip:{ip}"

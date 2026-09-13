@@ -7,6 +7,10 @@
  * - Model list comes from `GET /api/health` (tiers actually configured).
  * - Access token lives in localStorage (`pluto_token`, legacy `poka_token`
  *   migrated once) and is only ever sent as an Authorization header.
+ *   The token is either a login session (POST /api/auth/signup + /login)
+ *   or an operator-issued access token — the server tells them apart.
+ * - Logged-out browsers also send a stable `X-Pluto-Visitor` id
+ *   (`pluto_visitor`) so open-mode chats persist across requests.
  * - Every list, label count, and panel row is server data or derived from it.
  */
 
@@ -48,8 +52,114 @@ function setToken(t) {
   } catch (e) {}
 }
 function authHeaders() {
+  var h = {};
   var t = getToken();
-  return t ? { Authorization: "Bearer " + t } : {};
+  if (t) h.Authorization = "Bearer " + t;
+  var v = getVisitor();
+  if (v) h["X-Pluto-Visitor"] = v;
+  return h;
+}
+
+/* ---------- visitor (stable per-browser id for logged-out use) ----------
+ * Without this, open-mode requests without a token each mint a fresh
+ * server-side id, so chats saved by one request are unreadable by the
+ * next and the conversation vanishes after every reply. Accounts still
+ * win whenever a Bearer token is present. */
+var VISITOR_KEY = "pluto_visitor";
+function getVisitor() {
+  try {
+    var v = localStorage.getItem(VISITOR_KEY) || "";
+    if (!/^[A-Za-z0-9_.-]{8,64}$/.test(v)) {
+      var bytes = null;
+      try {
+        bytes = (window.crypto && window.crypto.getRandomValues)
+          ? window.crypto.getRandomValues(new Uint8Array(16)) : null;
+      } catch (e) { bytes = null; }
+      if (bytes) {
+        v = Array.prototype.map.call(bytes, function (b) {
+          return ("0" + b.toString(16)).slice(-2);
+        }).join("");
+      } else {
+        v = "v" + Date.now().toString(36) + Math.floor(Math.random() * 1e9).toString(36);
+      }
+      localStorage.setItem(VISITOR_KEY, v);
+    }
+    return v;
+  } catch (e) { return ""; }
+}
+
+/* ---------- account (login session; chats+memory follow the user id) ---------- */
+var ACCT = { username: "" };
+function renderAcct() {
+  var mode = AUTH_MODE === "private" ? "Private" : "Open";
+  var who = ACCT.username ? ACCT.username + " · " : "";
+  $("acctModel").textContent = who + (S.model || "No model") + " · " + mode;
+}
+async function refreshMe() {
+  ACCT.username = "";
+  if (!getToken()) { renderAcct(); return; }
+  try {
+    var me = await req("/api/auth/me");
+    ACCT.username = (me && me.username) || "";
+  } catch (e) { ACCT.username = ""; }
+  renderAcct();
+}
+async function authCall(path, body) {
+  var res;
+  try {
+    res = await fetch(apiUrl(path), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+  } catch (e) {
+    throw new Error("Cannot reach the Pluto API. " + e.message);
+  }
+  if (!res.ok) {
+    var detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (e) {}
+    throw new Error(detail);
+  }
+  return await res.json();
+}
+function showAuth(title) {
+  $("authTitle").textContent = title || "Log in to Pluto";
+  $("authErr").classList.add("hidden");
+  $("authErr").textContent = "";
+  $("authDlg").classList.remove("hidden");
+  setTimeout(function () { $("authUser").focus(); }, 30);
+}
+function hideAuth() {
+  $("authDlg").classList.add("hidden");
+  $("authPass").value = "";
+}
+async function authSubmit(path) {
+  var u = $("authUser").value.trim();
+  var p = $("authPass").value;
+  var err = $("authErr");
+  err.classList.add("hidden");
+  try {
+    var out = await authCall(path, { username: u, password: p });
+    setToken(out.token);
+    ACCT.username = out.username || "";
+    hideAuth();
+    renderAcct();
+    toast("Signed in as " + (out.username || "you"));
+    try { await refreshProjects(); } catch (e) {}
+    try { await refreshChats(); } catch (e) { toast("Cannot load chats: " + e.message); }
+  } catch (e) {
+    err.textContent = e.message;
+    err.classList.remove("hidden");
+  }
+}
+async function signOut() {
+  try { await req("/api/auth/logout", { method: "POST", body: "{}" }); } catch (e) {}
+  setToken("");
+  ACCT.username = "";
+  renderAcct();
+  toast("Signed out");
+  try { await refreshProjects(); } catch (e) {}
+  try { await refreshChats(); } catch (e) {}
 }
 
 /* ---------- generic dialog (promise form) ---------- */
@@ -802,8 +912,7 @@ function setActiveTier(tier, fromServer) {
     /* last answering tier, shown for transparency (preference unchanged) */
   }
   $("modelName").textContent = S.model || "…";
-  var mode = AUTH_MODE === "private" ? "Private" : "Open";
-  $("acctModel").textContent = (S.model || "No model") + " · " + mode;
+  renderAcct();
 }
 function renderModelDD() {
   var dd = $("modelDD");
@@ -835,11 +944,43 @@ $("modelBtn").addEventListener("click", function (e) {
   $("modelDD").classList.toggle("hidden");
 });
 $("accountBtn").addEventListener("click", function () {
+  if (ACCT.username) {
+    ask("Signed in as " + ACCT.username + ". Type OUT to sign out", "", function (v) {
+      if (v !== null && v.trim().toUpperCase() === "OUT") signOut();
+    });
+    return;
+  }
+  if (getToken()) {
+    /* Operator access token (no username): keep the old token prompt. */
+    ask("Access token (empty clears it)", "", function (v) {
+      if (v === null) return;
+      setToken(v);
+      refreshMe();
+      toast(v ? "Token saved" : "Token cleared");
+    });
+    return;
+  }
+  showAuth("Log in to Pluto");
+});
+$("authCancel").addEventListener("click", hideAuth);
+$("authTokenBtn").addEventListener("click", function () {
+  hideAuth();
   ask("Access token (empty clears it)", "", function (v) {
     if (v === null) return;
     setToken(v);
+    refreshMe();
     toast(v ? "Token saved" : "Token cleared");
   });
+});
+$("authLogin").addEventListener("click", function () { authSubmit("/api/auth/login"); });
+$("authSignup").addEventListener("click", function () { authSubmit("/api/auth/signup"); });
+$("authPass").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") authSubmit("/api/auth/login");
+  if (e.key === "Escape") hideAuth();
+});
+$("authUser").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") authSubmit("/api/auth/login");
+  if (e.key === "Escape") hideAuth();
 });
 
 /* ---------- theme ---------- */
@@ -1377,6 +1518,7 @@ window.addEventListener("resize", placeThumb);
   if (TIERS.indexOf(S.model) < 0) S.model = TIERS[0] || "";
   savePrefs();
   setActiveTier(S.model, false);
+  try { await refreshMe(); } catch (err) {}
   try { await refreshProjects(); } catch (err) { toast("Cannot load projects: " + err.message); }
   try { await refreshChats(); } catch (err) { toast("Cannot load chats: " + err.message); }
 })();

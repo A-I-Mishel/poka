@@ -81,14 +81,29 @@ under Environment Variables. Never commit keys.
 ## Authentication modes
 
 - **open** (default): local/dev/trusted use. Identity is `PLUTO_USER_ID`
-  when set, else a per-request ephemeral id. Clients may send
-  `Authorization: Bearer <token>`; it is verified only against
-  `PLUTO_ACCESS_TOKENS`.
+  when set, else the browser's stable `X-Pluto-Visitor` id (minted once
+  into localStorage, so logged-out chats persist), else a per-request
+  ephemeral id. Clients may send `Authorization: Bearer <token>`; it is
+  verified only against `PLUTO_ACCESS_TOKENS`.
 - **private**: only `PLUTO_USER_ID` or holders of a `PLUTO_ACCESS_TOKENS`
   token (sent as `Authorization: Bearer <token>`) are admitted.
   Everyone else gets HTTP 401. Tokens are compared with
   `secrets.compare_digest`, never logged, and only a hash-derived user
   ID is persisted.
+
+## User accounts (login / signup)
+
+`POST /api/auth/signup` and `POST /api/auth/login` (`{username,
+password}`) issue opaque session tokens (Bearer from then on,
+`GET /api/auth/me` shows who you are, `POST /api/auth/logout`
+revokes). Usernames are 3–32 chars (`A–Z a–z 0–9 _ . -`, unique
+case-insensitively); passwords are 8–128 chars, stored as
+PBKDF2-HMAC-SHA256 (per-user salt, 200k iterations — never cleartext),
+and only token hashes are persisted. Signup/login are per-IP
+rate-limited. Each account gets a stable `acct-<hex>` id, so chats,
+memory, uploads, and document vectors isolate per account
+automatically — sign in on any device and your history is there.
+Sessions work in both auth modes.
 
 ## Model configuration
 
@@ -202,7 +217,7 @@ failures raise instead of masquerading as corruption.
 
 - **API**: Render via `render.yaml` blueprint
   (`uvicorn backend.main:app`), or any Python host / the `Dockerfile`
-  (builds the React UI and serves it from the API).
+   (builds the web UI and serves it from the API).
 - **UI**: Vercel from `frontend/` (Vite). Set `VITE_API_URL` to the
   public API URL and `PLUTO_FRONTEND_ORIGIN` on the API host to the
   Vercel URL.

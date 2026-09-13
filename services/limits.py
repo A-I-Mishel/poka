@@ -92,6 +92,8 @@ RATE_LIMITS: dict = {
     "code": (20, 3600.0),
     "workflow": (20, 3600.0),
     "mcp": (20, 3600.0),
+    # Signup/login attempts per client IP (brute-force friction).
+    "auth": (20, 3600.0),
 }
 
 # Knowledge base (vector retrieval over user documents). All tunables
@@ -146,6 +148,10 @@ MAX_SPEC_TOTAL_CHARS: int = 200_000
 # Storage hygiene
 MAX_FILENAME_LEN: int = 100
 UPLOAD_ID_RE: str = r"^[0-9a-f]{16}$"
+
+# Username/password accounts (services.accounts): host-level cap so an
+# open signup endpoint cannot grow the registry without bound.
+MAX_ACCOUNTS_PER_HOST: int = 1000
 
 # Composer attachments (per single user message). 5 total keeps tool
 # hints small (contents are never stuffed; tools read on demand within

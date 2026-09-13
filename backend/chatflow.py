@@ -1,7 +1,7 @@
 """Framework-free chat pipeline backing send + stream endpoints.
 
 Attachment hints, history building, agent invocation, provenance
-capture, artifact linkage, and persistence. The React frontend owns
+capture, artifact linkage, and persistence. The web frontend owns
 transient UI state; this module owns everything server-side per
 request, bound to the authenticated user.
 """
@@ -32,7 +32,7 @@ from services.timeutil import utcnow_iso
 from backend.deps import UserContext
 
 
-# --- attachment hints (same contract as the React composer) ---
+# --- attachment hints (same contract as the web composer) ---
 
 def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int) -> str:
     """Tool hint for one staged attachment (ID-only, never paths)."""

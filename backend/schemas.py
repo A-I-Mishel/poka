@@ -111,3 +111,20 @@ class HealthResponse(BaseModel):
     ok: bool = True
     tiers: List[str] = Field(default_factory=list)
     auth_mode: str = "open"
+
+
+class AccountRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class SessionResponse(BaseModel):
+    token: str
+    username: str
+    user_id: str
+
+
+class MeResponse(BaseModel):
+    username: Optional[str] = None
+    user_id: str = ""
+    source: str = ""

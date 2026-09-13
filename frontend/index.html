@@ -217,6 +217,21 @@
   </div>
 </div>
 
+<div class="overlay hidden" id="authDlg">
+  <div class="dialog">
+    <h3 id="authTitle">Log in to Pluto</h3>
+    <input class="input" id="authUser" type="text" placeholder="Username" autocomplete="username">
+    <input class="input" id="authPass" type="password" placeholder="Password (8+ characters)" autocomplete="current-password">
+    <div class="err hidden" id="authErr"></div>
+    <div class="dialog-actions">
+      <button class="btn ghost" id="authCancel">Cancel</button>
+      <button class="btn ghost" id="authTokenBtn">Use token</button>
+      <button class="btn solid" id="authSignup">Sign up</button>
+      <button class="btn solid" id="authLogin">Log in</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay hidden" id="keys">
   <div class="dialog">
     <h3>Keyboard shortcuts</h3>
