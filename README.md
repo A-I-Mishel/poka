@@ -108,14 +108,16 @@ Sessions work in both auth modes.
 ## Model configuration
 
 Cascade (first live tier wins, failed tiers cool down):
-1. Muse Spark 1.3 (OpenCode, temperature 0.7)
+1. Muse Spark 1.3 (OpenCode, Responses API, temperature 0.7)
 2. Nemotron 3.5 Lightning (OpenCode free tier)
-3. DeepSeek V4 Flash, Nemotron 3 Ultra, Big Pickle, MiMo V2.5,
-   Ling 3.0 Flash (OpenCode free tier, rotating promos)
+3. Nemotron 3 Ultra, Big Pickle, MiMo V2.5,
+   Ling 3.0 Flash (OpenCode free tier, rotating promos;
+   DeepSeek V4 Flash free retired Sep 2026 — now paid only)
 4. Groq (fast inference; model via `GROQ_MODEL`)
 5. Gemini 3.6 Flash (Google, free tier ~20 req/day)
 6. Gemini 3.5 Flash (Google fallback)
-7. OpenRouter Nemotron Ultra + OpenRouter Gemma (free fallbacks)
+7. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
+   + Gemma 26B + Ling Fin + Inkling Small + Laguna (free fallbacks)
 
 Per-task temperatures apply when a tier answers (creative 0.85,
 factual/research lower). Deep Mode (UI toggle) enables planning +

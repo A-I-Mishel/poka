@@ -19,6 +19,9 @@ GEMINI_35_MODEL: str = "gemini-3.5-flash"
 OPENCODE_BASE_URL: str = "https://opencode.ai/zen/v1"
 # Free OpenCode Zen models (Sept 2026; promos rotate — see
 # https://opencode.ai/docs/zen/ for the current free list).
+# NOTE (Sep 11 2026 docs): deepseek-v4-flash-free is RETIRED — the live
+# ID is deepseek-v4-flash and it is PAID ($0.14/$0.28 per 1M). Keep the
+# constant for reference but never call it (getter returns None below).
 DEEPSEEK_FREE_MODEL: str = "deepseek-v4-flash-free"
 NEMOTRON_ULTRA_MODEL: str = "nemotron-3-ultra-free"
 BIG_PICKLE_MODEL: str = "big-pickle"
@@ -35,6 +38,16 @@ GROQ_MODEL: str = "openai/gpt-oss-120b"
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 OPENROUTER_GEMMA_MODEL: str = "google/gemma-4-31b-it:free"
+# Curated OpenRouter free models (live Sep 13 2026 via /api/v1/models;
+# free = prompt+completion $0). Mirrors of OpenCode families on a
+# different provider add quota diversity: when OpenCode 429s, the same
+# family via OpenRouter may still answer.
+OPENROUTER_NEMOTRON_SUPER_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
+OPENROUTER_NEMOTRON35_MODEL: str = "nvidia/nemotron-3.5-lightning:free"
+OPENROUTER_GEMMA26_MODEL: str = "google/gemma-4-26b-a4b-it:free"
+OPENROUTER_LING_FIN_MODEL: str = "inclusionai/ling-3.0-flash-fin:free"
+OPENROUTER_INKLING_MODEL: str = "thinkingmachines/inkling-small:free"
+OPENROUTER_LAGUNA_MODEL: str = "poolside/laguna-s-2.1:free"
 TEMPERATURE: float = 0.7
 
 # Client cache: clients hold only model config + credentials (no user
@@ -120,9 +133,44 @@ def _get_opencode_llm(tier: str, model: str, temperature: float) -> Optional[Cha
         return None
 
 
+def _get_opencode_responses_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
+    """Build an OpenCode Zen client for Responses-API-only models.
+
+    Muse Spark tiers live at POST https://opencode.ai/zen/v1/responses
+    (see https://opencode.ai/docs/zen endpoints table), not
+    /chat/completions. ChatOpenAI with use_responses_api=True targets
+    that endpoint while keeping the same BaseLanguageModel surface
+    (invoke/stream/bind_tools) the cascade and tool loop expect.
+    """
+    key: Optional[str] = _get_secret("OPENCODE_API_KEY")
+    if _is_placeholder(key, "your_opencode_key_here"):
+        return None
+    assert key is not None
+    try:
+        return _cached_client(
+            tier,
+            temperature,
+            key,
+            lambda: ChatOpenAI(
+                model=model,
+                api_key=key,
+                base_url=OPENCODE_BASE_URL,
+                temperature=temperature,
+                request_timeout=MODEL_TIMEOUT_SECONDS,
+                use_responses_api=True,
+            ),
+        )
+    except Exception:
+        return None
+
+
 def get_tier1_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """TIER 1: Muse Spark 1.3 via OpenCode -- limited-time free tier."""
-    return _get_opencode_llm("Muse Spark 1.3", MUSE_MODEL, temperature)
+    """TIER 1: Muse Spark 1.3 via OpenCode -- limited-time free tier.
+
+    Responses-API-only model (Sep 2026 docs); must not use the
+    chat-completions factory.
+    """
+    return _get_opencode_responses_llm("Muse Spark 1.3", MUSE_MODEL, temperature)
 
 
 def get_tier1b_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
@@ -131,8 +179,14 @@ def get_tier1b_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
 
 
 def get_tier_deepseek_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """DeepSeek V4 Flash via OpenCode -- free tier (limited time)."""
-    return _get_opencode_llm("DeepSeek V4 Flash", DEEPSEEK_FREE_MODEL, temperature)
+    """DeepSeek V4 Flash -- RETIRED as a free tier (Sep 11 2026 docs).
+
+    The *-free ID no longer exists (live ID deepseek-v4-flash is paid),
+    so calling it only yields 400 invalid + a 1h cooldown. Always
+    return None so the tier is skipped and hidden from /api/health.
+    Kept for backward-compatible imports only.
+    """
+    return None
 
 
 def get_tier_nemotron_ultra_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
@@ -283,10 +337,39 @@ def get_tier_openrouter_gemma_llm(temperature: float = TEMPERATURE) -> Optional[
     return _get_openrouter_llm("OpenRouter Gemma", OPENROUTER_GEMMA_MODEL, temperature)
 
 
+def get_tier_openrouter_nemotron_super_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Nemotron 3 Super 120B (free tier)."""
+    return _get_openrouter_llm("OpenRouter Nemotron Super", OPENROUTER_NEMOTRON_SUPER_MODEL, temperature)
+
+
+def get_tier_openrouter_nemotron35_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Nemotron 3.5 Lightning mirror (free tier)."""
+    return _get_openrouter_llm("OpenRouter Nemotron 3.5", OPENROUTER_NEMOTRON35_MODEL, temperature)
+
+
+def get_tier_openrouter_gemma26_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Gemma 4 26B (free tier)."""
+    return _get_openrouter_llm("OpenRouter Gemma 26B", OPENROUTER_GEMMA26_MODEL, temperature)
+
+
+def get_tier_openrouter_ling_fin_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Ling 3.0 Flash Fin mirror (free tier)."""
+    return _get_openrouter_llm("OpenRouter Ling Fin", OPENROUTER_LING_FIN_MODEL, temperature)
+
+
+def get_tier_openrouter_inkling_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Inkling Small 1M ctx (free tier)."""
+    return _get_openrouter_llm("OpenRouter Inkling Small", OPENROUTER_INKLING_MODEL, temperature)
+
+
+def get_tier_openrouter_laguna_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Laguna code model (free tier)."""
+    return _get_openrouter_llm("OpenRouter Laguna", OPENROUTER_LAGUNA_MODEL, temperature)
+
+
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Muse Spark 1.3": get_tier1_llm,
     "Nemotron 3.5": get_tier1b_llm,
-    "DeepSeek V4 Flash": get_tier_deepseek_llm,
     "Nemotron 3 Ultra": get_tier_nemotron_ultra_llm,
     "Big Pickle": get_tier_big_pickle_llm,
     "MiMo V2.5": get_tier_mimo_llm,
@@ -296,6 +379,12 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Gemini 3.5 Flash": get_tier3_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
     "OpenRouter Gemma": get_tier_openrouter_gemma_llm,
+    "OpenRouter Nemotron Super": get_tier_openrouter_nemotron_super_llm,
+    "OpenRouter Nemotron 3.5": get_tier_openrouter_nemotron35_llm,
+    "OpenRouter Gemma 26B": get_tier_openrouter_gemma26_llm,
+    "OpenRouter Ling Fin": get_tier_openrouter_ling_fin_llm,
+    "OpenRouter Inkling Small": get_tier_openrouter_inkling_llm,
+    "OpenRouter Laguna": get_tier_openrouter_laguna_llm,
 }
 
 
@@ -318,7 +407,6 @@ def get_tier_llm(name: str, temperature: float = TEMPERATURE) -> Optional[Any]:
 TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogleGenerativeAI]]]]] = [
     ("Muse Spark 1.3", get_tier1_llm),
     ("Nemotron 3.5", get_tier1b_llm),
-    ("DeepSeek V4 Flash", get_tier_deepseek_llm),
     ("Nemotron 3 Ultra", get_tier_nemotron_ultra_llm),
     ("Big Pickle", get_tier_big_pickle_llm),
     ("MiMo V2.5", get_tier_mimo_llm),
@@ -328,6 +416,12 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Gemini 3.5 Flash", get_tier3_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
+    ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),
+    ("OpenRouter Nemotron 3.5", get_tier_openrouter_nemotron35_llm),
+    ("OpenRouter Gemma 26B", get_tier_openrouter_gemma26_llm),
+    ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),
+    ("OpenRouter Inkling Small", get_tier_openrouter_inkling_llm),
+    ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),
 ]
 
 

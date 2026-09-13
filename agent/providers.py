@@ -18,12 +18,17 @@ from config import (
     get_tier2_llm,
     get_tier3_llm,
     get_tier_big_pickle_llm,
-    get_tier_deepseek_llm,
     get_tier_groq_llm,
     get_tier_ling_llm,
     get_tier_mimo_llm,
     get_tier_nemotron_ultra_llm,
+    get_tier_openrouter_gemma26_llm,
     get_tier_openrouter_gemma_llm,
+    get_tier_openrouter_inkling_llm,
+    get_tier_openrouter_laguna_llm,
+    get_tier_openrouter_ling_fin_llm,
+    get_tier_openrouter_nemotron35_llm,
+    get_tier_openrouter_nemotron_super_llm,
     get_tier_openrouter_ultra_llm,
 )
 
@@ -32,7 +37,6 @@ TIER_AGENT_GETTERS: List[
 ] = [
     ("Muse Spark 1.3", get_tier1_llm),  # type: ignore[arg-type]
     ("Nemotron 3.5", get_tier1b_llm),  # type: ignore[arg-type]
-    ("DeepSeek V4 Flash", get_tier_deepseek_llm),  # type: ignore[arg-type]
     ("Nemotron 3 Ultra", get_tier_nemotron_ultra_llm),  # type: ignore[arg-type]
     ("Big Pickle", get_tier_big_pickle_llm),  # type: ignore[arg-type]
     ("MiMo V2.5", get_tier_mimo_llm),  # type: ignore[arg-type]
@@ -42,4 +46,10 @@ TIER_AGENT_GETTERS: List[
     ("Gemini 3.5 Flash", get_tier3_llm),  # type: ignore[arg-type]
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),  # type: ignore[arg-type]
     ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),  # type: ignore[arg-type]
+    ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),  # type: ignore[arg-type]
+    ("OpenRouter Nemotron 3.5", get_tier_openrouter_nemotron35_llm),  # type: ignore[arg-type]
+    ("OpenRouter Gemma 26B", get_tier_openrouter_gemma26_llm),  # type: ignore[arg-type]
+    ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),  # type: ignore[arg-type]
+    ("OpenRouter Inkling Small", get_tier_openrouter_inkling_llm),  # type: ignore[arg-type]
+    ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),  # type: ignore[arg-type]
 ]

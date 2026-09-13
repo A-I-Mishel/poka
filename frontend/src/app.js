@@ -984,13 +984,25 @@ $("exportBtn").addEventListener("click", function () {
 });
 
 /* ---------- models (server-driven) ---------- */
+var _lastFallbackKey = "";
+var _lastFallbackAt = 0;
 function setActiveTier(tier, fromServer) {
   if (tier && TIERS.indexOf(tier) > -1 && !fromServer) {
     S.model = tier;
     savePrefs();
-  }
-  if (fromServer && tier && TIERS.indexOf(tier) > -1) {
-    /* last answering tier, shown for transparency (preference unchanged) */
+    _lastFallbackKey = "";
+  } else if (fromServer && tier && TIERS.indexOf(tier) > -1 && S.model && tier !== S.model) {
+    /* Cascade fallback: S.model is the preferred tier (selector/footer),
+       tier is the tier that actually answered (per-message "time · tier"
+       label). Keep the preference so the next turn retries it, but tell
+       the user once per turn instead of silently showing the preference. */
+    var key = S.model + ">" + tier;
+    var now = Date.now();
+    if (key !== _lastFallbackKey || now - _lastFallbackAt > 5000) {
+      _lastFallbackKey = key;
+      _lastFallbackAt = now;
+      toast("Preferred " + S.model + " unavailable \u2014 answered by " + tier);
+    }
   }
   $("modelName").textContent = S.model || "…";
   renderAcct();
