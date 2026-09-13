@@ -9,10 +9,12 @@ pillow>=12.3.0
 pandas
 openpyxl
 # Pinned transitive deps: scipy>=1.14 needs numpy>=2.0,<2.8;
-# google-ai-generativelanguage 0.6.x needs protobuf<5. Without these,
-# pip resolves numpy 1.26 + protobuf 7 and `pip check` fails.
+# protobuf>=6.33.5 fixes PYSEC-2026-1805 (4.25.x vulnerable; fix in
+# 5.29.6 / 6.33.5). The old google-ai-generativelanguage 0.6.x (<5 cap)
+# is an orphan nothing imports — app uses langchain-google-genai's new
+# google-genai SDK — so the <5 cap must not come back.
 numpy>=2.0,<2.8
-protobuf>=3.19.5,<5.0.0dev
+protobuf>=6.33.5,<7
 pypdf>=6.16.1,<7
 python-dotenv>=1.2.2
 fastapi>=0.115
