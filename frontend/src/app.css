@@ -36,6 +36,12 @@ svg{display:block;flex-shrink:0}
 .recent .kebab{width:24px;height:24px;border-radius:5px;color:var(--t3);opacity:0;display:grid;place-items:center}
 .recent:hover .kebab{opacity:1}
 .recent .kebab:hover{background:rgba(128,128,128,.15)}
+.prow{display:flex;align-items:center;gap:2px}
+.prow .nav{flex:1;min-width:0}
+.prow .nav svg{flex-shrink:0}
+.prow .kebab{width:24px;height:24px;flex:none;border-radius:5px;color:var(--t3);opacity:0;display:grid;place-items:center}
+.prow:hover .kebab{opacity:1}
+.prow .kebab:hover{background:rgba(128,128,128,.15)}
 .sidebar-footer{margin-top:auto;border-top:1px solid var(--bd);padding-top:10px}
 .account{display:flex;align-items:center;gap:9px;width:100%;padding:6px;border-radius:7px;text-align:left}
 .account:hover{background:var(--s2)}
@@ -225,6 +231,7 @@ svg{display:block;flex-shrink:0}
 @media(hover:none){
   .meta button{opacity:1}
   .recent .kebab{opacity:1}
+  .prow .kebab{opacity:1}
   .card .row-btn{opacity:1}
   .card .forget{opacity:1}
 }

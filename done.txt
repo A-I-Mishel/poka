@@ -35,6 +35,8 @@ Phase 6 — workflows
 - Owner-saved tool pipelines: templating, static-arg injection guards
   (code/sql/table/upload_id/server/tool + event_id/message_id/to/
   draft_id), blocked sinks (send_gmail), step caps
+- Sidebar Workflows panel (list/run/save/delete) + project kebab menu
+  (rename, context editor, archive)
 
 Phase 7 — accounts (current)
 - Username/password signup/login/logout/me; PBKDF2 hashing (per-user

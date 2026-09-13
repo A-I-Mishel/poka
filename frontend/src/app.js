@@ -122,6 +122,14 @@ async function authCall(path, body) {
   }
   return await res.json();
 }
+var authResolve = null;
+var AUTH_SEEN_KEY = "pluto_auth_seen";
+function authDismissed() {
+  try { return localStorage.getItem(AUTH_SEEN_KEY) === "1"; } catch (e) { return true; }
+}
+function markAuthSeen() {
+  try { localStorage.setItem(AUTH_SEEN_KEY, "1"); } catch (e) {}
+}
 function showAuth(title) {
   $("authTitle").textContent = title || "Log in to Pluto";
   $("authErr").classList.add("hidden");
@@ -133,6 +141,23 @@ function hideAuth() {
   $("authDlg").classList.add("hidden");
   $("authPass").value = "";
 }
+/* Promise form: used by every auth wall (boot, 401s, uploads) so the
+ * login dialog — not a bare token prompt — is what logged-out users see. */
+function authAsync(title) {
+  return new Promise(function (resolve) {
+    authResolve = resolve;
+    showAuth(title);
+  });
+}
+function settleAuth(token) {
+  hideAuth();
+  markAuthSeen();
+  if (authResolve) {
+    var r = authResolve;
+    authResolve = null;
+    r(token);
+  }
+}
 async function authSubmit(path) {
   var u = $("authUser").value.trim();
   var p = $("authPass").value;
@@ -142,7 +167,7 @@ async function authSubmit(path) {
     var out = await authCall(path, { username: u, password: p });
     setToken(out.token);
     ACCT.username = out.username || "";
-    hideAuth();
+    settleAuth(out.token);
     renderAcct();
     toast("Signed in as " + (out.username || "you"));
     try { await refreshProjects(); } catch (e) {}
@@ -203,9 +228,12 @@ async function req(path, init, retried) {
     throw new Error("Cannot reach the Pluto API (" + (API_BASE || "same origin") + "). " + e.message);
   }
   if (res.status === 401 && !retried) {
-    var v = await askAsync("Access token (empty clears it)", "");
-    if (v === null) throw new Error("Authentication required.");
-    setToken(v);
+    var tok = await authAsync("Log in to continue");
+    if (!tok) throw new Error("Authentication required.");
+    setToken(tok);
+    try { await refreshMe(); } catch (e) {}
+    try { await refreshProjects(); } catch (e) {}
+    try { await refreshChats(); } catch (e) {}
     return req(path, init, true);
   }
   if (!res.ok) {
@@ -529,9 +557,10 @@ async function uploadPending() {
     form.append("file", pendingFiles[i]);
     var res = await fetch(apiUrl("/api/uploads"), { method: "POST", headers: authHeaders(), body: form });
     if (res.status === 401) {
-      var v = await askAsync("Access token (empty clears it)", "");
-      if (v === null) throw new Error("Authentication required.");
-      setToken(v);
+      var tok2 = await authAsync("Log in to continue");
+      if (!tok2) throw new Error("Authentication required.");
+      setToken(tok2);
+      try { await refreshMe(); } catch (e) {}
       return uploadPending();
     }
     if (!res.ok) {
@@ -800,13 +829,16 @@ function renderRecents() {
     el.appendChild(d);
   });
 }
+var projId = null;
 function renderProjects() {
   var el = $("projList");
   el.innerHTML = "";
   function addRow(id, name) {
+    var wrap = document.createElement("div");
+    wrap.className = "prow";
     var b = document.createElement("button");
     b.className = "nav" + ((S.projectId || null) === id ? " active" : "");
-    b.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>';
+    b.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/></svg>';
     b.appendChild(document.createTextNode(name));
     b.addEventListener("click", function () {
       S.projectId = id;
@@ -815,11 +847,59 @@ function renderProjects() {
       toast(id ? "Project: " + name : "Project: Personal");
       if (window.innerWidth < 861) document.body.classList.add("folded");
     });
-    el.appendChild(b);
+    wrap.appendChild(b);
+    if (id) {
+      var kb = document.createElement("button");
+      kb.className = "kebab";
+      kb.textContent = "⋯";
+      kb.title = "Project options";
+      kb.addEventListener("click", function (e) {
+        e.stopPropagation();
+        projId = id;
+        var r = kb.getBoundingClientRect();
+        var m = $("projMenu");
+        m.classList.remove("hidden");
+        m.style.left = Math.min(r.left, window.innerWidth - 170) + "px";
+        m.style.top = Math.min(r.bottom + 6, window.innerHeight - 120) + "px";
+      });
+      wrap.appendChild(kb);
+    }
+    el.appendChild(wrap);
   }
   addRow(null, "Personal");
   projects.forEach(function (p) { if (p && p.id) addRow(p.id, p.name || "Untitled"); });
 }
+$("projRename").addEventListener("click", function () {
+  $("projMenu").classList.add("hidden");
+  var p = projects.filter(function (x) { return x && x.id === projId; })[0];
+  if (!p) return;
+  ask("Rename project", p.name || "", async function (v) {
+    if (!v) return;
+    try {
+      await req("/api/projects/" + projId, { method: "PATCH", body: JSON.stringify({ name: v }) });
+      await refreshProjects();
+      toast("Renamed");
+    } catch (err) { toast("Rename failed: " + err.message); }
+  });
+});
+$("projContext").addEventListener("click", function () {
+  $("projMenu").classList.add("hidden");
+  if (!projId) return;
+  S.projectId = projId;
+  savePrefs();
+  renderProjects();
+  openSection("project");
+});
+$("projArchive").addEventListener("click", async function () {
+  $("projMenu").classList.add("hidden");
+  if (!projId) return;
+  try {
+    await req("/api/projects/" + projId + "/archive", { method: "POST" });
+    if (S.projectId === projId) { S.projectId = null; savePrefs(); }
+    await refreshProjects();
+    toast("Project archived");
+  } catch (err) { toast("Archive failed: " + err.message); }
+});
 $("addProjBtn").addEventListener("click", function () {
   ask("New project name", "", async function (v) {
     if (!v) return;
@@ -860,6 +940,7 @@ $("ctxDelete").addEventListener("click", async function () {
 });
 document.addEventListener("click", function (e) {
   if (!$("ctxMenu").contains(e.target)) $("ctxMenu").classList.add("hidden");
+  if (!$("projMenu").contains(e.target)) $("projMenu").classList.add("hidden");
   if (!$("modelDD").contains(e.target) && !$("modelBtn").contains(e.target)) $("modelDD").classList.add("hidden");
 });
 
@@ -962,25 +1043,26 @@ $("accountBtn").addEventListener("click", function () {
   }
   showAuth("Log in to Pluto");
 });
-$("authCancel").addEventListener("click", hideAuth);
+$("authCancel").addEventListener("click", function () { settleAuth(null); });
 $("authTokenBtn").addEventListener("click", function () {
   hideAuth();
   ask("Access token (empty clears it)", "", function (v) {
-    if (v === null) return;
+    if (v === null) { settleAuth(null); return; }
     setToken(v);
     refreshMe();
     toast(v ? "Token saved" : "Token cleared");
+    settleAuth(v || null);
   });
 });
 $("authLogin").addEventListener("click", function () { authSubmit("/api/auth/login"); });
 $("authSignup").addEventListener("click", function () { authSubmit("/api/auth/signup"); });
 $("authPass").addEventListener("keydown", function (e) {
   if (e.key === "Enter") authSubmit("/api/auth/login");
-  if (e.key === "Escape") hideAuth();
+  if (e.key === "Escape") settleAuth(null);
 });
 $("authUser").addEventListener("keydown", function (e) {
   if (e.key === "Enter") authSubmit("/api/auth/login");
-  if (e.key === "Escape") hideAuth();
+  if (e.key === "Escape") settleAuth(null);
 });
 
 /* ---------- theme ---------- */
@@ -1042,6 +1124,20 @@ function allMessages() {
   current.forEach(function (m) { out.push(m); });
   return out;
 }
+function showWfResult(out) {
+  var box = $("wfResult");
+  var status = String((out && out.status) || "?");
+  if (!box) { toast("Workflow " + status); return; }
+  var html = '<div class="card"><div class="g"><div class="t">Status: ' + esc(status) + "</div>" +
+    ((out && out.error) ? '<div class="s">' + esc(String(out.error)) + "</div>" : "") + "</div></div>";
+  html += ((out && out.steps) || []).map(function (s, i) {
+    var o = String((s && s.output) || "");
+    if (o.length > 500) o = o.slice(0, 500) + "…";
+    return '<div class="card"><div class="g"><div class="t">Step ' + (i + 1) + ": " + esc(String((s && s.tool) || "?")) + "</div>" +
+      '<div class="s">' + esc(o) + "</div></div></div>";
+  }).join("");
+  box.innerHTML = html;
+}
 var SECTIONS = {
   research: {
     title: "Research",
@@ -1062,6 +1158,52 @@ var SECTIONS = {
       return "<h2>Research</h2><div class=\"sub\">Saved research briefs with cited sources.</div>" +
         '<input class="input panel-input" id="researchFilter" type="text" placeholder="Filter research…">' +
         '<div class="cards" id="researchList">' + rows + "</div>";
+    }
+  },
+  workflows: {
+    title: "Workflows",
+    render: async function () {
+      var list = [];
+      try {
+        var data = await req("/api/workflows");
+        if (data && Array.isArray(data.workflows)) list = data.workflows;
+      } catch (e) {
+        return "<h2>Workflows</h2><div class=\"sub\">Cannot load workflows: " + esc(e.message) + "</div>";
+      }
+      var rows = list.map(function (w) {
+        var nsteps = (w.steps || []).length;
+        var sub = nsteps + " step" + (nsteps === 1 ? "" : "s") + (w.description ? " · " + w.description : "");
+        return '<div class="card" data-wfid="' + esc(w.id) + '">' + ic("flask") +
+          '<div class="g"><div class="t">' + esc(w.name || "Untitled") + '</div><div class="s">' + esc(sub) + "</div></div>" +
+          '<button class="row-btn second" data-wfrun="' + esc(w.id) + '" title="Run">▶</button>' +
+          '<button class="row-btn" data-wfdel="' + esc(w.id) + '" title="Delete">✕</button></div>';
+      }).join("");
+      if (!list.length) rows = '<div class="sub" style="margin-top:16px">No workflows yet. Save a fixed tool sequence below and run it anytime.</div>';
+      return "<h2>Workflows</h2><div class=\"sub\">Saved tool pipelines. Steps are JSON with {{input}} and {{steps.N.output}} templates; send_gmail is blocked.</div>" +
+        '<div class="cards" id="wfList">' + rows + "</div>" +
+        "<h2 style=\"margin-top:22px\">New workflow</h2>" +
+        '<input class="input panel-input" id="wfName" type="text" placeholder="Name">' +
+        '<input class="input panel-input" id="wfDesc" type="text" placeholder="Description (optional)">' +
+        '<textarea class="notes-ta" id="wfSteps" placeholder="Steps JSON array"></textarea>' +
+        '<div class="notes-actions"><button class="btn solid" id="wfSave">Save workflow</button></div>' +
+        '<div id="wfResult"></div>';
+    }
+  },
+  project: {
+    title: "Project",
+    render: async function () {
+      var p = null;
+      projects.forEach(function (x) { if (x && x.id === S.projectId) p = x; });
+      if (!p) return "<h2>Project</h2><div class=\"sub\">Select a project first.</div>";
+      var text = "";
+      try {
+        text = (await req("/api/projects/" + p.id + "/context")).text || "";
+      } catch (e) {
+        return "<h2>" + esc(p.name || "Project") + "</h2><div class=\"sub\">Cannot load context: " + esc(e.message) + "</div>";
+      }
+      return "<h2>" + esc(p.name || "Project") + "</h2><div class=\"sub\">Context is sent with every message in this project.</div>" +
+        '<textarea class="notes-ta" id="projCtxTa" data-projid="' + esc(p.id) + '">' + esc(text) + "</textarea>" +
+        '<div class="notes-actions"><button class="btn solid" id="projCtxSave">Save context</button></div>';
     }
   },
   memory: {
@@ -1250,6 +1392,53 @@ panelBody.addEventListener("click", async function (e) {
   var op = e.target.closest("[data-open]");
   if (op) {
     window.open(op.getAttribute("data-open"), "_blank", "noopener");
+    return;
+  }
+  if (e.target.closest("#wfSave")) {
+    var wname = ($("wfName").value || "").trim();
+    var wdesc = ($("wfDesc").value || "").trim();
+    var wsteps;
+    try {
+      wsteps = JSON.parse($("wfSteps").value || "[]");
+      if (!Array.isArray(wsteps)) throw new Error("not an array");
+    } catch (err) { toast("Steps must be a JSON array"); return; }
+    try {
+      await req("/api/workflows", { method: "POST", body: JSON.stringify({ name: wname, description: wdesc, steps: wsteps }) });
+      toast("Workflow saved");
+      openSection("workflows");
+    } catch (err) { toast("Save failed: " + err.message); }
+    return;
+  }
+  var wr = e.target.closest("[data-wfrun]");
+  if (wr) {
+    e.stopPropagation();
+    var wid = wr.closest(".card").getAttribute("data-wfid");
+    ask("Run input (empty for none)", "", async function (v) {
+      if (v === null) return;
+      try {
+        var out = await req("/api/workflows/" + wid + "/run", { method: "POST", body: JSON.stringify({ input: v || "" }) });
+        showWfResult(out);
+      } catch (err) { toast("Run failed: " + err.message); }
+    });
+    return;
+  }
+  var wd = e.target.closest("[data-wfdel]");
+  if (wd) {
+    e.stopPropagation();
+    var did = wd.closest(".card").getAttribute("data-wfid");
+    try {
+      await req("/api/workflows/" + did, { method: "DELETE" });
+      toast("Workflow deleted");
+      openSection("workflows");
+    } catch (err) { toast("Delete failed: " + err.message); }
+    return;
+  }
+  if (e.target.closest("#projCtxSave")) {
+    var ta = $("projCtxTa");
+    try {
+      await req("/api/projects/" + ta.getAttribute("data-projid") + "/context", { method: "PUT", body: JSON.stringify({ text: ta.value }) });
+      toast("Context saved");
+    } catch (err) { toast("Save failed: " + err.message); }
     return;
   }
 });
@@ -1476,6 +1665,7 @@ document.addEventListener("keydown", function (e) {
   if (e.key === "Escape") {
     closeAttachMenu();
     $("ctxMenu").classList.add("hidden");
+    $("projMenu").classList.add("hidden");
     $("modelDD").classList.add("hidden");
     $("dlg").classList.add("hidden");
     $("keys").classList.add("hidden");
@@ -1519,6 +1709,13 @@ window.addEventListener("resize", placeThumb);
   savePrefs();
   setActiveTier(S.model, false);
   try { await refreshMe(); } catch (err) {}
+  if (!getToken() && !authDismissed()) {
+    /* Logged out: show the login dialog once so the account entry
+     * point is visible; Cancel/Escape dismisses it for good and the
+     * footer button reopens it anytime. */
+    try { await authAsync("Log in to Pluto"); } catch (err) {}
+    try { await refreshMe(); } catch (err) {}
+  }
   try { await refreshProjects(); } catch (err) { toast("Cannot load projects: " + err.message); }
   try { await refreshChats(); } catch (err) { toast("Cannot load chats: " + err.message); }
 })();
