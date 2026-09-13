@@ -422,7 +422,7 @@ function chipForAttachment(a) {
   c.className = "chip art-chip";
   c.title = a.name || "attachment";
   var kind = String(a.kind || "");
-  if (kind !== "pdf" && kind !== "csv" && a.id) {
+  if (kind === "image" && a.id) {
     var im = document.createElement("img");
     im.setAttribute("data-up", a.id);
     im.alt = "";
@@ -662,11 +662,12 @@ function clearComposer() {
   pendingFiles.forEach(function (f) { if (f._preview) URL.revokeObjectURL(f._preview); });
   pendingFiles = [];
 }
-async function uploadPending() {
+async function uploadPending(files) {
+  var list = files || pendingFiles;
   var out = [];
-  for (var i = 0; i < pendingFiles.length; i++) {
+  for (var i = 0; i < list.length; i++) {
     var form = new FormData();
-    form.append("file", pendingFiles[i]);
+    form.append("file", list[i]);
     var upHeaders = authHeaders();
     var upHadToken = !!upHeaders.Authorization;
     var res = await fetch(apiUrl("/api/uploads"), { method: "POST", headers: upHeaders, body: form });
@@ -676,7 +677,7 @@ async function uploadPending() {
       if (!tok2) throw new Error("Authentication required.");
       setToken(tok2);
       try { await refreshMe(); } catch (e) {}
-      return uploadPending();
+      return uploadPending(files);
     }
     if (!res.ok) {
       var detail = res.statusText;
@@ -740,13 +741,20 @@ function streamInto(bodyEl, onMeta) {
     }).catch(reject);
   });
 }
-async function sendText(text, files) {
+async function sendText(text, files, reuse) {
   var atts = files || [];
-  if (!text && !atts.length) return;
+  /* Edit flow passes already-vaulted attachments (reuse) so resends
+   * reference the original upload IDs instead of re-uploading (which
+   * would mint duplicate vault entries and waste quota). */
+  var uploaded = Array.isArray(reuse) ? reuse.filter(function (a) {
+    return a && a.id;
+  }).map(function (a) {
+    return { id: a.id, kind: a.kind || "document", name: a.name || "file" };
+  }) : [];
+  if (!text && !atts.length && !uploaded.length) return;
   if (atts.length > 5) { toast("At most 5 files per message."); return; }
-  var uploaded = [];
-  if (atts.length) {
-    try { uploaded = await uploadPending(); }
+  if (!uploaded.length && atts.length) {
+    try { uploaded = await uploadPending(atts); }
     catch (e) { toast("Upload failed: " + e.message); return; }
   }
   var empty = chatCol.querySelector(".empty");
@@ -862,10 +870,14 @@ chatCol.addEventListener("click", async function (e) {
     if (streaming) { toast("Wait for the current reply"); return; }
     var v = (msg.querySelector(".edit-ta").value || "").trim();
     if (!v) { renderChat(); return; }
+    /* Keep the edited message's attachments: truncate drops the message,
+     * so carry its vaulted upload refs into the resend (no re-upload). */
+    var prev = (typeof current !== "undefined" && current[i]) || {};
+    var keep = Array.isArray(prev.attachments) ? prev.attachments : [];
     try {
       await req("/api/chats/truncate", { method: "POST", body: JSON.stringify({ index: i }) });
       toast("Resending…");
-      sendText(v, []);
+      sendText(v, [], keep);
     } catch (err) { toast("Edit failed: " + err.message); renderChat(); }
   }
   else if (act === "regen") {
@@ -1068,6 +1080,7 @@ $("newChatBtn").addEventListener("click", async function () {
     });
     chats = data.chats || [];
     current = data.current || [];
+    if (data.warnings && data.warnings.length) toast(data.warnings[0]);
   } catch (err) { toast("Cannot start chat: " + err.message); return; }
   renderRecents();
   renderChat();
@@ -1363,7 +1376,8 @@ var SECTIONS = {
       var rows = list.map(function (f) {
         return '<div class="card" data-up="' + esc(f.id) + '">' + ic("doc") +
           '<div class="g"><div class="t">' + esc(f.name) + '</div><div class="s">' + esc(f.kind || "file") + "</div></div>" +
-          '<button class="row-btn" title="Download">' + IC.down + "</button></div>";
+          '<button class="row-btn" title="Download">' + IC.down + "</button>" +
+          '<button class="row-btn" data-delup="' + esc(f.id) + '" title="Delete">✕</button></div>';
       }).join("");
       if (!list.length) rows = '<div class="sub" style="margin-top:16px">No files yet. Attach one from the composer.</div>';
       return "<h2>Files</h2><div class=\"sub\">Documents shared in this workspace.</div><div class=\"cards\">" + rows + "</div>";
@@ -1462,6 +1476,16 @@ panelBody.addEventListener("click", async function (e) {
       await req("/api/memory/notes", { method: "PUT", body: JSON.stringify({ text: $("notesTa").value }) });
       toast("Notes saved");
     } catch (err) { toast("Save failed: " + err.message); }
+    return;
+  }
+  var du = e.target.closest("[data-delup]");
+  if (du) {
+    e.stopPropagation();
+    try {
+      await req("/api/uploads/" + du.getAttribute("data-delup"), { method: "DELETE" });
+      toast("File deleted");
+      openSection("files");
+    } catch (err) { toast("Delete failed: " + err.message); }
     return;
   }
   var up = e.target.closest("[data-up]");

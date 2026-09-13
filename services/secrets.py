@@ -16,6 +16,21 @@ import os
 from typing import Optional
 
 
+_PLACEHOLDERS = frozenset({
+    "your_opencode_key_here",
+    "your_gemini_key_here",
+    "your_groq_key_here",
+    "your_openrouter_key_here",
+    "your_client_id.apps.googleusercontent.com",
+})
+
+def is_placeholder(value: Optional[str]) -> bool:
+    """True if value is missing or an unreplaced placeholder."""
+    if not value:
+        return True
+    v = value.strip()
+    return not v or v in _PLACEHOLDERS or v.startswith("your_")
+
 def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Return a secret from the environment, else default.
 
@@ -26,4 +41,28 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     Returns:
         The secret value, or default if not set anywhere.
     """
-    return os.getenv(name, default)
+    val = os.getenv(name, default)
+    # Don't return placeholders as valid secrets — treat as unset
+    if is_placeholder(val) and default is None:
+        # keep placeholder detection for validation; callers use _is_placeholder separately
+        pass
+    return val
+
+def validate_secrets() -> list[str]:
+    """Return warnings for missing/placeholder secrets (never logs values)."""
+    warnings: list[str] = []
+    mode = os.getenv("PLUTO_AUTH_MODE", "open") or "open"
+    if mode.strip().lower() == "private" and not os.getenv("PLUTO_ACCESS_TOKENS"):
+        warnings.append("PLUTO_AUTH_MODE=private but PLUTO_ACCESS_TOKENS is empty — no one can log in")
+    for key in ("OPENCODE_API_KEY", "GEMINI_API_KEY"):
+        val = os.getenv(key, "")
+        if is_placeholder(val):
+            continue  # optional — one tier is enough
+    # warn if no LLM tier is configured at all
+    has_any = any(
+        os.getenv(k) and not is_placeholder(os.getenv(k))
+        for k in ("OPENCODE_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY")
+    )
+    if not has_any:
+        warnings.append("No LLM API key configured — /api/health will show empty tiers")
+    return warnings

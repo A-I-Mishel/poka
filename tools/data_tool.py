@@ -57,9 +57,12 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional["pd.DataFrame"], Optional[
         return None, "STATUS=DENIED tool=csv: no header row within budget.", False
     try:
         first_line = head.split(b"\n", 1)[0].decode("utf-8-sig", errors="replace")
-        columns = next(csv.reader(io.StringIO(first_line)))
+        # Delimiter sniff: TSV files use tabs; default to comma otherwise.
+        delimiter = "\t" if first_line.count("\t") > first_line.count(",") else ","
+        columns = next(csv.reader(io.StringIO(first_line), delimiter=delimiter))
     except Exception:
         columns = []
+        delimiter = ","
     if len(columns) > MAX_CSV_COLUMNS:
         return None, (
             f"STATUS=DENIED tool=csv: too many columns "
@@ -74,6 +77,7 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional["pd.DataFrame"], Optional[
                     str(path),
                     nrows=MAX_CSV_ROWS + 1,
                     encoding=encoding,
+                    sep=delimiter,
                     on_bad_lines="skip",
                 )
                 break

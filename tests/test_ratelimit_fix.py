@@ -60,12 +60,17 @@ def test_limit_key_for_ephemeral_is_ip():
     assert limit_key_for("", "whatever", "") == "ip:unknown"
 
 
-def test_extract_client_ip():
+def test_extract_client_ip(monkeypatch):
     from services.ratelimit import extract_client_ip
 
+    # trusted proxy: XFF last entry wins
+    monkeypatch.setenv("PLUTO_TRUST_PROXY", "true")
     assert extract_client_ip("9.9.9.9, 10.0.0.1", "peer") == "10.0.0.1"
     assert extract_client_ip("", "peer") == "peer"
     assert extract_client_ip(None, "") == "unknown"
+    # untrusted: XFF ignored, peer used
+    monkeypatch.setenv("PLUTO_TRUST_PROXY", "false")
+    assert extract_client_ip("9.9.9.9, 10.0.0.1", "peer") == "peer"
 
 
 def test_sliding_window_still_binds(fresh_limiter):
@@ -129,10 +134,12 @@ def test_stores_write_on_demand(open_env):
     assert (fstore.uploads_dir / f"{meta.id}_note.pdf").exists() or meta.id
 
 
-def test_ephemeral_uploads_share_ip_quota(open_env):
+def test_ephemeral_uploads_share_ip_quota(open_env, monkeypatch):
     from backend.main import app
     from services import ratelimit as rl
 
+    # XFF is trusted only when PLUTO_TRUST_PROXY=true (secure default is false).
+    monkeypatch.setenv("PLUTO_TRUST_PROXY", "true")
     old = rl.get_rate_limiter()
     rl.configure_rate_limiter(rl.MemoryRateLimiter({"upload": (2, 3600.0)}))
     try:

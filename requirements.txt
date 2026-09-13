@@ -7,6 +7,12 @@ python-pptx
 python-docx
 pillow>=12.3.0
 pandas
+openpyxl
+# Pinned transitive deps: scipy>=1.14 needs numpy>=2.0,<2.8;
+# google-ai-generativelanguage 0.6.x needs protobuf<5. Without these,
+# pip resolves numpy 1.26 + protobuf 7 and `pip check` fails.
+numpy>=2.0,<2.8
+protobuf>=3.19.5,<5.0.0dev
 pypdf>=6.16.1,<7
 python-dotenv>=1.2.2
 fastapi>=0.115

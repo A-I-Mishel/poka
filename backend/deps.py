@@ -20,8 +20,10 @@ token → env/ephemeral/open): this dependency only parses transport
 """
 
 import re
+import threading
+import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional, Set
 
 from fastapi import Header, HTTPException, Request
 
@@ -29,14 +31,86 @@ from services.auth import AuthResult, authenticate
 from services.context import set_current_user_id, set_limit_key
 from services.files import FileStore
 from services.identity import AuthRequired, UserIdentity
+from services.limits import STORAGE_HYGIENE_INTERVAL_SECONDS
 from services.memory import set_memory_dir
 from services.ratelimit import extract_client_ip, limit_key_for
-from services.storage import UserStore
+from services.storage import StorageError, UserStore
 
 # Client-minted visitor ids (open mode only): strict shape so the
 # header can never smuggle paths or collide with id namespaces by
 # accident. Anything else falls back to a per-request ephemeral id.
 _VISITOR_RE = re.compile(r"^[A-Za-z0-9_.-]{8,64}$")
+
+# Storage-hygiene throttle: last run per user id (per process). The pass
+# itself is cheap (one chats JSON + two registries) but pointless more
+# than a few times a day given day-scale retention thresholds.
+_hygiene_lock = threading.Lock()
+_last_hygiene: Dict[str, float] = {}
+
+
+def _referenced_upload_ids(user_store: UserStore) -> Set[str]:
+    """Upload IDs still cited by the user's chats (never raises)."""
+    found: Set[str] = set()
+    try:
+        stored, _warnings = user_store.load_chats()
+    except Exception:
+        return found
+    try:
+        blobs = []
+        if isinstance(stored, dict):
+            current = stored.get("current", [])
+            if isinstance(current, list):
+                blobs.extend(current)
+            for chat in stored.get("chats", []) or []:
+                if isinstance(chat, dict) and isinstance(chat.get("messages"), list):
+                    blobs.extend(chat["messages"])
+        for msg in blobs:
+            if not isinstance(msg, dict):
+                continue
+            atts = msg.get("attachments")
+            if isinstance(atts, list):
+                for entry in atts:
+                    if isinstance(entry, dict) and entry.get("id"):
+                        found.add(str(entry["id"]))
+            legacy_image = msg.get("image")
+            if legacy_image:
+                found.add(str(legacy_image))
+    except Exception:
+        pass
+    return found
+
+
+def _run_storage_hygiene(user_store: UserStore, file_store: FileStore) -> None:
+    """Prune expired outputs + stale unreferenced uploads (never raises).
+
+    Throttled per user per process (STORAGE_HYGIENE_INTERVAL_SECONDS).
+    Best-effort by design: hygiene must never fail or slow a request —
+    failures degrade to "try again next interval".
+    """
+    user_id = str(getattr(file_store, "user_id", "") or "")
+    if not user_id:
+        return
+    now = time.time()
+    with _hygiene_lock:
+        last = _last_hygiene.get(user_id, 0.0)
+        if now - last < STORAGE_HYGIENE_INTERVAL_SECONDS:
+            return
+        _last_hygiene[user_id] = now
+    try:
+        try:
+            file_store.prune_stale_outputs()
+        except Exception:
+            pass
+        try:
+            file_store.prune_stale_uploads(referenced_ids=_referenced_upload_ids(user_store))
+        except Exception:
+            pass
+        try:
+            file_store.prune_orphan_files()
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _visitor_id(raw: Optional[str]) -> Optional[str]:
@@ -104,10 +178,12 @@ async def current_user(
     )
     bind_request_user(user_id, limit_key, source)
     user_store = UserStore(user_id, run_migration=source in ("env", "token", "account"))
+    file_store = FileStore(user_id)
+    _run_storage_hygiene(user_store, file_store)
     return UserContext(
         user_id=user_id,
         user_store=user_store,
-        file_store=FileStore(user_id),
+        file_store=file_store,
         limit_key=limit_key,
         source=source,
     )

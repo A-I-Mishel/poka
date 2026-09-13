@@ -29,6 +29,7 @@ from services.limits import (
     KB_MAX_DOCS_PER_USER,
     KB_MAX_TOTAL_CHUNKS_PER_USER,
     KB_TOP_K,
+    MAX_KB_IMAGE_BYTES,
 )
 from services.obs import event as obs_event
 from services.storage import _read_json, _write_json, user_dir
@@ -133,6 +134,422 @@ def _pdf_text(blob: bytes) -> tuple:
         return "", "pdf-extract-failed"
 
 
+def _docx_text(blob: bytes) -> tuple:
+    try:
+        import io as _io
+
+        from docx import Document
+
+        doc = Document(_io.BytesIO(blob))
+        parts = [(p.text or "").strip() for p in doc.paragraphs]
+        parts = [p for p in parts if p]
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [(c.text or "").strip() for c in row.cells]
+                line = " | ".join(c for c in cells if c)
+                if line:
+                    parts.append(line)
+        text = "\n".join(parts).strip()
+        return (text, "") if text else ("", "empty")
+    except Exception:
+        return "", "docx-extract-failed"
+
+
+def _pptx_text(blob: bytes) -> tuple:
+    try:
+        import io as _io
+
+        from pptx import Presentation
+
+        prs = Presentation(_io.BytesIO(blob))
+        parts = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                try:
+                    if shape.has_text_frame and shape.text:
+                        text = str(shape.text).strip()
+                        if text:
+                            parts.append(text)
+                except Exception:
+                    continue
+        text = "\n".join(parts).strip()
+        return (text, "") if text else ("", "empty")
+    except Exception:
+        return "", "pptx-extract-failed"
+
+
+def _xlsx_text(blob: bytes) -> tuple:
+    try:
+        import io as _io
+
+        import pandas as pd
+
+        frames = pd.read_excel(_io.BytesIO(blob), sheet_name=None, nrows=2000)
+        parts = []
+        items = frames.items() if isinstance(frames, dict) else [("Sheet1", frames)]
+        for name, frame in items:
+            try:
+                parts.append(f"[{name}]\n{frame.to_string()}")
+            except Exception:
+                continue
+        text = "\n".join(parts).strip()
+        return (text, "") if text else ("", "empty")
+    except Exception:
+        return "", "xlsx-extract-failed"
+
+
+def _ocr_available() -> bool:
+    """True only when on-device image OCR can actually run (lib + binary).
+
+    Sibling of tools.pdf_tool._ocr_available, duplicated (not imported)
+    to keep services/ free of tools/ imports — tools/__init__ pulls the
+    whole tool registry, which would cycle back through services.kb.
+    """
+    try:
+        import pytesseract  # noqa: F401
+    except Exception:
+        return False
+    try:
+        import shutil
+
+        return shutil.which("tesseract") is not None
+    except Exception:
+        return False
+
+
+def _ocr_image_bytes(blob: bytes) -> str:
+    """OCR one image's bytes; "" on any failure (never raises)."""
+    try:
+        import io as _io
+
+        from PIL import Image
+        import pytesseract
+
+        with Image.open(_io.BytesIO(blob)) as img:
+            try:
+                img.load()
+            except Exception:
+                pass
+            return (pytesseract.image_to_string(img) or "").strip()
+    except Exception:
+        return ""
+
+
+def _image_text(blob: bytes, display_name: str = "") -> tuple:
+    """Indexable text from an image: OCR text plus the filename header.
+
+    Returns (text, "") on success, else ("", reason) with an honest
+    machine-readable marker: image-invalid (undecodable), image-too-large
+    (pixel-bomb guard), image-no-ocr (no engine on this host), empty
+    (OCR ran, found nothing). Filenames are indexed alongside OCR text
+    so images stay findable by name; without OCR there is nothing worth
+    indexing, and ingest reports why instead of pretending.
+    """
+    try:
+        import io as _io
+
+        from PIL import Image
+
+        with Image.open(_io.BytesIO(blob)) as probe:
+            probe.verify()
+        with Image.open(_io.BytesIO(blob)) as sized:
+            width, height = sized.size
+            # Same pixel gate as the vision path (services.vision).
+            if width * height > 25_000_000:
+                return "", "image-too-large"
+    except Exception:
+        return "", "image-invalid"
+    if not _ocr_available():
+        return "", "image-no-ocr"
+    try:
+        ocr = _ocr_image_bytes(blob)
+    except Exception:
+        return "", "image-ocr-failed"
+    ocr = (ocr or "").strip()
+    if not ocr:
+        return "", "empty"
+    name = str(display_name or "").strip()
+    text = f"[image {name}]\n{ocr}".strip() if name else ocr
+    return (text, "") if text else ("", "empty")
+
+
+def _html_text(blob: bytes) -> tuple:
+    """Strip HTML tags with stdlib only; scripts/styles are dropped."""
+    import html as _html_mod
+    from html.parser import HTMLParser
+
+    if b"\x00" in blob[:8192]:
+        return "", "decode-failed"
+    try:
+        raw = blob.decode("utf-8-sig")
+    except Exception:
+        try:
+            raw = blob.decode("utf-8")
+        except Exception:
+            try:
+                raw = blob.decode("latin-1")
+            except Exception:
+                return "", "decode-failed"
+
+    class _Stripper(HTMLParser):
+        _SKIP = frozenset({"script", "style", "noscript", "template"})
+        _BLOCK = frozenset({
+            "p", "div", "section", "article", "header", "footer", "main",
+            "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol",
+            "tr", "table", "br", "hr", "blockquote", "pre",
+        })
+
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=False)
+            self.parts: list[str] = []
+            self.skip = 0
+
+        def handle_starttag(self, tag: str, attrs: list) -> None:
+            name = str(tag or "").lower()
+            if name in self._SKIP:
+                self.skip += 1
+                return
+            if name in self._BLOCK:
+                self.parts.append("\n")
+
+        def handle_endtag(self, tag: str) -> None:
+            name = str(tag or "").lower()
+            if name in self._SKIP:
+                if self.skip > 0:
+                    self.skip -= 1
+                return
+            if name in self._BLOCK:
+                self.parts.append("\n")
+
+        def handle_data(self, data: str) -> None:
+            if self.skip:
+                return
+            if data:
+                self.parts.append(data)
+
+    try:
+        parser = _Stripper()
+        parser.feed(raw[:500000])
+        parser.close()
+        text = _html_mod.unescape("".join(parser.parts))
+        lines = [" ".join(line.strip().split()) for line in text.splitlines()]
+        text = "\n".join(line for line in (line.strip() for line in lines) if line).strip()
+        return (text, "") if text else ("", "empty")
+    except Exception:
+        return "", "html-extract-failed"
+
+
+def _zip_text(blob: bytes) -> tuple:
+    """Indexable text from a zip: concatenated text-like members (bounded)."""
+    import io as _io
+    import zipfile as _zf
+
+    try:
+        zf = _zf.ZipFile(_io.BytesIO(blob))
+    except Exception:
+        return "", "zip-extract-failed"
+    with zf:
+        try:
+            infos = zf.infolist()
+        except Exception:
+            return "", "zip-extract-failed"
+        if len(infos) > 2000:
+            return "", "zip-too-many-files"
+        readable = {
+            "txt", "md", "markdown", "log", "json", "csv", "tsv",
+            "html", "htm", "xhtml", "shtml", "xml", "svg",
+            "yaml", "yml", "toml", "ini", "cfg", "conf",
+            "css", "scss", "less", "js", "mjs", "cjs", "jsx",
+            "ts", "mts", "tsx", "py", "pyi", "java", "c", "h",
+            "cpp", "hpp", "cc", "cs", "go", "rs", "php", "rb",
+            "swift", "kt", "kts", "scala", "pl", "lua", "sh",
+            "bash", "zsh", "bat", "cmd", "ps1", "sql", "r",
+            "jl", "vue", "svelte",
+        }
+        parts: list[str] = []
+        total = 0
+        for info in infos[:100]:
+            raw_name = (info.filename or "").replace("\\", "/").strip()
+            if not raw_name or raw_name.endswith("/"):
+                continue
+            if raw_name.startswith("/") or ".." in raw_name.split("/"):
+                continue
+            try:
+                size = int(info.file_size or 0)
+            except Exception:
+                size = 0
+            if size <= 0 or size > 5 * 1024 * 1024:
+                continue
+            ext = raw_name.rsplit(".", 1)[-1].lower() if "." in raw_name else ""
+            if ext not in readable:
+                continue
+            try:
+                member = zf.read(info.filename)[:5 * 1024 * 1024 + 1]
+            except Exception:
+                continue
+            if b"\x00" in member[:8192]:
+                continue
+            if ext in ("html", "htm", "xhtml", "shtml"):
+                text, reason = _html_text(member)
+                if reason or not text:
+                    continue
+            else:
+                try:
+                    text = member.decode("utf-8-sig").strip()
+                except Exception:
+                    try:
+                        text = member.decode("utf-8", errors="replace").strip()
+                    except Exception:
+                        continue
+                if not text:
+                    continue
+            parts.append(f"[file {raw_name}]\n{text}")
+            total += len(text)
+            if total > KB_MAX_DOC_BYTES:
+                break
+        text = "\n".join(parts).strip()
+        return (text, "") if text else ("", "empty")
+
+
+def _rtf_text(blob: bytes) -> tuple:
+    import re as _re
+
+    if b"\x00" in blob[:8192]:
+        return "", "decode-failed"
+    try:
+        text = blob.decode("utf-8-sig")
+    except Exception:
+        try:
+            text = blob.decode("utf-8", errors="replace")
+        except Exception:
+            return "", "decode-failed"
+    if not text.lstrip().lower().startswith("{\\rtf"):
+        return "", "rtf-extract-failed"
+    try:
+        text = _re.sub(r"\\'([0-9a-fA-F]{2})",
+                        lambda m: bytes([int(m.group(1), 16)]).decode("latin-1"),
+                        text)
+        text = text.replace("\\par", "\n").replace("\\line", "\n").replace("\\tab", " ")
+        text = _re.sub(r"\{\\\*[^}]*\}", " ", text)
+        text = _re.sub(r"\\[a-zA-Z]+\d*[ ]?", " ", text)
+        text = text.replace("{", " ").replace("}", " ")
+        lines = [" ".join(line.strip().split()) for line in text.splitlines()]
+        cleaned = "\n".join(line for line in lines if line).strip()
+        return (cleaned, "") if cleaned else ("", "empty")
+    except Exception:
+        return "", "rtf-extract-failed"
+
+
+def _ole_strings_text(blob: bytes) -> tuple:
+    import re as _re
+
+    try:
+        ascii_hits = _re.findall(rb"[\x20-\x7e]{5,}", blob)
+        utf16_hits = _re.findall(rb"(?:[\x20-\x7e]\x00){5,}", blob)
+        seen: set[str] = set()
+        kept: list[str] = []
+        for hit in list(ascii_hits) + list(utf16_hits):
+            try:
+                piece = hit.decode("utf-16-le") if b"\x00" in hit else hit.decode("ascii")
+            except Exception:
+                continue
+            text = " ".join(str(piece).split()).strip()
+            if len(text) < 5 or text in seen:
+                continue
+            if " " not in text and len(text) > 80:
+                continue
+            seen.add(text)
+            kept.append(text)
+            if sum(len(k) for k in kept) > KB_MAX_DOC_BYTES:
+                break
+        cleaned = "\n".join(kept).strip()
+        return (cleaned, "") if cleaned else ("", "empty")
+    except Exception:
+        return "", "ole-extract-failed"
+
+
+def _odf_xml_text(blob: bytes, kind: str) -> tuple:
+    import io as _io
+    import zipfile as _zf
+    import xml.etree.ElementTree as _ET
+
+    try:
+        with _zf.ZipFile(_io.BytesIO(blob)) as zf:
+            content = zf.read("content.xml")
+    except Exception:
+        return "", f"{kind}-extract-failed"
+    try:
+        root = _ET.fromstring(content)
+    except Exception:
+        return "", f"{kind}-extract-failed"
+    ns = {
+        "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+        "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+        "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
+    }
+    try:
+        if kind == "odt":
+            parts = [" ".join("".join(e.itertext()).split()).strip()
+                     for e in root.iter()
+                     if str(e.tag or "") in (
+                         f"{{{ns['text']}}}p", f"{{{ns['text']}}}h")]
+            text = "\n".join(p for p in parts if p).strip()
+        elif kind == "ods":
+            parts = []
+            for table in root.iter(f"{{{ns['table']}}}table"):
+                name = table.get(f"{{{ns['table']}}}name", "Sheet")
+                parts.append(f"[{name}]")
+                for row in table.iter(f"{{{ns['table']}}}table-row"):
+                    cells = [" ".join("".join(c.itertext()).split())
+                             for c in row.iter(f"{{{ns['table']}}}table-cell")]
+                    line = " | ".join(c for c in cells if c)
+                    if line:
+                        parts.append(line)
+            text = "\n".join(parts).strip()
+        else:
+            parts = []
+            pages = list(root.iter(f"{{{ns['draw']}}}page"))
+            for i, page in enumerate(pages, start=1):
+                lines = [" ".join("".join(e.itertext()).split()).strip()
+                         for e in page.iter()
+                         if str(e.tag or "") in (
+                             f"{{{ns['text']}}}p", f"{{{ns['text']}}}h")]
+                lines = [line for line in lines if line]
+                if lines:
+                    parts.append(f"[slide {i}]\n" + "\n".join(lines))
+            text = "\n".join(parts).strip()
+        return (text, "") if text else ("", "empty")
+    except Exception:
+        return "", f"{kind}-extract-failed"
+
+
+def _xls_text(blob: bytes) -> tuple:
+    try:
+        import io as _io
+
+        import pandas as pd
+
+        try:
+            frames = pd.read_excel(_io.BytesIO(blob), sheet_name=None,
+                                   engine="xlrd", nrows=2000)
+        except Exception:
+            frames = None
+        if frames is not None:
+            parts = []
+            items = frames.items() if isinstance(frames, dict) else [("Sheet1", frames)]
+            for name, frame in items:
+                try:
+                    parts.append(f"[{name}]\n{frame.to_string()}")
+                except Exception:
+                    continue
+            text = "\n".join(parts).strip()
+            if text:
+                return text, ""
+    except Exception:
+        pass
+    return _ole_strings_text(blob)
+
+
 def extract_text(data: bytes, filename: str) -> tuple:
     """Extract indexable text from upload bytes.
 
@@ -144,9 +561,31 @@ def extract_text(data: bytes, filename: str) -> tuple:
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     if ext not in KB_INGEST_EXTS:
         return "", "unsupported-type:%s" % (ext or "none")
+    if ext in ("png", "jpg", "jpeg", "webp", "gif", "bmp"):
+        # Images need whole-file bytes (a 400 KB-truncated image is
+        # undecodable); capped separately by MAX_KB_IMAGE_BYTES.
+        return _image_text(bytes(data or b"")[:MAX_KB_IMAGE_BYTES], name)
     blob = bytes(data or b"")[:KB_MAX_DOC_BYTES]
     if ext == "pdf":
         return _pdf_text(blob)
+    if ext == "docx":
+        return _docx_text(blob)
+    if ext == "pptx":
+        return _pptx_text(blob)
+    if ext == "xlsx":
+        return _xlsx_text(blob)
+    if ext in ("html", "htm", "xhtml", "shtml"):
+        return _html_text(blob)
+    if ext == "zip":
+        return _zip_text(blob)
+    if ext == "rtf":
+        return _rtf_text(blob)
+    if ext in ("doc", "ppt"):
+        return _ole_strings_text(blob)
+    if ext == "xls":
+        return _xls_text(blob)
+    if ext in ("odt", "ods", "odp"):
+        return _odf_xml_text(blob, ext)
     try:
         text = blob.decode("utf-8", errors="replace").strip()
     except Exception:

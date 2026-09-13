@@ -33,14 +33,89 @@ def _resolve_reader(upload_id: str) -> Tuple[Optional[PdfReader], int, Optional[
         return None, 0, f"STATUS=FAILED tool=read_pdf: {str(e)[:200]}"
 
 
-def _ocr_available() -> bool:
-    """True only when an OCR engine is importable in this deployment."""
+def _pytesseract_importable() -> bool:
+    """True when the pytesseract wrapper is installed (binary not checked)."""
     try:
         import pytesseract  # noqa: F401
 
         return True
     except Exception:
         return False
+
+
+def _tesseract_binary_present() -> bool:
+    """True when the `tesseract` binary is on PATH."""
+    try:
+        import shutil
+
+        return shutil.which("tesseract") is not None
+    except Exception:
+        return False
+
+
+def _ocr_available() -> bool:
+    """True only when on-device OCR can actually run (lib + binary)."""
+    return _pytesseract_importable() and _tesseract_binary_present()
+
+
+def _ocr_image_bytes(blob: bytes) -> str:
+    """OCR one image's bytes; "" on any failure (never raises)."""
+    try:
+        import io as _io
+
+        from PIL import Image
+        import pytesseract
+
+        with Image.open(_io.BytesIO(blob)) as img:
+            try:
+                img.load()
+            except Exception:
+                pass
+            return (pytesseract.image_to_string(img) or "").strip()
+    except Exception:
+        return ""
+
+
+def _ocr_scanned_pages(reader, total_pages: int) -> str:
+    """OCR embedded page images of text-less pages (bounded, never raises).
+
+    Scanned PDFs store each page as embedded raster images, extractable
+    via pypdf without any PDF renderer or system package. Only pages
+    with no native text are attempted, capped by MAX_OCR_PAGES.
+    Returns combined OCR text or "" when nothing usable is found.
+    """
+    if not _ocr_available():
+        return ""
+    try:
+        from services.limits import MAX_OCR_PAGES
+    except Exception:
+        MAX_OCR_PAGES = 5
+    try:
+        pages = list(reader.pages[: min(int(MAX_OCR_PAGES or 5), int(total_pages or 0))])
+    except Exception:
+        return ""
+    parts: List[str] = []
+    for i, page in enumerate(pages):
+        try:
+            if (page.extract_text() or "").strip():
+                continue
+        except Exception:
+            pass
+        try:
+            images = list(getattr(page, "images", []) or [])
+        except Exception:
+            continue
+        for img in images[:2]:
+            try:
+                data = getattr(img, "data", None)
+                if data is None:
+                    continue
+                text = _ocr_image_bytes(bytes(data))
+            except Exception:
+                continue
+            if text.strip():
+                parts.append(f"[page {i + 1} OCR]\n{text.strip()}")
+    return "\n".join(parts).strip()
 
 
 def _looks_scanned(reader: PdfReader, total_pages: int) -> bool:
@@ -97,17 +172,30 @@ def read_pdf(upload_id: str) -> str:
             notes += "\n[Note: text truncated due to length.]"
         if not text.strip():
             if _looks_scanned(reader, total_pages):
-                if _ocr_available():
+                ocr_text = _ocr_scanned_pages(reader, total_pages)
+                if ocr_text.strip():
+                    combined = ocr_text.strip()
+                    ocr_note = ("\n[Note: text extracted via on-device OCR "
+                                "from scanned pages — may contain errors.]")
+                    if len(combined) > MAX_PDF_CHARS:
+                        combined = combined[:MAX_PDF_CHARS]
+                        ocr_note += " [Note: text truncated due to length.]"
+                    return combined + ocr_note + notes
+                if _pytesseract_importable() and not _tesseract_binary_present():
                     return (
                         "STATUS=EMPTY tool=read_pdf: this PDF appears to be scanned "
                         f"images ({total_pages} pages, no extractable text). "
-                        "On-device OCR is starting; results may be partial." + notes
+                        "The OCR library is installed but the `tesseract` binary "
+                        "is missing on this host, so on-device OCR cannot run. "
+                        "On a Gemini vision tier, export the pages as PNG/JPG "
+                        "and re-upload them for vision reading." + notes
                     )
                 return (
                     "STATUS=EMPTY tool=read_pdf: this PDF appears to be scanned "
                     f"images ({total_pages} pages, no extractable text). "
-                    "Text extraction needs a text-based PDF; image-only scans "
-                    "cannot be read here (no OCR engine in this deployment)." + notes
+                    "No OCR engine in this deployment. On a Gemini vision "
+                    "tier, export the pages as PNG/JPG and re-upload them "
+                    "for vision reading." + notes
                 )
             return "STATUS=EMPTY tool=read_pdf: no extractable text." + notes
         return text + notes
@@ -153,9 +241,35 @@ def read_pdf_page(upload_id: str, page: int) -> str:
             )
         text = (reader.pages[page_num - 1].extract_text() or "").strip()
         if not text:
+            if _ocr_available():
+                try:
+                    images = list(
+                        getattr(reader.pages[page_num - 1], "images", []) or [])
+                except Exception:
+                    images = []
+                ocr_parts = []
+                for img in images[:2]:
+                    try:
+                        data = getattr(img, "data", None)
+                        if data is None:
+                            continue
+                        piece = _ocr_image_bytes(bytes(data))
+                    except Exception:
+                        continue
+                    if piece.strip():
+                        ocr_parts.append(piece.strip())
+                ocr_text = "\n".join(ocr_parts).strip()
+                if ocr_text:
+                    if len(ocr_text) > MAX_PDF_CHARS:
+                        ocr_text = ocr_text[:MAX_PDF_CHARS] + "\n[Note: page text truncated.]"
+                    return (f"[page {page_num} of {total_pages}] (OCR)\n{ocr_text}"
+                            "\n[Note: text extracted via on-device OCR — "
+                            "may contain errors.]")
             return (
                 f"STATUS=EMPTY tool=read_pdf_page: page {page_num} has no "
-                "extractable text (may be a scanned image)."
+                "extractable text (may be a scanned image). On a Gemini "
+                "vision tier, export the page as PNG/JPG and re-upload "
+                "it for vision reading."
             )
         if len(text) > MAX_PDF_CHARS:
             text = text[:MAX_PDF_CHARS] + "\n[Note: page text truncated.]"

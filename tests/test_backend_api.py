@@ -146,6 +146,218 @@ def test_upload_rejects_unknown_bytes(client):
     assert up.status_code == 400
 
 
+def test_upload_delete_roundtrip(client):
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("gone.txt", io.BytesIO(b"bye soon"), "text/plain")},
+    )
+    assert up.status_code == 200, up.text
+    uid = up.json()["id"]
+    assert any(u["id"] == uid for u in client.get("/api/uploads").json())
+    assert client.get(f"/api/uploads/{uid}/file").status_code == 200
+    test_del = client.delete(f"/api/uploads/{uid}")
+    assert test_del.status_code == 200
+    assert test_del.json() == {"ok": True}
+    assert all(u["id"] != uid for u in client.get("/api/uploads").json())
+    assert client.get(f"/api/uploads/{uid}/file").status_code == 404
+    assert client.delete(f"/api/uploads/{uid}").status_code == 404
+    assert client.delete("/api/uploads/deadbeefdeadbeef").status_code == 404
+
+
+def test_upload_delete_isolated(api_env, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    with TestClient(app) as owner:
+        up = owner.post(
+            "/api/uploads",
+            files={"file": ("mine.txt", io.BytesIO(b"not yours"), "text/plain")},
+        )
+        assert up.status_code == 200, up.text
+        uid = up.json()["id"]
+    monkeypatch.setenv("PLUTO_USER_ID", "stranger-user")
+    with TestClient(app) as stranger:
+        assert stranger.delete(f"/api/uploads/{uid}").status_code == 404
+        assert stranger.get(f"/api/uploads/{uid}/file").status_code == 404
+    monkeypatch.setenv("PLUTO_USER_ID", "api-user")
+    with TestClient(app) as owner_again:
+        assert owner_again.get(f"/api/uploads/{uid}/file").status_code == 200
+
+
+def _age_registry_record(api_env, name, record_id, days_old):
+    """Backdate one registry record's created timestamp (hygiene setup)."""
+    import json
+    import time
+
+    path = api_env / "data" / "users" / "api-user" / name
+    with open(path, "r", encoding="utf-8") as f:
+        registry = json.load(f)
+    registry[record_id]["created"] = time.time() - days_old * 86400.0
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(registry, f)
+
+
+def test_hygiene_prunes_stale_unreferenced_upload(client, api_env):
+    import backend.deps as deps
+
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("stale.txt", io.BytesIO(b"aging out"), "text/plain")},
+    )
+    assert up.status_code == 200, up.text
+    uid = up.json()["id"]
+    _age_registry_record(api_env, "uploads.json", uid, days_old=8)
+    deps._last_hygiene.clear()
+    listed = client.get("/api/uploads").json()
+    assert all(u["id"] != uid for u in listed)
+    assert client.get(f"/api/uploads/{uid}/file").status_code == 404
+    assert deps._last_hygiene.get("api-user") is not None
+
+
+def test_hygiene_keeps_referenced_upload(client, api_env, stub_agent):
+    import backend.deps as deps
+
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("keep.txt", io.BytesIO(b"still cited"), "text/plain")},
+    )
+    assert up.status_code == 200, up.text
+    uid = up.json()["id"]
+    send = client.post("/api/chat/send", json={"content": "see file", "upload_ids": [uid]})
+    assert send.status_code == 200, send.text
+    _age_registry_record(api_env, "uploads.json", uid, days_old=8)
+    deps._last_hygiene.clear()
+    listed = client.get("/api/uploads").json()
+    assert any(u["id"] == uid for u in listed)
+    assert client.get(f"/api/uploads/{uid}/file").status_code == 200
+
+
+def test_hygiene_prunes_old_outputs(client, api_env):
+    import backend.deps as deps
+
+    from services.files import FileStore
+
+    meta = FileStore("api-user").register_output("old.txt", b"aging out", "file")
+    _age_registry_record(api_env, "outputs.json", meta.id, days_old=31)
+    deps._last_hygiene.clear()
+    assert client.get("/api/artifacts").json() == []
+
+
+def test_document_attachment_survives_save_load(client, stub_agent):
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("keep.txt", io.BytesIO(b"persist me"), "text/plain")},
+    )
+    assert up.status_code == 200, up.text
+    uid = up.json()["id"]
+    assert up.json()["kind"] == "document"
+    send = client.post("/api/chat/send", json={"content": "see file", "upload_ids": [uid]})
+    assert send.status_code == 200, send.text
+    state = client.get("/api/chats").json()
+    user_msgs = [m for m in state["current"] if m.get("role") == "user"]
+    assert user_msgs and user_msgs[-1].get("attachments") == [
+        {"id": uid, "kind": "document", "name": "keep.txt"}
+    ]
+
+
+def test_edit_resend_keeps_attachments(client, stub_agent):
+    # Mirrors the UI Edit flow: truncate at the edited message, then
+    # resend revised text with the SAME vaulted upload IDs (no re-upload).
+    up = client.post(
+        "/api/uploads",
+        files={"file": ("edit.txt", io.BytesIO(b"edited context"), "text/plain")},
+    )
+    assert up.status_code == 200, up.text
+    uid = up.json()["id"]
+    first = client.post("/api/chat/send", json={"content": "first", "upload_ids": [uid]})
+    assert first.status_code == 200, first.text
+    assert len(client.get("/api/chats").json()["current"]) == 2
+    trunc = client.post("/api/chats/truncate", json={"index": 0})
+    assert trunc.status_code == 200
+    assert trunc.json()["current"] == []
+    second = client.post(
+        "/api/chat/send", json={"content": "first edited", "upload_ids": [uid]})
+    assert second.status_code == 200, second.text
+    state = client.get("/api/chats").json()
+    user_msgs = [m for m in state["current"] if m.get("role") == "user"]
+    assert len(user_msgs) == 1
+    assert user_msgs[0]["content"] == "first edited"
+    assert user_msgs[0].get("attachments") == [
+        {"id": uid, "kind": "document", "name": "edit.txt"}
+    ]
+
+
+def test_new_artifact_kinds_survive_save_load():
+    from services.files import FileStore
+    from services.storage import UserStore
+
+    store = UserStore("kind-user")
+    for kind, name in [("pdf", "a.pdf"), ("md", "b.md"), ("doc", "c.doc")]:
+        meta = FileStore("kind-user").register_output(name, b"bytes", kind)
+        assert meta.kind == kind
+    current = [
+        {"role": "assistant", "content": "done",
+         "artifacts": [
+             {"id": m.id, "kind": m.kind, "name": m.display_name}
+             for m in FileStore("kind-user").list_outputs()
+         ]},
+    ]
+    store.save_chats([], current)
+    stored, _warnings = store.load_chats()
+    kinds = sorted(a["kind"] for a in stored["current"][0]["artifacts"])
+    assert kinds == ["doc", "md", "pdf"]
+
+
+def test_attachment_hint_contract():
+    from backend.chatflow import attachment_hint
+
+    pdf = attachment_hint("pdf", "a" * 16, "f.pdf", 1, 1)
+    assert "read_pdf" in pdf and "a" * 16 in pdf
+    csv = attachment_hint("csv", "b" * 16, "f.csv", 1, 2)
+    assert "analyze_csv" in csv and "b" * 16 in csv
+    doc = attachment_hint("document", "c" * 16, "f.txt", 2, 2)
+    assert "read_document" in doc and "c" * 16 in doc
+    # Images ride vision, not tools: the hint must never claim inability
+    # (the runtime sends real image bytes to vision-capable tiers, and an
+    # explicit could-not-analyze note to text-only tiers).
+    img = attachment_hint("image", "d" * 16, "p.png", 1, 1)
+    assert "cannot view" not in img.lower()
+    assert "cannot see" not in img.lower()
+    assert "vision-capable" in img
+
+
+def test_archive_eviction_warns_at_cap(client):
+    from services.storage import MAX_STORED_CHATS, UserStore
+
+    assert MAX_STORED_CHATS >= 50
+    store = UserStore("api-user")
+    archived = [
+        {"id": f"{i:016x}", "title": f"Chat {i:02d}",
+         "messages": [{"role": "user", "content": f"topic {i}"}]}
+        for i in range(MAX_STORED_CHATS)
+    ]
+    store.save_chats(archived, [{"role": "user", "content": "fresh topic"}])
+    res = client.post("/api/chats/new", json={})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["chats"]) == MAX_STORED_CHATS
+    assert body["current"] == []
+    assert any("oldest" in w for w in body.get("warnings", []))
+    titles = [c["title"] for c in body["chats"]]
+    assert titles[0] == "fresh topic"
+    assert f"Chat {MAX_STORED_CHATS - 1:02d}" not in titles
+
+
+def test_archive_no_warning_under_cap(client, stub_agent):
+    send = client.post("/api/chat/send", json={"content": "hello"})
+    assert send.status_code == 200, send.text
+    res = client.post("/api/chats/new", json={})
+    assert res.status_code == 200, res.text
+    assert res.json().get("warnings", []) == []
+    assert len(res.json()["chats"]) == 1
+
+
 def test_chats_new_archives(client, stub_agent):
     client.post("/api/chat/send", json={"content": "first topic"})
     res = client.post("/api/chats/new", json={})
@@ -215,11 +427,18 @@ def test_memory_notes_roundtrip(client):
 
 
 def test_private_mode_requires_token(client, monkeypatch):
+    # /api/health is public (liveness probe) even in private mode so
+    # Render/K8s checks don't need a token. Other endpoints stay protected.
     monkeypatch.setenv("PLUTO_AUTH_MODE", "private")
     monkeypatch.delenv("PLUTO_USER_ID", raising=False)
-    assert client.get("/api/health").status_code == 401
+    assert client.get("/api/health").status_code == 200
+    # bad token doesn't matter for public health — still 200
     bad = client.get("/api/health", headers={"Authorization": "Bearer nope"})
-    assert bad.status_code == 401
+    assert bad.status_code == 200
+    # protected route must still 401
+    assert client.get("/api/chats").status_code == 401
+    bad2 = client.get("/api/chats", headers={"Authorization": "Bearer nope"})
+    assert bad2.status_code == 401
 
 
 def test_regenerate_appends_fresh_answer(client, stub_agent):

@@ -97,9 +97,11 @@ def kind_for_ext(ext: str) -> str:
     """Map a validated extension to an attachment kind."""
     if ext == "pdf":
         return "pdf"
-    if ext == "csv":
+    if ext in ("csv", "tsv"):
         return "csv"
-    return "image"
+    if ext in ("png", "jpg", "jpeg", "webp", "gif", "bmp"):
+        return "image"
+    return "document"
 
 
 def _sniff_ext(head: bytes) -> Optional[str]:
@@ -115,7 +117,67 @@ def _sniff_ext(head: bytes) -> Optional[str]:
         return "png"
     if head.startswith(b"\xff\xd8\xff"):
         return "jpg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if head.startswith(b"BM"):
+        return "bmp"
+    if head.startswith(b"RIFF") and b"WEBP" in head[:16]:
+        return "webp"
+    if head.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        # OLE2 compound (legacy .doc/.ppt/.xls share this magic).
+        # Readers share a strings fallback, so "doc" is a safe generic.
+        return "doc"
+    if head.lstrip().lower().startswith(b"{\\rtf"):
+        return "rtf"
     return None
+
+
+def _sniff_zip_kind(data: bytes) -> str:
+    """Distinguish office/odf from generic zip via central-directory names.
+
+    All of docx/pptx/xlsx/odt/ods/odp/zip start with PK\\x03\\x04, so
+    magic bytes alone cannot tell them apart. Inspecting the member
+    list (bounded, header-only — no extraction) identifies office
+    documents confidently; anything else stays a generic "zip".
+    Never raises: unreadable archives report "zip" and fail later
+    at the validity check with a user-safe message.
+    """
+    try:
+        import io
+        import zipfile
+
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            try:
+                names = set(z.namelist()[:400])
+            except Exception:
+                return "zip"
+            if "word/document.xml" in names:
+                return "docx"
+            if "ppt/presentation.xml" in names:
+                return "pptx"
+            if "xl/workbook.xml" in names:
+                return "xlsx"
+            if "content.xml" in names:
+                try:
+                    mime = z.read("mimetype", pwd=None)[:120].decode(
+                        "ascii", errors="ignore").strip().lower()
+                except Exception:
+                    mime = ""
+                if "spreadsheet" in mime or "ods" in mime:
+                    return "ods"
+                if "presentation" in mime or "odp" in mime:
+                    return "odp"
+                return "odt"
+            return "zip"
+    except Exception:
+        return "zip"
+
+
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+_ZIP_BASED_EXTS = frozenset({
+    "docx", "pptx", "xlsx", "odt", "ods", "odp", "zip",
+})
 
 
 def _atomic_write_bytes(dest: Path, data: bytes) -> None:
@@ -142,6 +204,37 @@ def _atomic_write_bytes(dest: Path, data: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+def _check_disk_space(needed_bytes: int) -> None:
+    """Raise FileValidationError if host disk has < needed + 100 MB free.
+
+    Checks the filesystem backing the data root (PLUTO_DATA_DIR or ./data).
+    Best-effort: if stat fails, allow the write (fail at actual write instead
+    of blocking uploads due to transient OS error).
+    """
+    try:
+        import shutil
+
+        from services.storage import data_root
+
+        root = data_root()
+        # ensure parent exists for disk_usage check
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        usage = shutil.disk_usage(str(root))
+        # keep 100 MB headroom so OS / other users aren't starved
+        headroom = 100 * 1024 * 1024
+        if usage.free < needed_bytes + headroom:
+            raise FileValidationError(
+                "Server storage is full. Delete old files or try again later."
+            )
+    except FileValidationError:
+        raise
+    except Exception:
+        pass
 
 
 def _new_id() -> str:
@@ -250,10 +343,19 @@ class FileStore:
             raise FileValidationError(f"File too large. Maximum is {limit_mb} MB.")
         safe = sanitize_filename(filename)
         ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
+        _sniffed = _sniff_ext(bytes(data[:16]))
         if ext not in ALLOWED_UPLOAD_EXTS:
             # Missing or wrong extension (e.g. extensionless downloads):
-            # fall back to magic bytes before rejecting.
-            ext = _sniff_ext(bytes(data[:16])) or ""
+            # fall back to magic bytes, then to zip-kind inspection
+            # (PK magic covers zip/office/odf — indistinguishable at
+            # 16 bytes) before rejecting.
+            ext = _sniffed or ""
+            if not ext and bytes(data[:4]) == b"PK\x03\x04":
+                ext = _sniff_zip_kind(bytes(data))
+        elif _sniffed and _sniffed != ext:
+            # Content says otherwise (e.g. .txt holding a PDF): trust the
+            # magic bytes over the filename so misnamed files still read.
+            ext = _sniffed
         if ext not in ALLOWED_UPLOAD_EXTS:
             allowed = ", ".join(sorted(ALLOWED_UPLOAD_EXTS))
             raise FileValidationError(f"Unsupported file type. Allowed: {allowed}.")
@@ -264,13 +366,59 @@ class FileStore:
             raise FileValidationError("That file is not a valid PNG image.")
         if ext in ("jpg", "jpeg") and not head.startswith(b"\xff\xd8\xff"):
             raise FileValidationError("That file is not a valid JPEG image.")
-        if ext == "csv" and b"\x00" in bytes(data[:8192]):
+        if ext == "gif" and not head.startswith((b"GIF87a", b"GIF89a")):
+            raise FileValidationError("That file is not a valid GIF image.")
+        if ext == "bmp" and not head.startswith(b"BM"):
+            raise FileValidationError("That file is not a valid BMP image.")
+        if ext == "webp" and not (
+            head.startswith(b"RIFF") and b"WEBP" in bytes(data[:32])
+        ):
+            raise FileValidationError("That file is not a valid WEBP image.")
+        if ext in ("csv", "tsv") and b"\x00" in bytes(data[:8192]):
             raise FileValidationError("That file does not look like a CSV.")
+        # Any other non-binary upload (txt/md/html/xml/rtf/code/...)
+        # must be plain text: reject NUL bytes which signal binary
+        # masquerade. Binary types below carry their own magic-byte
+        # checks, so everything else here is expected to decode as text.
+        _BINARY_EXTS = frozenset({
+            "pdf", "png", "jpg", "jpeg", "gif", "bmp", "webp",
+            "docx", "pptx", "xlsx", "odt", "ods", "odp", "zip",
+            "doc", "ppt", "xls",
+        })
+        if ext not in _BINARY_EXTS and ext not in ("csv", "tsv") \
+                and b"\x00" in bytes(data[:8192]):
+            raise FileValidationError("That file does not look like a text document.")
+        if ext in ("docx", "pptx", "xlsx", "odt", "ods", "odp", "zip") \
+                and not head.startswith(b"PK\x03\x04"):
+            raise FileValidationError(f"That file is not a valid .{ext} (ZIP-based).")
+        if ext in ("doc", "ppt", "xls") and not head.startswith(_OLE_MAGIC):
+            raise FileValidationError(f"That file is not a valid .{ext} (OLE compound).")
+        if ext == "rtf" and not head.lstrip().lower().startswith(b"{\\rtf"):
+            raise FileValidationError("That file is not a valid RTF document.")
+        if ext in ("zip", "odt", "ods", "odp"):
+            # Validity + bomb pre-check BEFORE storage: malformed
+            # archives fail here, oversized ones fail at read time
+            # with the same user-safe message family.
+            try:
+                import io
+                import zipfile
+
+                with zipfile.ZipFile(io.BytesIO(bytes(data))) as _z:
+                    _infos = _z.infolist()
+                    if len(_infos) > 2000:
+                        raise FileValidationError(
+                            "That archive lists too many files to read safely.")
+            except FileValidationError:
+                raise
+            except Exception:
+                raise FileValidationError(f"That file is not a valid .{ext} archive.")
         return ext
 
     def save_upload(self, data: bytes, original_name: str) -> UploadMeta:
         """Validate, store, and register an upload. Returns its metadata."""
         ext = self.validate_upload(data, original_name)
+        # Disk-space guard BEFORE quotas — host full takes precedence
+        _check_disk_space(len(data))
         # Quotas BEFORE any write: count and bytes across staged uploads.
         existing = self.list_uploads()
         if len(existing) >= MAX_UPLOADS_PER_USER:
@@ -369,6 +517,7 @@ class FileStore:
         """
         if not isinstance(data, (bytes, bytearray)) or len(data) == 0:
             raise StorageError("Refusing to register an empty generated file.")
+        _check_disk_space(len(data))
         display = sanitize_filename(display_name)
         file_id = _new_id()
         stored = f"{file_id}_{display}"
@@ -384,7 +533,7 @@ class FileStore:
             id=file_id,
             display_name=display,
             stored_name=stored,
-            kind=kind if kind in ("pptx", "docx") else "file",
+            kind=kind if kind in ("pptx", "docx", "pdf", "md", "doc") else "file",
             size=len(data),
             created=time.time(),
             spec=clean_generation_spec(spec),
@@ -400,6 +549,36 @@ class FileStore:
             registry.pop(file_id, None)
 
         self._update_registry(self.outputs_registry, _drop)
+
+    def _drop_upload_record(self, upload_id: str) -> None:
+        def _drop(registry: Dict[str, Any]) -> None:
+            registry.pop(upload_id, None)
+
+        self._update_registry(self.uploads_registry, _drop)
+
+    def delete_upload(self, upload_id: Any) -> bool:
+        """Delete one owned upload file + registry record.
+
+        Explicit user intent wins over retention: even chat-referenced
+        uploads are removed (old message chips then 404 gracefully;
+        regenerating those turns fails loudly, never silently).
+        Returns False when unknown/unowned (never raises for that).
+        """
+        meta = self.get_upload(upload_id)
+        if meta is None:
+            return False
+        candidate = self.uploads_dir / meta.stored_name
+        if self._inside(self.uploads_dir, candidate):
+            try:
+                if candidate.is_file():
+                    candidate.unlink()
+            except OSError:
+                return False
+        try:
+            self._drop_upload_record(meta.id)
+        except StorageError:
+            return False
+        return True
 
     def list_outputs(self) -> List[OutputMeta]:
         """List this user's outputs, newest first."""
@@ -591,4 +770,53 @@ class FileStore:
                 removed += 1
             except StorageError:
                 continue
+        return removed
+
+    def prune_orphan_files(self, max_age_days: int = 7) -> int:
+        """Delete orphan files (on disk without registry entry) older than cutoff.
+
+        Returns count removed. Recent orphans (< max_age_days) are kept
+        because they may be in-flight writes. Tmp files are also swept
+        here (conservative age check prevents racing a concurrent writer).
+        """
+        cutoff = time.time() - max_age_days * 86400.0
+        removed = 0
+        for directory, registry_path, model in (
+            (self.uploads_dir, self.uploads_registry, UploadMeta),
+            (self.outputs_dir, self.outputs_registry, OutputMeta),
+        ):
+            registry = self._load_registry(registry_path)
+            known = set()
+            for rec in registry.values():
+                if not isinstance(rec, dict):
+                    continue
+                try:
+                    meta = model(**{k: rec[k] for k in model.__dataclass_fields__})
+                    known.add(meta.stored_name)
+                except Exception:
+                    continue
+            try:
+                on_disk = list(directory.iterdir())
+            except OSError:
+                continue
+            for p in on_disk:
+                if not p.is_file():
+                    continue
+                name = p.name
+                if name in known:
+                    continue
+                # keep recent orphans; only delete old ones + always delete .tmp older than cutoff
+                try:
+                    mtime = p.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime >= cutoff and not name.endswith(".tmp"):
+                    continue
+                if not self._inside(directory, p):
+                    continue
+                try:
+                    p.unlink()
+                    removed += 1
+                except OSError:
+                    continue
         return removed

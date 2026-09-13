@@ -62,6 +62,12 @@ def download_artifact(artifact_id: str, ctx: UserContext = Depends(current_user)
         media = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     elif lowered.endswith(".docx"):
         media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif lowered.endswith(".pdf"):
+        media = "application/pdf"
+    elif lowered.endswith(".md"):
+        media = "text/markdown"
+    elif lowered.endswith(".doc"):
+        media = "application/msword"
     return Response(
         content=data,
         media_type=media,

@@ -114,22 +114,31 @@ def test_deps_delegates_to_authenticate(open_env, monkeypatch):
     from backend.main import app
 
     with TestClient(app) as client:
-        res = client.get("/api/health", headers={"Authorization": "Bearer whatever"})
+        # health is now public — use a protected endpoint to verify the delegation
+        res = client.get("/api/chats", headers={"Authorization": "Bearer whatever"})
         assert res.status_code == 200
     # The raw header value reached the single chain (Bearer parsed in deps).
     assert calls == ["whatever"]
 
 
 def test_private_mode_endpoints(open_env, monkeypatch):
+    # health is public even in private mode (probe); chats stay protected.
     monkeypatch.setenv("PLUTO_AUTH_MODE", "private")
     monkeypatch.setenv("PLUTO_ACCESS_TOKENS", "s3cret")
     from backend.main import app
 
     with TestClient(app) as client:
-        assert client.get("/api/health").status_code == 401
-        bad = client.get("/api/health", headers={"Authorization": "Bearer nope"})
-        assert bad.status_code == 401
-        assert bad.json()["detail"] == "Invalid access token."
+        # health is public — no token needed, bad token ignored
+        assert client.get("/api/health").status_code == 200
+        bad_h = client.get("/api/health", headers={"Authorization": "Bearer nope"})
+        assert bad_h.status_code == 200
         good = client.get("/api/health", headers={"Authorization": "Bearer s3cret"})
         assert good.status_code == 200
         assert good.json()["auth_mode"] == "private"
+        # protected endpoint still enforces auth
+        assert client.get("/api/chats").status_code == 401
+        bad = client.get("/api/chats", headers={"Authorization": "Bearer nope"})
+        assert bad.status_code == 401
+        assert bad.json()["detail"] == "Invalid access token."
+        ok = client.get("/api/chats", headers={"Authorization": "Bearer s3cret"})
+        assert ok.status_code == 200

@@ -129,7 +129,8 @@ def test_accounts_isolate_memory_and_chats():
     assert bob_c.get("/api/memory/notes", headers=hb).json()["text"] == ""
     assert alice_c.get("/api/memory/notes", headers=ha).json()["text"] == "alice secret note"
     assert alice_c.get("/api/chats", headers=ha).status_code == 200
-    assert bob_c.get("/api/chats", headers=hb).json() == {"chats": [], "current": []}
+    bob_chats = bob_c.get("/api/chats", headers=hb).json()
+    assert bob_chats["chats"] == [] and bob_chats["current"] == []
 
 
 def test_logout_revokes(client):

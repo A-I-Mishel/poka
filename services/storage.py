@@ -24,9 +24,13 @@ from urllib.parse import urlparse
 
 from services.obs import event as obs_event
 
-MAX_STORED_CHATS: int = 20
+MAX_STORED_CHATS: int = 50
 MAX_MSGS_PER_CHAT: int = 100
-ATTACH_KINDS = ("pdf", "csv", "image")
+# Attachment kinds that survive clean_messages. Must cover every kind
+# services.files.kind_for_ext() can produce (pdf/csv/image/document) —
+# anything missing here is silently stripped from history on every save,
+# which also breaks retention references and regenerate for that kind.
+ATTACH_KINDS = ("pdf", "csv", "image", "document")
 MAX_PROJECT_NAME_LEN: int = 60
 PROJECTS_VERSION: int = 1
 
@@ -59,6 +63,9 @@ _SPEC_TOOLS: Dict[str, Any] = {
     "build_presentation": ("pptx", {"spec_json"}),
     "create_docx": ("docx", {"title", "content"}),
     "build_document": ("docx", {"title", "markdown_text"}),
+    "create_pdf": ("pdf", {"title", "markdown_text"}),
+    "create_markdown": ("md", {"title", "markdown_text"}),
+    "create_doc": ("doc", {"title", "markdown_text"}),
 }
 
 
@@ -221,7 +228,7 @@ def _clean_artifact(value: Any) -> Optional[Dict[str, str]]:
     name = value.get("name", "")
     if not isinstance(file_id, str) or not file_id:
         return None
-    if kind not in ("pptx", "docx", "file"):
+    if kind not in ("pptx", "docx", "pdf", "md", "doc", "file"):
         return None
     if not isinstance(name, str) or not name:
         return None
@@ -286,7 +293,7 @@ def clean_generation_spec(value: Any) -> Optional[Dict[str, Any]]:
         return None
     kind = value.get("kind", "")
     tool = value.get("tool", "")
-    if kind not in ("pptx", "docx") or not isinstance(tool, str):
+    if kind not in ("pptx", "docx", "pdf", "md", "doc") or not isinstance(tool, str):
         return None
     expected = _SPEC_TOOLS.get(tool)
     if expected is None or expected[0] != kind:

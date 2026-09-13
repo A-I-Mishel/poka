@@ -10,6 +10,7 @@ RateLimiter against Redis (INCR + EXPIRE per key:action window) and
 swap it via configure_rate_limiter(). Limits live in services.limits.
 """
 
+import os
 import threading
 import time
 from collections import deque
@@ -26,22 +27,45 @@ class RateLimitResult:
     allowed: bool
     retry_after: float = 0.0
     reason: str = ""
+    limit: int = 0
+    remaining: int = 0
+    window: float = 60.0
+
+
+def _trust_proxy() -> bool:
+    """Whether X-Forwarded-For can be trusted (behind a known proxy)."""
+    raw = os.getenv("PLUTO_TRUST_PROXY", "false") or "false"
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def extract_client_ip(x_forwarded_for: Optional[str], peer: Optional[str]) -> str:
     """Best-effort client IP for rate limiting.
 
-    Prefers the last X-Forwarded-For entry (appended by the closest
-    proxy, so a client cannot forge it past that proxy), else the
-    direct peer address. Caveat: with no trusted proxy in front, XFF
-    is fully client-controlled — this is abuse friction, not a
-    security boundary.
+    When PLUTO_TRUST_PROXY=true, prefers the last X-Forwarded-For entry
+    (appended by the closest trusted proxy). Otherwise returns peer
+    directly — XFF is client-controlled without a trusted proxy and
+    must not be used for limit keys.
     """
+    peer_ip = (str(peer or "").strip() or "unknown")[:45]
+    if not _trust_proxy():
+        return peer_ip
     if x_forwarded_for:
         entries = [p.strip() for p in str(x_forwarded_for).split(",") if p.strip()]
         if entries:
             return entries[-1][:45]
-    return (str(peer or "").strip() or "unknown")[:45]
+    return peer_ip
+
+
+def rate_limit_headers(result: RateLimitResult, action: str) -> dict:
+    """Headers for rate-limit responses (never includes client identity)."""
+    h: dict = {}
+    if result.limit:
+        h["X-RateLimit-Limit"] = str(result.limit)
+        h["X-RateLimit-Remaining"] = str(max(0, result.remaining))
+        h["X-RateLimit-Window"] = str(int(result.window))
+    if not result.allowed and result.retry_after > 0:
+        h["Retry-After"] = str(int(result.retry_after + 0.9))
+    return h
 
 
 def limit_key_for(source: str, user_id: Optional[str], client_ip_addr: Optional[str]) -> str:
@@ -104,10 +128,14 @@ class MemoryRateLimiter(RateLimiter):
                     allowed=False,
                     retry_after=retry,
                     reason=f"Rate limit exceeded for {action} ({max_calls}/{int(window)}s).",
+                    limit=max_calls,
+                    remaining=0,
+                    window=window,
                 )
             queue.append(now)
             self._prune_locked(now)
-            return RateLimitResult(allowed=True)
+            remaining = max(0, max_calls - len(queue))
+            return RateLimitResult(allowed=True, limit=max_calls, remaining=remaining, window=window)
 
     def _prune_locked(self, now: float) -> None:
         """Evict identities with no hits inside their window (caller holds the lock)."""

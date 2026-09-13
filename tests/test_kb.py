@@ -103,10 +103,44 @@ def test_extract_text_pdf():
 
 
 def test_extract_text_unsupported_and_empty():
-    text, reason = kb_svc.extract_text(b"\x89PNG\r\n\x1a\n", "photo.png")
+    text, reason = kb_svc.extract_text(b"MZ\x90\x00binary", "run.exe")
     assert text == "" and reason.startswith("unsupported-type")
     text, reason = kb_svc.extract_text(b"   ", "empty.csv")
     assert text == "" and reason == "empty"
+
+
+def _tiny_png_bytes():
+    import io as _io
+
+    from PIL import Image
+
+    img = Image.new("RGB", (32, 32), "white")
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_extract_text_image_invalid():
+    text, reason = kb_svc.extract_text(b"not an image at all" * 10, "x.png")
+    assert text == "" and reason == "image-invalid"
+
+
+def test_extract_text_image_no_ocr(monkeypatch):
+    monkeypatch.setattr(kb_svc, "_ocr_available", lambda: False)
+    text, reason = kb_svc.extract_text(_tiny_png_bytes(), "note.png")
+    assert text == "" and reason == "image-no-ocr"
+
+
+def test_image_ocr_ingest_search(open_env, stubbed_embedder, monkeypatch):
+    monkeypatch.setattr(kb_svc, "_ocr_available", lambda: True)
+    monkeypatch.setattr(
+        kb_svc, "_ocr_image_bytes", lambda blob: "grocery receipt total 42")
+    res = kb_svc.ingest_document("u", "img1", "receipt.png", _tiny_png_bytes())
+    assert res["ingested"] and res["chunks"] == 1
+    hits = kb_svc.search("u", "grocery receipt")
+    assert len(hits) == 1
+    assert hits[0]["name"] == "receipt.png"
+    assert "grocery" in hits[0]["text"]
 
 
 def test_ingest_search_ranks_by_vector_not_keywords(open_env, stubbed_embedder):

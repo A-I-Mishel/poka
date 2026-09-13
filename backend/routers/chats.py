@@ -8,7 +8,7 @@ from backend import schemas
 from backend.chatflow import archive_current
 from backend.deps import UserContext, current_user
 from services.limits import MAX_CHAT_TITLE_CHARS
-from services.storage import StorageError
+from services.storage import MAX_STORED_CHATS, StorageError
 
 router = APIRouter(prefix="/api/chats", tags=["chats"])
 
@@ -35,6 +35,7 @@ def list_chats(ctx: UserContext = Depends(current_user)):
 def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_user)):
     """Archive the open conversation (if any) and start fresh."""
     chats, current = _load(ctx)
+    warnings: list = []
     if [m for m in current if isinstance(m, dict)]:
         try:
             record, current = archive_current(
@@ -43,9 +44,14 @@ def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_us
             current = []
         else:
             chats = [record] + list(chats)
-            del chats[20:]
+            if len(chats) > MAX_STORED_CHATS:
+                dropped = len(chats) - MAX_STORED_CHATS
+                del chats[MAX_STORED_CHATS:]
+                warnings.append(
+                    f"Chat history is full ({MAX_STORED_CHATS} saved chats): "
+                    f"the oldest {dropped} archived chat(s) were removed.")
             ctx.user_store.save_chats(chats, current)
-    return {"chats": chats, "current": current}
+    return {"chats": chats, "current": current, "warnings": warnings}
 
 
 @router.post("/open", response_model=schemas.ChatsResponse)

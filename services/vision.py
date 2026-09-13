@@ -23,7 +23,7 @@ VISION_MAX_DIM: int = 1568
 # tiny file claiming gigapixel dimensions (decompression bomb) is
 # refused without allocating the bitmap.
 VISION_MAX_PIXELS: int = 25_000_000
-VISION_EXTS = frozenset({"png", "jpg", "jpeg"})
+VISION_EXTS = frozenset({"png", "jpg", "jpeg", "webp", "gif", "bmp"})
 
 # Tier names known to accept image content blocks. Unknown tiers are
 # treated as text-only so we never send images into the void.

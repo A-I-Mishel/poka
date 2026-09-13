@@ -7,7 +7,22 @@ these values.
 
 # Uploads
 MAX_UPLOAD_BYTES: int = 200 * 1024 * 1024
-ALLOWED_UPLOAD_EXTS: frozenset = frozenset({"pdf", "csv", "png", "jpg", "jpeg"})
+ALLOWED_UPLOAD_EXTS: frozenset = frozenset({
+    "pdf", "csv", "tsv",
+    "png", "jpg", "jpeg", "webp", "gif", "bmp",
+    "txt", "md", "markdown", "log", "json",
+    "html", "htm", "xhtml", "shtml", "xml", "svg",
+    "yaml", "yml", "toml", "ini", "cfg", "conf",
+    "css", "scss", "less",
+    "js", "mjs", "cjs", "jsx", "ts", "mts", "tsx",
+    "py", "pyi", "java", "c", "h", "cpp", "hpp", "cc",
+    "cs", "go", "rs", "php", "rb", "swift", "kt", "kts",
+    "scala", "pl", "lua", "sh", "bash", "zsh", "bat", "cmd",
+    "ps1", "sql", "r", "jl", "vue", "svelte",
+    "docx", "pptx", "xlsx",
+    "zip",
+    "doc", "ppt", "xls", "rtf", "odt", "ods", "odp",
+})
 
 # Per-user storage exhaustion controls (checked BEFORE writes/parsing).
 MAX_UPLOADS_PER_USER: int = 100
@@ -25,11 +40,36 @@ MAX_PPTX_BULLETS_PER_SLIDE: int = 200
 # Document generation guard (checked BEFORE expensive building).
 MAX_DOCX_PARAGRAPHS: int = 1000
 
+# Make-tool generation guard (create_pdf/create_doc/create_markdown share
+# the lightweight-markdown subset; blocks capped like docx builders).
+MAX_MAKE_BLOCKS: int = 300
+
 # Tool input/output caps
 MAX_PDF_PAGES: int = 200
 MAX_PDF_CHARS: int = 12000
+MAX_DOCUMENT_CHARS: int = 12000
 MAX_CSV_ROWS: int = 50000
 MAX_SEARCH_CHARS: int = 6000
+
+# ZIP archive reading (stdlib zipfile, list + extract text-like members).
+# Zip-bomb guards are checked BEFORE extraction: entry count, total
+# uncompressed size, and per-file size. Inner files reuse the document
+# text caps above; only text-like members are extracted, never executed.
+MAX_ZIP_FILES: int = 100
+MAX_ZIP_UNCOMPRESSED_BYTES: int = 50 * 1024 * 1024
+MAX_ZIP_FILE_BYTES: int = 5 * 1024 * 1024
+MAX_ZIP_LISTED: int = 200
+
+# Legacy document fallback (best-effort stdlib extraction, no new deps).
+# OLE .doc/.ppt/.xls strings fallback and RTF stripping are lossy by
+# nature; output carries a fidelity note so models never mistake it
+# for exact formatting.
+MAX_LEGACY_STRINGS_CHARS: int = 12000
+
+# Scanned-PDF OCR (embedded-image extraction via pypdf + optional
+# pytesseract). No new system deps: when the OCR binary is absent the
+# tool reports honestly and points at the Gemini vision workaround.
+MAX_OCR_PAGES: int = 5
 
 # Saved workflow pipelines (services/workflows.py + agent/workflows.py).
 # Pipelines are owner-saved fixed tool sequences; caps keep registries
@@ -110,7 +150,10 @@ KB_MAX_DOCS_PER_USER: int = 100
 KB_MAX_TOTAL_CHUNKS_PER_USER: int = 2000
 KB_TOP_K: int = 5
 KB_MAX_SNIPPET_CHARS: int = 12000
-KB_INGEST_EXTS: frozenset = frozenset({"pdf", "csv"})
+KB_INGEST_EXTS: frozenset = frozenset({"pdf", "csv", "tsv", "txt", "md", "markdown", "log", "json", "html", "htm", "xhtml", "shtml", "xml", "svg", "yaml", "yml", "toml", "ini", "cfg", "conf", "css", "scss", "less", "js", "mjs", "cjs", "jsx", "ts", "mts", "tsx", "py", "pyi", "java", "c", "h", "cpp", "hpp", "cc", "cs", "go", "rs", "php", "rb", "swift", "kt", "kts", "scala", "pl", "lua", "sh", "bash", "zsh", "bat", "cmd", "ps1", "sql", "r", "jl", "vue", "svelte", "docx", "pptx", "xlsx", "zip", "doc", "ppt", "xls", "rtf", "odt", "ods", "odp", "png", "jpg", "jpeg", "webp", "gif", "bmp"})
+# Image ingest cap: full-file bytes (not the 400 KB text cap — a truncated
+# image is undecodable). Pixel gate lives in services/kb._image_text.
+MAX_KB_IMAGE_BYTES: int = 5 * 1024 * 1024
 
 # Tier cooldowns (agent cascade): driven by classify_provider_error kinds.
 # Timeouts are congestion, not outage (brief cool, 2nd consecutive strike);
@@ -148,6 +191,13 @@ MAX_SPEC_TOTAL_CHARS: int = 200_000
 # Storage hygiene
 MAX_FILENAME_LEN: int = 100
 UPLOAD_ID_RE: str = r"^[0-9a-f]{16}$"
+
+# Hygiene pass cadence: prune_stale_uploads (7d unreferenced) and
+# prune_stale_outputs (30d) run at most this often per user per process,
+# triggered from the request lifecycle (backend.deps). Thresholds are in
+# days, so hourly-or-daily is plenty; per-request would waste a chats +
+# registry load on every call.
+STORAGE_HYGIENE_INTERVAL_SECONDS: float = 6 * 3600.0
 
 # Username/password accounts (services.accounts): host-level cap so an
 # open signup endpoint cannot grow the registry without bound.

@@ -51,20 +51,33 @@ def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int
             f"{upload_id}"
             "\"). Never use any other path or ID.]"
         )
+    if kind == "document":
+        return (
+            f"\n\n[Attached document{tag} '{name}' with upload ID: {upload_id}. "
+            "To read it, call read_document(upload_id=\""
+            f"{upload_id}"
+            "\"). Never use any other path or ID.]"
+        )
+    # Images ride the vision fast-path (agent/runtime.py), not a tool call:
+    # the hint must stay neutral because the same text reaches both
+    # vision-capable tiers (real image bytes attached) and text-only tiers
+    # (which get an explicit could-not-analyze note from the runtime).
+    # Claiming inability here contradicts the vision path, so don't.
     return (
         f"\n\n[Attached image{tag}: {name}. "
-        "You cannot view images; if asked "
-        "about its contents, say so briefly "
-        "and continue helping from the text.]"
+        "Its content is provided alongside this request when answered "
+        "by a vision-capable model. Describe only what you can actually "
+        "see; if no image content reaches you, say so plainly instead "
+        "of guessing, and continue helping from the text.]"
     )
 
 
 def attachments_overview(entries: List[Dict[str, str]]) -> str:
     """One-line multi-file header so the model can map files to blocks."""
-    labels = {"pdf": "PDF", "csv": "CSV"}
+    labels = {"pdf": "PDF", "csv": "CSV", "document": "Document", "image": "Image"}
     parts = [
         f"'{str(e.get('name', 'file'))}' "
-        f"({labels.get(str(e.get('kind', '')), 'Image')})"
+        f"({labels.get(str(e.get('kind', '')), 'File')})"
         for e in entries
     ]
     return (
@@ -174,9 +187,9 @@ def _resolve_attachments(ctx: UserContext,
         kind = str(getattr(meta, "kind", "image") or "image")
         name = str(getattr(meta, "display_name", "file") or "file")
         attachments.append({"id": uid, "kind": kind, "name": name})
-        if kind not in ("pdf", "csv"):
+        if kind == "image":
             image_ids.append(uid)
-    images = [a for a in attachments if a["kind"] not in ("pdf", "csv")]
+    images = [a for a in attachments if a.get("kind") == "image"]
     if len(images) > MAX_IMAGE_ATTACHMENTS:
         raise ValueError(f"At most {MAX_IMAGE_ATTACHMENTS} images per message.")
     return attachments, image_ids
@@ -186,6 +199,8 @@ def _check_limits(limit_key: str, deep_mode: bool) -> None:
     """Enforce chat (+deep) rate limits; raises HTTPException(429)."""
     from fastapi import HTTPException
 
+    from services.ratelimit import rate_limit_headers
+
     verdict = get_rate_limiter().check(limit_key, "chat")
     if not verdict.allowed:
         obs_event("ratelimit.deny", action="chat", user=limit_key,
@@ -193,6 +208,7 @@ def _check_limits(limit_key: str, deep_mode: bool) -> None:
         raise HTTPException(
             status_code=429,
             detail=f"Chat rate limit exceeded, retry in {verdict.retry_after:.0f}s.",
+            headers=rate_limit_headers(verdict, "chat"),
         )
     if deep_mode:
         deep_verdict = get_rate_limiter().check(limit_key, "deep")
@@ -202,6 +218,7 @@ def _check_limits(limit_key: str, deep_mode: bool) -> None:
             raise HTTPException(
                 status_code=429,
                 detail=f"Deep Mode rate limit exceeded, retry in {deep_verdict.retry_after:.0f}s.",
+                headers=rate_limit_headers(deep_verdict, "deep"),
             )
 
 
@@ -422,7 +439,7 @@ def regenerate_chat(ctx: UserContext, index: int,
         if isinstance(a, dict) and a.get("id")
     ]
     image_ids = [str(a["id"]) for a in attachments
-                 if a.get("kind") not in ("pdf", "csv")]
+                 if a.get("kind") == "image"]
     send_text = str(user_msg.get("content", "") or "")
     total = len(attachments)
     if total > 1:

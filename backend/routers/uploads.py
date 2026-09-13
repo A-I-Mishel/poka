@@ -18,6 +18,8 @@ router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 async def upload(file: UploadFile = File(...),
                  ctx: UserContext = Depends(current_user)):
     """Validate and vault one file; returns its attachment reference."""
+    from services.ratelimit import rate_limit_headers
+
     verdict = get_rate_limiter().check(ctx.limit_key or ctx.user_id, "upload")
     if not verdict.allowed:
         obs_event("ratelimit.deny", action="upload", user=ctx.user_id,
@@ -25,9 +27,47 @@ async def upload(file: UploadFile = File(...),
         raise HTTPException(
             status_code=429,
             detail=f"Upload rate limit exceeded, retry in {verdict.retry_after:.0f}s.",
+            headers=rate_limit_headers(verdict, "upload"),
         )
+    # Streamed read — never buffer more than MAX_UPLOAD_BYTES, chunk by chunk
+    # to avoid 200 MB × concurrency OOM (previous await file.read() did).
+    from services.limits import MAX_UPLOAD_BYTES
+
+    # Early reject if client advertised a too-large Content-Length
+    # (headers are untrusted but cheap to check before streaming).
     try:
-        data: bytes = await file.read()
+        clen = file.size  # starlette UploadFile.size may be None or int
+        if isinstance(clen, int) and clen > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum is {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    try:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = await file.read(1024 * 1024)  # 1 MB chunks
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Maximum is {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
+                )
+            chunks.append(chunk)
+            # Guard concurrent huge uploads — don't let one request hold >200 MB in RAM
+            # via many chunks; already bounded by total above.
+        data: bytes = b"".join(chunks) if len(chunks) > 1 else (chunks[0] if chunks else b"")
+        if not data:
+            # Let FileStore validate empty file with its user-safe message
+            pass
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read that file.")
     try:
@@ -93,3 +133,29 @@ def download_upload(upload_id: str, ctx: UserContext = Depends(current_user)):
         raise HTTPException(status_code=404, detail="Upload file is unavailable.")
     name = str(getattr(meta, "display_name", "file") or "file")
     return FileResponse(str(path), filename=name)
+
+
+@router.delete("/{upload_id}")
+def delete_upload(upload_id: str, ctx: UserContext = Depends(current_user)):
+    """Delete one owned upload (file + registry + KB vectors).
+
+    Frees quota immediately. Referenced-by-chat uploads are removed
+    anyway on explicit request: old message chips 404 gracefully and
+    regenerating those turns fails loudly (400 unknown attachment).
+    Unknown/unowned IDs 404 without revealing which (never raises).
+    """
+    try:
+        removed = ctx.file_store.delete_upload(upload_id)
+    except (StorageError, FileValidationError):
+        removed = False
+    except Exception:
+        removed = False
+    if not removed:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    # Best-effort KB forget (never fails the delete): pruned documents
+    # must stop matching vector search without any other hook.
+    try:
+        kb_svc.drop_document(ctx.user_id, upload_id)
+    except Exception:
+        pass
+    return {"ok": True}

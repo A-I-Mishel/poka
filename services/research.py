@@ -467,6 +467,18 @@ def regenerate_artifact(file_store: Any, artifact_id: Any) -> Any:
         from tools.docx_tool import build_document
 
         out = build_document.invoke(dict(spec_input))
+    elif tool_name == "create_pdf":
+        from tools.make_tool import create_pdf
+
+        out = create_pdf.invoke(dict(spec_input))
+    elif tool_name == "create_markdown":
+        from tools.make_tool import create_markdown
+
+        out = create_markdown.invoke(dict(spec_input))
+    elif tool_name == "create_doc":
+        from tools.make_tool import create_doc
+
+        out = create_doc.invoke(dict(spec_input))
     elif tool_name == "create_pptx":
         from tools.pptx_tool import create_pptx
 

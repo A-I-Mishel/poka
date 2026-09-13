@@ -39,6 +39,7 @@ class SendResponse(BaseModel):
 class ChatsResponse(BaseModel):
     chats: List[Dict[str, Any]]
     current: List[Dict[str, Any]]
+    warnings: List[str] = Field(default_factory=list)
 
 
 class ArchiveRequest(BaseModel):

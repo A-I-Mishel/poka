@@ -23,6 +23,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 def _auth_gate(request: Request) -> None:
     """Per-IP brute-force friction for signup/login (429 when spent)."""
+    from services.ratelimit import rate_limit_headers
+
     peer = request.client.host if request.client else ""
     ip = extract_client_ip(request.headers.get("x-forwarded-for", ""), peer)
     verdict = get_rate_limiter().check("auth:%s" % ip, "auth")
@@ -31,6 +33,7 @@ def _auth_gate(request: Request) -> None:
         raise HTTPException(
             status_code=429,
             detail="Too many attempts, retry in %ds." % int(verdict.retry_after + 0.5),
+            headers=rate_limit_headers(verdict, "auth"),
         )
 
 
