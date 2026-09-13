@@ -293,7 +293,7 @@ def test_new_artifact_kinds_survive_save_load():
     from services.storage import UserStore
 
     store = UserStore("kind-user")
-    for kind, name in [("pdf", "a.pdf"), ("md", "b.md"), ("doc", "c.doc")]:
+    for kind, name in [("pdf", "a.pdf"), ("md", "b.md"), ("doc", "c.doc"), ("html", "d.html")]:
         meta = FileStore("kind-user").register_output(name, b"bytes", kind)
         assert meta.kind == kind
     current = [
@@ -306,7 +306,7 @@ def test_new_artifact_kinds_survive_save_load():
     store.save_chats([], current)
     stored, _warnings = store.load_chats()
     kinds = sorted(a["kind"] for a in stored["current"][0]["artifacts"])
-    assert kinds == ["doc", "md", "pdf"]
+    assert kinds == ["doc", "html", "md", "pdf"]
 
 
 def test_attachment_hint_contract():

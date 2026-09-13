@@ -136,7 +136,8 @@ input yields structured failures); CSV reads are byte-, column-, and
 row-capped before pandas runs, with a controlled `csv_inspect` op set
 (no arbitrary code execution); presentations are slide-capped (50) with
 truncation notes and documents are validated by reopening before
-delivery.
+delivery. Standalone web pages (`.html`, full document or fragment)
+are saved as downloadable artifacts that open in any browser.
 
 Gmail (`search_gmail`, `read_gmail`, `create_gmail_draft`,
 `send_gmail`): one configured account via Google OAuth (Desktop app

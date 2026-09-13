@@ -101,6 +101,37 @@ def test_create_doc_roundtrip(fenv):
     assert meta.spec["tool"] == "create_doc"
 
 
+def test_create_html_roundtrip_fragment(fenv):
+    from tools.make_tool import create_html
+
+    out = create_html.invoke({"title": "Landing", "html_content": "<h1>Hello</h1><p>World page.</p>"})
+    assert "file ID:" in out and "browser" in out
+    meta = FileStore("m-user").list_outputs()[0]
+    assert meta.kind == "html" and meta.display_name.endswith(".html")
+    data = FileStore("m-user").read_output(meta.id).decode("utf-8")
+    assert "<!DOCTYPE html>" in data and "<title>Landing</title>" in data
+    assert "Hello" in data and "World page." in data
+    assert meta.spec["tool"] == "create_html"
+
+
+def test_create_html_passthrough_full_document(fenv):
+    from tools.make_tool import create_html
+
+    full = "<!DOCTYPE html><html><head><title>Full</title></head><body><p>Kept intact.</p></body></html>"
+    out = create_html.invoke({"title": "Full", "html_content": full})
+    assert "file ID:" in out
+    meta = FileStore("m-user").list_outputs()[0]
+    assert FileStore("m-user").read_output(meta.id).decode("utf-8") == full
+
+
+def test_create_html_rejects_empty(fenv):
+    from tools.make_tool import create_html
+
+    assert create_html.invoke({"title": "", "html_content": "<p>x</p>"}).startswith("STATUS=")
+    assert create_html.invoke({"title": "T", "html_content": "   "}).startswith("STATUS=")
+    assert create_html.invoke({"title": "T", "html_content": "<div><br></div>"}).startswith("STATUS=")
+
+
 def test_spec_cleaner_accepts_new_kinds():
     from services.storage import clean_generation_spec
 
@@ -108,6 +139,7 @@ def test_spec_cleaner_accepts_new_kinds():
         ("pdf", "create_pdf", {"title", "markdown_text"}),
         ("md", "create_markdown", {"title", "markdown_text"}),
         ("doc", "create_doc", {"title", "markdown_text"}),
+        ("html", "create_html", {"title", "html_content"}),
     ]:
         good = {"kind": kind, "tool": tool,
                 "input": {k: "v" for k in keys}, "created": 1.0}
@@ -150,12 +182,13 @@ def test_revise_flow_keeps_original(fenv):
 
 def test_regenerate_new_kinds(fenv):
     from services import research as research_svc
-    from tools.make_tool import create_doc, create_markdown, create_pdf
+    from tools.make_tool import create_doc, create_html, create_markdown, create_pdf
 
     for invoke_kwargs in [
         lambda: create_pdf.invoke({"title": "R", "markdown_text": SAMPLE_MD}),
         lambda: create_markdown.invoke({"title": "R", "markdown_text": "Body text."}),
         lambda: create_doc.invoke({"title": "R", "markdown_text": SAMPLE_MD}),
+        lambda: create_html.invoke({"title": "R", "html_content": "<p>Body text.</p>"}),
     ]:
         before = {m.id for m in FileStore("m-user").list_outputs()}
         invoke_kwargs()

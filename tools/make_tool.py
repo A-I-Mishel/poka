@@ -560,6 +560,73 @@ def create_doc(title: str, markdown_text: str) -> str:
         return f"STATUS=FAILED tool=create_doc: {str(e)[:200]}"
 
 
+# ---------------------------------------------------------------------------
+# Standalone .html pages.
+
+
+def _ensure_full_html(title: str, html_content: str) -> str:
+    """Wrap a fragment in a minimal page; pass full documents through."""
+    if re.search(r"<html[\s>]", html_content, re.IGNORECASE):
+        return html_content.strip()
+    safe_title = _html_mod.escape(title.strip()[:120])
+    return (
+        "<!DOCTYPE html>\n<html>\n<head>\n"
+        '<meta charset="utf-8">\n'
+        f"<title>{safe_title}</title>\n"
+        "<style>body{font-family:Arial,Helvetica,sans-serif;max-width:800px;"
+        "margin:2em auto;padding:0 1em;line-height:1.6} "
+        "table{border-collapse:collapse} td,th{border:1px solid #999;padding:4px} "
+        "pre{background:#f4f4f4;padding:8px;overflow-x:auto}</style>\n"
+        "</head>\n<body>\n"
+        f"{html_content.strip()}\n"
+        "</body>\n</html>"
+    )
+
+
+@tool
+def create_html(title: str, html_content: str) -> str:
+    """Create a standalone web page (.html file).
+
+    Use ONLY when the user explicitly asks for an HTML file, web page,
+    or .html export. Accepts a full HTML document or a fragment
+    (fragments are wrapped in a minimal page with the title). Served
+    as a download; opens in any browser.
+
+    Args:
+        title: Page title (browser tab + filename basis).
+        html_content: Full HTML document or HTML fragment.
+
+    Returns:
+        Summary with filename (plus download ID), or a STATUS= error.
+    """
+    if not html_content or not html_content.strip():
+        return "STATUS=INVALID tool=create_html: empty HTML content."
+    if not title or not title.strip():
+        return "STATUS=INVALID tool=create_html: empty title."
+    user_id, denied = claim_generation_slot("create_html")
+    if denied is not None:
+        return denied
+    try:
+        text_only = re.sub(r"<[^>]*>", " ", html_content)
+        text_only = _html_mod.unescape(text_only)
+        if len(text_only.strip()) < 3:
+            return "STATUS=INVALID tool=create_html: no substantive content found."
+        payload = _ensure_full_html(title.strip()[:120], html_content)
+        data = payload.encode("utf-8")
+        filename: str = f"html_{uuid.uuid4().hex[:8]}.html"
+        try:
+            spec = {"kind": "html", "tool": "create_html",
+                    "input": {"title": title, "html_content": html_content},
+                    "created": time.time()}
+            meta = FileStore(user_id).register_output(filename, data, "html", spec)
+            return (f"HTML page saved as {meta.display_name} (file ID: {meta.id}) "
+                    "[Standalone .html — opens in any browser.]")
+        except StorageError as e:
+            return f"STATUS=FAILED tool=create_html: {e}"
+    except Exception as e:
+        return f"STATUS=FAILED tool=create_html: {str(e)[:200]}"
+
+
 _READ_OUTPUT_FIELD_CAP = 20000
 
 

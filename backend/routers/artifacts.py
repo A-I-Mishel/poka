@@ -68,6 +68,8 @@ def download_artifact(artifact_id: str, ctx: UserContext = Depends(current_user)
         media = "text/markdown"
     elif lowered.endswith(".doc"):
         media = "application/msword"
+    elif lowered.endswith((".html", ".htm")):
+        media = "text/html"
     return Response(
         content=data,
         media_type=media,

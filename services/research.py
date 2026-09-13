@@ -479,6 +479,10 @@ def regenerate_artifact(file_store: Any, artifact_id: Any) -> Any:
         from tools.make_tool import create_doc
 
         out = create_doc.invoke(dict(spec_input))
+    elif tool_name == "create_html":
+        from tools.make_tool import create_html
+
+        out = create_html.invoke(dict(spec_input))
     elif tool_name == "create_pptx":
         from tools.pptx_tool import create_pptx
 

@@ -533,7 +533,7 @@ class FileStore:
             id=file_id,
             display_name=display,
             stored_name=stored,
-            kind=kind if kind in ("pptx", "docx", "pdf", "md", "doc") else "file",
+            kind=kind if kind in ("pptx", "docx", "pdf", "md", "doc", "html") else "file",
             size=len(data),
             created=time.time(),
             spec=clean_generation_spec(spec),

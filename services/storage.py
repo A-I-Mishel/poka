@@ -66,6 +66,7 @@ _SPEC_TOOLS: Dict[str, Any] = {
     "create_pdf": ("pdf", {"title", "markdown_text"}),
     "create_markdown": ("md", {"title", "markdown_text"}),
     "create_doc": ("doc", {"title", "markdown_text"}),
+    "create_html": ("html", {"title", "html_content"}),
 }
 
 
@@ -228,7 +229,7 @@ def _clean_artifact(value: Any) -> Optional[Dict[str, str]]:
     name = value.get("name", "")
     if not isinstance(file_id, str) or not file_id:
         return None
-    if kind not in ("pptx", "docx", "pdf", "md", "doc", "file"):
+    if kind not in ("pptx", "docx", "pdf", "md", "doc", "html", "file"):
         return None
     if not isinstance(name, str) or not name:
         return None
@@ -293,7 +294,7 @@ def clean_generation_spec(value: Any) -> Optional[Dict[str, Any]]:
         return None
     kind = value.get("kind", "")
     tool = value.get("tool", "")
-    if kind not in ("pptx", "docx", "pdf", "md", "doc") or not isinstance(tool, str):
+    if kind not in ("pptx", "docx", "pdf", "md", "doc", "html") or not isinstance(tool, str):
         return None
     expected = _SPEC_TOOLS.get(tool)
     if expected is None or expected[0] != kind:
