@@ -31,6 +31,24 @@ MAX_PDF_CHARS: int = 12000
 MAX_CSV_ROWS: int = 50000
 MAX_SEARCH_CHARS: int = 6000
 
+# Saved workflow pipelines (services/workflows.py + agent/workflows.py).
+# Pipelines are owner-saved fixed tool sequences; caps keep registries
+# small and rendered args bounded (templates resolve untrusted step
+# output, so post-render args are re-capped, never silently truncated).
+MAX_WORKFLOWS_PER_USER: int = 50
+MAX_WORKFLOW_STEPS: int = 10
+MAX_WORKFLOW_NAME_CHARS: int = 80
+MAX_WORKFLOW_DESC_CHARS: int = 500
+MAX_WORKFLOW_ARG_CHARS: int = 2000
+MAX_WORKFLOW_INPUT_CHARS: int = 2000
+
+# Sandboxed code execution (services.codeexec via tools.python_tool).
+# Code/output caps keep snippets and transcripts small; the iteration
+# budget bounds `for`/comprehension/range workloads (see codeexec).
+MAX_PYTHON_CODE_CHARS: int = 4000
+MAX_PYTHON_OUTPUT_CHARS: int = 4000
+MAX_PYTHON_ITERATIONS: int = 100000
+
 # Execution bounds (seconds)
 MODEL_TIMEOUT_SECONDS: float = 90.0
 # First-response deadline: a tier that emits no token within this window
@@ -71,6 +89,8 @@ RATE_LIMITS: dict = {
     "gmail": (30, 3600.0),
     "calendar": (30, 3600.0),
     "database": (30, 3600.0),
+    "code": (20, 3600.0),
+    "workflow": (20, 3600.0),
     "mcp": (20, 3600.0),
 }
 

@@ -27,7 +27,7 @@ from services.limits import (
 from services.obs import timed as obs_timed
 from services.storage import MAX_SOURCES, clean_source_record
 from services.tokens import count_tokens, truncate_tokens
-from tools import web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, list_mcp_tools, call_mcp_tool
+from tools import web_search, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, list_mcp_tools, call_mcp_tool
 from tools.search_tool import extract_cited_sources
 
 from agent.budget import BudgetExhausted, RequestBudget
@@ -41,7 +41,7 @@ from agent.executor import TokenStream, _call_bounded
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text, _build_system_prompt, strip_internal_reasoning
 
-tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect]
+tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, read_pdf, read_pdf_page, analyze_csv, csv_inspect]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
 MAX_TOOL_ROUNDS = MAX_TOOL_ROUNDS  # re-exported from services.limits
