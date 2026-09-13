@@ -90,10 +90,16 @@ function getVisitor() {
 
 /* ---------- account (login session; chats+memory follow the user id) ---------- */
 var ACCT = { username: "" };
+function renderLoginBtn() {
+  var b = $("loginBtn");
+  if (!b) return;
+  b.classList.toggle("hidden", !!ACCT.username);
+}
 function renderAcct() {
   var mode = AUTH_MODE === "private" ? "Private" : "Open";
   var who = ACCT.username ? ACCT.username + " · " : "";
   $("acctModel").textContent = who + (S.model || "No model") + " · " + mode;
+  renderLoginBtn();
 }
 async function refreshMe() {
   ACCT.username = "";
@@ -1043,16 +1049,12 @@ $("accountBtn").addEventListener("click", function () {
     });
     return;
   }
-  if (getToken()) {
-    /* Operator access token (no username): keep the old token prompt. */
-    ask("Access token (empty clears it)", "", function (v) {
-      if (v === null) return;
-      setToken(v);
-      refreshMe();
-      toast(v ? "Token saved" : "Token cleared");
-    });
-    return;
-  }
+  /* Logged out (with or without a stale operator token): always open
+   * the real login dialog — it has Log in, Sign up, and Use token. */
+  showAuth("Log in to Pluto");
+});
+if ($("loginBtn")) $("loginBtn").addEventListener("click", function () {
+  if (ACCT.username) return;
   showAuth("Log in to Pluto");
 });
 $("authCancel").addEventListener("click", function () { settleAuth(null); });
