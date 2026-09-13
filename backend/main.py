@@ -34,6 +34,30 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             "Public deployments must set PLUTO_AUTH_MODE=private and "
             "PLUTO_ACCESS_TOKENS."
         )
+        try:
+            from services.secrets import get_secret as _get_secret
+
+            if (_get_secret("PLUTO_USER_ID", "") or "").strip():
+                logger.warning(
+                    "PLUTO_USER_ID is set while PLUTO_AUTH_MODE=open — "
+                    "every logged-out visitor without a Bearer token shares "
+                    "that vault. Unset PLUTO_USER_ID on shared hosts."
+                )
+        except Exception:
+            pass
+        try:
+            import os as _os
+
+            _workers = int(_os.getenv("UVICORN_WORKERS", "1") or "1")
+        except (TypeError, ValueError):
+            _workers = 1
+        if _workers > 1:
+            logger.warning(
+                "UVICORN_WORKERS=%d — rate limits and locks are per-process "
+                "best-effort; use a single worker or external Redis limiter "
+                "for hard abuse/billing enforcement.",
+                _workers,
+            )
     # validate secrets placeholders (never logs values)
     try:
         from services.secrets import validate_secrets
@@ -42,7 +66,23 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             logger.warning(w)
     except Exception:
         pass
+    # Free-tier durability: restore data/ from the R2 snapshot when the
+    # local disk is empty (Render free wipes it on every restart). Skipped
+    # when R2 is unconfigured or local data exists; never blocks startup.
+    try:
+        from services.snapshots import maybe_restore as _maybe_restore
+
+        _maybe_restore()
+    except Exception:
+        logger.warning("snapshot restore skipped", exc_info=True)
     yield
+    # Flush any pending backup before shutdown.
+    try:
+        from services.snapshots import flush as _snapshots_flush
+
+        _snapshots_flush()
+    except Exception:
+        logger.warning("snapshot flush on shutdown failed", exc_info=True)
 
 
 app = FastAPI(title="Pluto API", version="0.1.0", lifespan=_lifespan)
@@ -72,7 +112,10 @@ if not _frontend_origins:
     _frontend_origins = ["http://localhost:5173"]
 
 _ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-Pluto-Visitor", "X-Forwarded-For", "X-Request-Id"]
+# Note: X-Forwarded-For is intentionally NOT allowlisted. Browsers must
+# never spoof it (rate-limit bypass when PLUTO_TRUST_PROXY=true);
+# proxies add it outside CORS, and the server still reads it.
+_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-Pluto-Visitor", "X-Request-Id"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -81,6 +124,23 @@ app.add_middleware(
     allow_methods=_ALLOWED_METHODS,
     allow_headers=_ALLOWED_HEADERS,
 )
+
+
+# --- Security headers -------------------------------------------------
+# API + same-origin file downloads: never let user-controlled bytes
+# execute in the UI origin. Downloads force attachment + nosniff +
+# sandbox at the endpoint; this middleware adds the baseline for
+# every response (JSON included).
+@app.middleware("http")
+async def _security_headers(request, call_next):  # type: ignore[no-untyped-def]
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    return response
 
 # Optional host-header validation (set PLUTO_TRUSTED_HOSTS="api.example.com,*.example.com")
 _trusted_hosts_raw = os.getenv("PLUTO_TRUSTED_HOSTS", "").strip()

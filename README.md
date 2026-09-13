@@ -74,6 +74,12 @@ python -m pytest tests/ -q
 | `GOOGLE_REFRESH_TOKEN` | for Gmail | Refresh token from `scripts/get_google_refresh_token.py` |
 | `PLUTO_MCP_SERVERS` | no | JSON list of MCP servers (stdio and/or remote URLs) |
 | `PLUTO_MCP_ALLOW_TOOLS` | with MCP servers | Comma globs like `github.*,docs.search` (default deny) |
+| `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | for free-tier durability | Snapshot backend credentials (R2 or Supabase Storage S3 keys) |
+| `R2_ACCOUNT_ID` | for R2 only | Builds the default R2 endpoint (omit for Supabase) |
+| `SNAPSHOT_ENDPOINT_URL` | for non-R2 backends | e.g. `https://<ref>.storage.supabase.co/storage/v1/s3` |
+| `SNAPSHOT_REGION` | for non-R2 backends | Region from the backend's S3 settings page |
+| `SNAPSHOT_INTERVAL_SECONDS` | no (`10`) | Min seconds between snapshot uploads |
+| `SNAPSHOT_ENABLED` | no (`true`) | `false` disables snapshots despite credentials |
 
 Locally these live in `.env` (gitignored). On Render/Vercel put them
 under Environment Variables. Never commit keys.
@@ -94,13 +100,20 @@ under Environment Variables. Never commit keys.
 ## User accounts (login / signup)
 
 `POST /api/auth/signup` and `POST /api/auth/login` (`{username,
-password}`) issue opaque session tokens (Bearer from then on,
-`GET /api/auth/me` shows who you are, `POST /api/auth/logout`
-revokes). Usernames are 3–32 chars (`A–Z a–z 0–9 _ . -`, unique
-case-insensitively); passwords are 8–128 chars, stored as
-PBKDF2-HMAC-SHA256 (per-user salt, 200k iterations — never cleartext),
-and only token hashes are persisted. Signup/login are per-IP
-rate-limited. Each account gets a stable `acct-<hex>` id, so chats,
+password}`) issue opaque session tokens (`pluto_`-prefixed, Bearer
+from then on, `GET /api/auth/me` shows who you are,
+`POST /api/auth/logout` revokes). Usernames are 3–32 chars
+(`A–Z a–z 0–9 _ . -`, unique case-insensitively); new passwords are
+8–128 chars with a strength check (not your username, not a common
+password, 3 of 4 character groups), stored as PBKDF2-HMAC-SHA256
+(per-user salt, 200k iterations — never cleartext), and only token
+hashes are persisted. Repeated failed logins lock the account for 15
+minutes (HTTP 429). `POST /api/auth/change-password`
+(`{current_password, new_password}`) rotates the credential and kills
+every session, returning a fresh token; `GET /api/auth/sessions`
+lists live sessions (this device flagged) and
+`POST /api/auth/logout-all` revokes them all. Signup/login are
+per-IP rate-limited. Each account gets a stable `acct-<hex>` id, so chats,
 memory, uploads, and document vectors isolate per account
 automatically — sign in on any device and your history is there.
 Sessions work in both auth modes.

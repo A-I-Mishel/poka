@@ -197,6 +197,14 @@ def _atomic_write_bytes(dest: Path, data: bytes) -> None:
             f.flush()
             os.fsync(f.fileno())
         atomic_replace(tmp, dest)
+        # Free-tier durability: queue an R2 snapshot (no-op when
+        # unconfigured; never raises into the write path).
+        try:
+            from services.snapshots import notify as _snapshots_notify
+
+            _snapshots_notify()
+        except Exception:
+            pass
     except OSError:
         try:
             if tmp.exists():

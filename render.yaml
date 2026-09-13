@@ -45,6 +45,29 @@ services:
       # Docker volume (see README) for durable logins.
       - key: PLUTO_DATA_DIR
         value: /var/pluto-data
+      # Free-tier durability alternative: snapshots (services/snapshots.py).
+      # When these are set, data/ is mirrored to S3-compatible storage and
+      # restored on boot, so free-tier restarts stop wiping accounts.
+      # Cloudflare R2 (10 GB free, needs a card): fill all four R2_* vars.
+      # Supabase Storage (1 GB free, no card): enable the S3 protocol in the
+      # Storage settings, create a private bucket, generate S3 access keys,
+      # then set R2_BUCKET/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY plus
+      # SNAPSHOT_ENDPOINT_URL and SNAPSHOT_REGION below (R2_ACCOUNT_ID
+      # stays empty — it is only used to build the default R2 endpoint).
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: SNAPSHOT_ENDPOINT_URL
+        sync: false
+      - key: SNAPSHOT_REGION
+        sync: false
+      - key: SNAPSHOT_INTERVAL_SECONDS
+        value: 10
     disk:
       name: pluto-data
       mountPath: /var/pluto-data
