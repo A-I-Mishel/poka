@@ -96,6 +96,7 @@ svg{display:block;flex-shrink:0}
 .ver-bar button:hover:not(:disabled){background:var(--s2);color:var(--tx)}
 .ver-bar button:disabled{opacity:.3;cursor:default}
 .ver-bar span{min-width:32px;text-align:center}
+.fb-note{font-size:11px;color:var(--t3);background:var(--s2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;margin-top:8px}
 .edit-ta{width:75%;background:var(--s2);border:1px solid var(--bd2);border-radius:10px;padding:9px 13px;color:var(--tx);font:inherit;line-height:1.55;resize:vertical;min-height:56px;outline:none}
 .edit-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:6px;width:75%}
 .edit-save{width:32px;height:32px;border-radius:8px;background:var(--tx);color:var(--inv);display:grid;place-items:center}

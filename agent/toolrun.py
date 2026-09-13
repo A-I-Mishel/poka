@@ -127,7 +127,7 @@ def _note_tier_failure(tier_name: Any, error: Any) -> None:
     if not isinstance(tier_name, str) or not tier_name:
         return
     try:
-        _record_tier_failure(tier_name, classify_provider_error(error)[0])
+        _record_tier_failure(tier_name, classify_provider_error(error)[0], error)
     except Exception:
         pass
 
@@ -424,25 +424,30 @@ def run_tool_loop(
         # the outer cascade (which fails over or reports all-tiers-down).
         if provider_error is not None:
             raise provider_error
-    # Budget exhausted: one final no-tools synthesis call on the last
-    # working tier, else a salvaged partial answer, else a clean status.
+    # Budget exhausted: one final no-tools synthesis call. The last
+    # working tier goes first; if it died mid-task, fail over through
+    # the provider so collected tool results still become a full answer
+    # on the next live tier instead of a salvaged partial. Salvage below
+    # is the last resort, and budget exhaustion is never retried (it is
+    # our limit, not the provider's).
+    synthesis_messages: List[BaseMessage] = [
+        SystemMessage(
+            content="Summarize the tool results below into a concise "
+            "final answer. Do not call any tools."
+        ),
+        HumanMessage(
+            content="Results:\n"
+            + "\n".join(last_results)
+            + "\n\nOriginal request:\n"
+            + user_input
+        ),
+    ]
     try:
         if live is not None:
             live.reset_for_new_call()
         final = agent._invoke_bounded(
             last_llm,
-            [
-                SystemMessage(
-                    content="Summarize the tool results below into a concise "
-                    "final answer. Do not call any tools."
-                ),
-                HumanMessage(
-                    content="Results:\n"
-                    + "\n".join(last_results)
-                    + "\n\nOriginal request:\n"
-                    + user_input
-                ),
-            ],
+            synthesis_messages,
             timeout=60.0,
             budget=budget,
             on_token=live,
@@ -451,8 +456,40 @@ def run_tool_loop(
         if text:
             _note_final_tier(round_tier)
             return _with_sources(text)
-    except Exception:
+    except BudgetExhausted:
         pass
+    except Exception as e:
+        _note_tier_failure(round_tier, e)
+        if llm_provider is not None:
+            while True:
+                try:
+                    synthesis_tier, synthesis_llm = llm_provider()
+                except Exception:
+                    break
+                try:
+                    if live is not None:
+                        live.reset_for_new_call()
+                    final = agent._invoke_bounded(
+                        synthesis_llm,
+                        synthesis_messages,
+                        timeout=60.0,
+                        budget=budget,
+                        on_token=live,
+                    )
+                except BudgetExhausted:
+                    break
+                except Exception as e2:
+                    _note_tier_failure(synthesis_tier, e2)
+                    continue
+                try:
+                    _record_tier_success(synthesis_tier)
+                except Exception:
+                    pass
+                text = _as_text(final.content).strip()
+                if text:
+                    _note_final_tier(synthesis_tier)
+                    return _with_sources(text)
+                break
     if last_text.strip():
         _note_final_tier(last_text_tier)
         return _with_sources(

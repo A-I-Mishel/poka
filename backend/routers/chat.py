@@ -141,6 +141,7 @@ def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
             "type": "meta",
             "active_tier": payload.get("active_tier", ""),
             "task_type": payload.get("task_type", ""),
+            "fallback": payload.get("fallback"),
         }) + "\n\n"
         yield "data: " + json.dumps({"type": "done", "result": payload}) + "\n\n"
 

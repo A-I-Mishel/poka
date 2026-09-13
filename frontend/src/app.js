@@ -485,6 +485,12 @@ function msgEl(m, idx) {
     metaHtml += '<button data-act="copy">Copy</button><button data-act="regen">Regenerate</button><button data-act="brief">Brief</button>';
     mt2.innerHTML = metaHtml;
     body.appendChild(mt2);
+    if (m && m.fallback && m.fallback.requested && m.model && m.fallback.requested !== m.model) {
+      var fb = document.createElement("div");
+      fb.className = "fb-note";
+      fb.textContent = "\u24D8 " + m.fallback.requested + " " + (m.fallback.reason || "unavailable") + " \u2014 answered by " + m.model;
+      body.appendChild(fb);
+    }
     w.appendChild(body);
   }
   return w;
@@ -724,10 +730,10 @@ async function sendText(text, files) {
   streamInto._ids = uploaded.map(function (a) { return a.id; });
   try {
     var result = await streamInto(tmp.querySelector(".body"), function (meta) {
-      if (meta && meta.active_tier) setActiveTier(meta.active_tier, true);
+      if (meta && meta.active_tier) setActiveTier(meta.active_tier, true, meta.fallback && meta.fallback.reason);
     });
     if (result && result.warnings && result.warnings.length) toast(result.warnings[0]);
-    if (result && result.active_tier) setActiveTier(result.active_tier, true);
+    if (result && result.active_tier) setActiveTier(result.active_tier, true, result.fallback && result.fallback.reason);
     await refreshChats();
     if (!$("viewPanel").classList.contains("hidden") && panelBody.getAttribute("data-section") === "artifacts")
       openSection("artifacts");
@@ -1058,7 +1064,7 @@ $("exportBtn").addEventListener("click", function () {
 /* ---------- models (server-driven) ---------- */
 var _lastFallbackKey = "";
 var _lastFallbackAt = 0;
-function setActiveTier(tier, fromServer) {
+function setActiveTier(tier, fromServer, reason) {
   if (tier && TIERS.indexOf(tier) > -1 && !fromServer) {
     S.model = tier;
     savePrefs();
@@ -1066,14 +1072,16 @@ function setActiveTier(tier, fromServer) {
   } else if (fromServer && tier && TIERS.indexOf(tier) > -1 && S.model && tier !== S.model) {
     /* Cascade fallback: S.model is the preferred tier (selector/footer),
        tier is the tier that actually answered (per-message "time · tier"
-       label). Keep the preference so the next turn retries it, but tell
-       the user once per turn instead of silently showing the preference. */
-    var key = S.model + ">" + tier;
+       label + persistent notice). Preference is kept so the next turn
+       retries it. Works for every model: reason comes from the failed
+       tier's classified error (rate-limited, timed out, ...). */
+    var why = reason || "unavailable";
+    var key = S.model + ">" + tier + ">" + why;
     var now = Date.now();
     if (key !== _lastFallbackKey || now - _lastFallbackAt > 5000) {
       _lastFallbackKey = key;
       _lastFallbackAt = now;
-      toast("Preferred " + S.model + " unavailable \u2014 answered by " + tier);
+      toast("Preferred " + S.model + " " + why + " — answered by " + tier);
     }
   }
   $("modelName").textContent = S.model || "…";

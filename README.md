@@ -121,7 +121,10 @@ Cascade (first live tier wins, failed tiers cool down):
 
 Per-task temperatures apply when a tier answers (creative 0.85,
 factual/research lower). Deep Mode (UI toggle) enables planning +
-self-reflection at the cost of extra calls.
+self-reflection at the cost of extra calls. If a tier dies mid-turn,
+the next live tier continues the same turn with collected tool results
+kept — planning, tool rounds, and final synthesis all fail over, so
+work is never restarted from scratch.
 
 ## Tools
 

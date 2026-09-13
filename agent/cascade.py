@@ -33,6 +33,35 @@ _TIER_FAILS: Dict[str, int] = {}
 _TIER_TIMEOUTS: Dict[str, int] = {}
 _TIER_SKIP_UNTIL: Dict[str, float] = {}
 
+# Last failure per tier: (kind, truncated detail, timestamp). Lets callers
+# explain a fallback ("Big Pickle rate-limited") for ANY tier without
+# changing cascade signatures. Bounded (one entry per known tier) and
+# metadata-only (truncated like _friendly_cascade_error, never prompts).
+_TIER_LAST_ERROR: Dict[str, tuple] = {}
+
+
+def _friendly_reason(kind: str) -> str:
+    """Short user-facing reason for a tier failure kind (every tier)."""
+    return {
+        "rate_limit": "rate-limited",
+        "timeout": "timed out",
+        "auth": "unavailable (auth)",
+        "invalid": "unavailable (rejected)",
+        "server": "temporarily unavailable",
+        "network": "unreachable",
+    }.get(kind, "temporarily unavailable")
+
+
+def last_tier_error(name: str) -> Optional[tuple]:
+    """Return (kind, detail) of a tier's most recent failure, or None."""
+    if not isinstance(name, str) or not name:
+        return None
+    hit = _TIER_LAST_ERROR.get(name)
+    if hit is None:
+        return None
+    kind, detail, _ = hit
+    return kind, detail
+
 # Deterministic router stats (process-aggregate metrics, no user data).
 ROUTER_STATS: Dict[str, int] = {"rule": 0, "llm": 0}
 
@@ -120,13 +149,22 @@ def _cooldown_for_kind(kind: str) -> float:
     return TIER_COOLDOWN_TRANSIENT_SECONDS
 
 
-def _record_tier_failure(name: str, kind: str = "unknown") -> None:
+def _record_tier_failure(name: str, kind: str = "unknown", error: Any = None) -> None:
     """Count a failure; cool the tier down for its kind's window.
 
     Timeouts are congestion, not outage: the first consecutive timeout
     is a free pass (the tier stays live), the Nth consecutive one cools
     briefly. Any success or non-timeout failure resets the streak.
+    The latest failure (kind + truncated detail) is always remembered
+    in _TIER_LAST_ERROR — even timeout free passes — so fallbacks can
+    be explained for any tier.
     """
+    try:
+        if isinstance(name, str) and name:
+            detail = str(error)[:200] if error is not None else kind
+            _TIER_LAST_ERROR[name] = (kind, detail, time.time())
+    except Exception:
+        pass
     if kind == "timeout":
         streak: int = _TIER_TIMEOUTS.get(name, 0) + 1
         _TIER_TIMEOUTS[name] = streak
@@ -199,7 +237,7 @@ def _run_cascade_step(
             raise
         except Exception as e:
             last_error = e
-            _record_tier_failure(name, classify_provider_error(e)[0])
+            _record_tier_failure(name, classify_provider_error(e)[0], e)
             continue
         if llm_instance is None:
             continue
@@ -211,6 +249,6 @@ def _run_cascade_step(
             raise
         except Exception as e:
             last_error = e
-            _record_tier_failure(name, classify_provider_error(e)[0])
+            _record_tier_failure(name, classify_provider_error(e)[0], e)
             continue
     raise RuntimeError(_friendly_cascade_error(last_error))

@@ -347,16 +347,21 @@ def answer_with_fallback(
             pass
         return llm
 
-    def _make_tier_provider(pinned: Optional[Tuple[str, BaseLanguageModel]] = None):
+    def _make_tier_provider(pinned: Optional[Tuple[str, BaseLanguageModel]] = None,
+                            failed: Optional[set] = None):
         """Stateful per-attempt failover across usable tiers.
 
         The pinned (name, model) pair — this cascade attempt's tier, if
-        any — is served first; afterwards tiers come from cascade order
-        minus failed and cooled-down ones. Getter failures cool their
-        tier and move on. Healthy tiers are reusable across rounds
-        (multi-round loops must not starve on a short tier table);
-        only failed tiers are remembered and skipped. Exhaustion raises
-        a friendly error.
+        any — is served first, unless it is already in `failed` (e.g. a
+        planning call just proved it dead: execution then continues
+        directly on the next live tier with zero wasted retries);
+        afterwards tiers come from cascade order minus failed and
+        cooled-down ones. Getter failures cool their tier and move on.
+        Healthy tiers are reusable across rounds (multi-round loops must
+        not starve on a short tier table); only failed tiers are
+        remembered and skipped. A caller-supplied `failed` set is shared
+        (planning failures recorded there are honored here). Exhaustion
+        raises a friendly error.
         """
         from agent.cascade import (
             _friendly_cascade_error,
@@ -364,15 +369,18 @@ def answer_with_fallback(
             classify_provider_error,
         )
 
-        failed: set = set()
+        if failed is None:
+            failed = set()
         yielded_pinned = False
         last_error: Optional[Exception] = None
 
         def _provider() -> Tuple[str, BaseLanguageModel]:
             nonlocal yielded_pinned, last_error
-            if pinned is not None and not yielded_pinned:
+            if (pinned is not None and not yielded_pinned
+                    and pinned[0] not in failed):
                 yielded_pinned = True
                 return pinned[0], _size_llm_for_task(pinned[0], pinned[1])
+            yielded_pinned = True
             ordered = [
                 item for item in _usable_tiers(first, tiers)
                 if item[0] not in failed
@@ -388,7 +396,7 @@ def answer_with_fallback(
                     last_error = e
                     failed.add(name)
                     try:
-                        _record_tier_failure(name, classify_provider_error(e)[0])
+                        _record_tier_failure(name, classify_provider_error(e)[0], e)
                     except Exception:
                         pass
                     continue
@@ -404,7 +412,11 @@ def answer_with_fallback(
     final_tier_box: List[str] = []
 
     def _answer_tooled(tier_name: str, llm: BaseLanguageModel) -> str:
-        provider = _make_tier_provider(pinned=(tier_name, llm))
+        # Shared with the planning stage: a tier that dies on the
+        # planning call is recorded here so the execution provider skips
+        # it immediately (true continuation, no wasted retry on dead).
+        prefailed: set = set()
+        provider = _make_tier_provider(pinned=(tier_name, llm), failed=prefailed)
         mark = len(used_tools)
         mark_sources = len(used_sources)
         final_tier_box[:] = []
@@ -416,6 +428,7 @@ def answer_with_fallback(
                     relevant_context, budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
                     final_tier, MAX_DEEP_TOOL_ROUNDS, on_progress,
+                    tier_name, prefailed,
                 )
             else:
                 draft = run_tool_loop(

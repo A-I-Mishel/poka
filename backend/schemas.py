@@ -33,6 +33,7 @@ class SendResponse(BaseModel):
     active_tier: str = ""
     task_type: str = ""
     warnings: List[str] = Field(default_factory=list)
+    fallback: Optional[Dict[str, str]] = None
 
 
 class ChatsResponse(BaseModel):

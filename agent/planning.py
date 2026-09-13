@@ -12,7 +12,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from agent.budget import BudgetExhausted, RequestBudget
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text
-from agent.toolrun import MAX_TOOL_ROUNDS, run_tool_loop
+from agent.toolrun import MAX_TOOL_ROUNDS, _note_tier_failure, run_tool_loop
 
 
 def plan_then_execute(
@@ -32,6 +32,8 @@ def plan_then_execute(
     final_tier: Optional[List[str]] = None,
     max_rounds: int = MAX_TOOL_ROUNDS,
     on_progress: Optional[Callable[[str], None]] = None,
+    attempt_tier: Optional[str] = None,
+    failed_tiers: Optional[set] = None,
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
@@ -40,7 +42,12 @@ def plan_then_execute(
     used_tools / used_sources when provided; project context flows
     into the execution loop's system prompt. When llm_provider is
     given, the execution loop fails over between tiers mid-task and
-    records successful tiers into tier_trace.
+    records successful tiers into tier_trace. When attempt_tier names
+    this cascade attempt's tier, a failed planning call cools it down
+    and records it into failed_tiers (when given) so execution
+    continues on the next live tier instead of retrying the dead one
+    first — no collected work is lost (planning produced none) and the
+    turn is never restarted from scratch.
     """
     def _loop(prompt: str) -> str:
         return run_tool_loop(
@@ -78,5 +85,12 @@ def plan_then_execute(
             "Execute the plan using available tools. Adapt if tools fail."
         )
         return _loop(execution_prompt)
-    except Exception:
+    except Exception as e:
+        # The planning call ran on this attempt's tier: cool it and mark
+        # it failed so the execution loop's provider skips the dead tier
+        # and continues on the next live one (unknown/empty names are
+        # ignored by _note_tier_failure; a missing set simply skips).
+        _note_tier_failure(attempt_tier, e)
+        if failed_tiers is not None and isinstance(attempt_tier, str) and attempt_tier:
+            failed_tiers.add(attempt_tier)
         return _loop(user_input)

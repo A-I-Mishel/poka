@@ -95,7 +95,8 @@ def build_chat_history(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
 
 
 def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
-                    searched: bool, deep_mode: bool, tier: str) -> Dict[str, Any]:
+                     searched: bool, deep_mode: bool, tier: str,
+                     fallback: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Response metadata stored on the message (locally known facts only)."""
     meta: Dict[str, Any] = {
         "mode": "deep" if deep_mode else "fast",
@@ -103,6 +104,9 @@ def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
     }
     if tier:
         meta["model"] = tier
+    if fallback:
+        meta["fallback"] = {"requested": str(fallback.get("requested", "")),
+                            "reason": str(fallback.get("reason", ""))}
     names = [t for t in tools_used if isinstance(t, str) and t]
     meta["search_executed"] = "web_search" in names
     if names:
@@ -111,6 +115,27 @@ def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
     if records:
         meta["sources"] = records
     return meta
+
+
+def _fallback_info(requested: Optional[str], actual: str) -> Optional[Dict[str, str]]:
+    """Describe a cascade fallback for ANY tier pair (or None).
+
+    When the answering tier differs from the requested preference, name
+    the reason from the requested tier's last classified failure
+    (rate-limited, timed out, ...). Unknown tiers / no fallback -> None.
+    """
+    want = str(requested or "").strip()
+    got = str(actual or "").strip()
+    if not want or not got or want == got:
+        return None
+    try:
+        from agent.cascade import _friendly_reason, last_tier_error
+
+        hit = last_tier_error(want)
+        reason = _friendly_reason(hit[0]) if hit else "unavailable"
+    except Exception:
+        reason = "unavailable"
+    return {"requested": want, "reason": reason}
 
 
 def _clean_sources(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -204,7 +229,7 @@ def _complete_turn(ctx: UserContext, send_text: str,
                     active_tier: Optional[str],
                     on_token: Any = None,
                     on_reset: Any = None,
-                    on_progress: Any = None) -> Tuple[Dict[str, Any], str, str]:
+                    on_progress: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
     """Run the agent and build the assistant message (no persistence)."""
     from agent.prompts import strip_internal_reasoning
 
@@ -247,11 +272,12 @@ def _complete_turn(ctx: UserContext, send_text: str,
         "role": "assistant",
         "content": output,
         "time": utcnow_iso(),
-        **_assistant_meta(tools_used, sources, force_search, deep_mode, tier),
+        **_assistant_meta(tools_used, sources, force_search, deep_mode, tier,
+                          _fallback_info(active_tier, tier)),
     }
     if new_artifacts:
         assistant_msg["artifacts"] = new_artifacts
-    return assistant_msg, tier, task_type
+    return assistant_msg, tier, task_type, _fallback_info(active_tier, tier)
 
 
 def _memory_and_project(store: Any, project_id: Optional[str]) -> Tuple[str, str]:
@@ -320,7 +346,7 @@ def run_chat(ctx: UserContext, content: str,
         dict(m) for m in current if isinstance(m, dict)]
     memory_notes, project_context = _memory_and_project(store, project_id)
 
-    assistant_msg, tier, task_type = _complete_turn_guarded(
+    assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, image_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier, on_token, on_reset,
@@ -333,6 +359,7 @@ def run_chat(ctx: UserContext, content: str,
         "active_tier": tier,
         "task_type": task_type,
         "warnings": warnings,
+        "fallback": fallback,
     }
 
 
@@ -345,7 +372,7 @@ def _complete_turn_guarded(ctx: UserContext, send_text: str,
                            active_tier: Optional[str],
                            on_token: Any = None,
                            on_reset: Any = None,
-                           on_progress: Any = None) -> Tuple[Dict[str, Any], str, str]:
+                           on_progress: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
     """_complete_turn with saturation mapped to HTTP 503 (fail fast)."""
     from fastapi import HTTPException
 
@@ -410,7 +437,7 @@ def regenerate_chat(ctx: UserContext, index: int,
     prior_raw = [dict(m) for m in prior]
     memory_notes, project_context = _memory_and_project(store, project_id)
 
-    fresh_msg, tier, task_type = _complete_turn_guarded(
+    fresh_msg, tier, task_type, fallback = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, image_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier)
@@ -422,6 +449,7 @@ def regenerate_chat(ctx: UserContext, index: int,
         "active_tier": tier,
         "task_type": task_type,
         "warnings": warnings,
+        "fallback": fallback,
     }
 
 
