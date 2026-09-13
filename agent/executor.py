@@ -29,7 +29,7 @@ from typing import Any, Callable, Iterator, List, Optional
 
 from langchain_core.language_models.base import BaseLanguageModel
 
-from agent.prompts import _as_text
+from agent.prompts import _as_text, sanitize_messages_for_provider
 from services.limits import FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
 from services.obs import event as obs_event
 
@@ -302,7 +302,14 @@ def _invoke_bounded(
     without streaming use plain invocation under the total timeout.
     on_token receives cumulative answer text live (see
     _invoke_via_stream); None keeps the historical silent behavior.
+    Outgoing history is sanitized first: encrypted provider reasoning
+    (bound to the issuing model/key) is stripped so cascade fallback
+    to another tier never fails with "was not issued to this caller".
     """
+    try:
+        messages = sanitize_messages_for_provider(messages)
+    except Exception:
+        pass
     if budget is not None:
         budget.count_llm()
     provider = getattr(llm_instance, "model", type(llm_instance).__name__)

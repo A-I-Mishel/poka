@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 
 SYSTEM_PROMPT = """You are Pluto, a multi-purpose AI assistant for students and professionals.
@@ -241,3 +241,272 @@ def strip_internal_reasoning(text: str) -> str:
     tail = re.sub(r"\A(?:[ \t]*[-*_]{3,}[ \t]*\n)+", "", tail).strip()
     result = "\n\n".join(part for part in (same_line, tail) if part).strip()
     return result if result else text
+
+
+# --- Cross-provider history sanitization (encrypted reasoning fix) ---
+
+# Content-block types that must never be replayed to another model. They
+# carry provider-encrypted thinking (Anthropic encrypted_content /
+# thought_signature, OpenRouter reasoning_details, etc.) bound to the
+# model + key that produced them. Re-sending them to a different tier
+# fails with "reasoning 'encrypted_content' was not issued to this
+# caller". Text and image blocks are the only ones we forward.
+_REASONING_BLOCK_TYPES = frozenset({
+    "thinking",
+    "reasoning",
+    "reasoning_content",
+    "reasoning_details",
+    "redacted_thinking",
+    "encrypted_content",
+    "thought_signature",
+    "signature",
+    "thinking_block",
+    "reasoning_block",
+})
+
+# Top-level / additional_kwargs keys holding the same encrypted payload.
+_REASONING_KWARG_KEYS = frozenset({
+    "reasoning_content",
+    "reasoning",
+    "reasoning_details",
+    "thinking",
+    "thinking_blocks",
+    "encrypted_content",
+    "signature",
+    "thought_signature",
+    "provider_specific_fields_reasoning",
+})
+
+# Substring hints for disguised reasoning blocks / attrs.
+_REASONING_SUBSTRINGS = ("reason", "think", "encrypt", "signature", "redacted")
+
+
+def _is_reasoning_block(block: Any) -> bool:
+    """True when a content block carries encrypted/provider reasoning."""
+    try:
+        if isinstance(block, dict):
+            btype = str(block.get("type", "") or "").lower()
+            if btype in _REASONING_BLOCK_TYPES:
+                return True
+            if btype and any(s in btype for s in _REASONING_SUBSTRINGS):
+                return True
+            # Dicts carrying signature/encrypted payloads without a
+            # text type are reasoning, even with an unfamiliar "type".
+            if btype not in ("text", "input_text", "output_text", "image_url", "image"):
+                for key in _REASONING_KWARG_KEYS:
+                    if key in block:
+                        return True
+                for key in ("thinking", "encrypted_content", "thought_signature", "signature"):
+                    if key in block:
+                        return True
+            return False
+        btype = str(getattr(block, "type", "") or "").lower()
+        if btype in _REASONING_BLOCK_TYPES:
+            return True
+        if btype and any(s in btype for s in _REASONING_SUBSTRINGS):
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _clean_content_blocks(content: Any) -> Any:
+    """Keep only replay-safe text/image blocks; drop encrypted reasoning."""
+    if content is None or isinstance(content, str):
+        return content
+    if not isinstance(content, (list, tuple)):
+        return content
+    kept: List[Any] = []
+    for block in content:
+        try:
+            if isinstance(block, str):
+                kept.append(block)
+                continue
+            if isinstance(block, dict):
+                if _is_reasoning_block(block):
+                    continue
+                btype = str(block.get("type", "") or "").lower()
+                if btype in ("text", "input_text", "output_text"):
+                    if isinstance(block.get("text"), str):
+                        kept.append(block)
+                    continue
+                if btype in ("image_url", "image"):
+                    kept.append(block)
+                    continue
+                # Bare {"text": ...} without a type: keep text only.
+                if (not btype) and isinstance(block.get("text"), str):
+                    if not any(k in block for k in _REASONING_KWARG_KEYS):
+                        kept.append({"type": "text", "text": block["text"]})
+                    continue
+                # Anything else (tool_use, unknown, provider-specific):
+                # never replay — tool_calls live on the message, not in
+                # content, and unknown blocks may hide signatures.
+                continue
+            # Pydantic-style content objects (newer langchain-core):
+            # keep text/image objects, drop reasoning objects, keep
+            # anything unrecognized fail-open (it was not encrypted).
+            btype = str(getattr(block, "type", "") or "").lower()
+            if not btype:
+                kept.append(block)
+                continue
+            if btype in _REASONING_BLOCK_TYPES:
+                continue
+            if any(s in btype for s in _REASONING_SUBSTRINGS):
+                continue
+            if btype in ("text", "input_text", "output_text", "image_url", "image"):
+                kept.append(block)
+                continue
+            kept.append(block)
+        except Exception:
+            continue
+    return kept
+
+
+def _clean_additional_kwargs(kwargs: Any) -> Dict[str, Any]:
+    """Drop encrypted reasoning keys; keep tool routing keys."""
+    if not isinstance(kwargs, dict):
+        return {}
+    cleaned: Dict[str, Any] = {}
+    for key, value in kwargs.items():
+        try:
+            lowered = str(key).lower()
+            if key in _REASONING_KWARG_KEYS:
+                continue
+            if lowered in _REASONING_BLOCK_TYPES:
+                continue
+            if any(s in lowered for s in _REASONING_SUBSTRINGS):
+                # Keep nothing that even smells like a signature,
+                # except tool routing (never contains those substrings).
+                continue
+            cleaned[key] = value
+        except Exception:
+            continue
+    # Recursively clean nested provider-specific payloads when kept.
+    nested = cleaned.get("provider_specific_fields")
+    if isinstance(nested, dict):
+        try:
+            cleaned["provider_specific_fields"] = {
+                k: v for k, v in nested.items()
+                if str(k).lower() not in _REASONING_BLOCK_TYPES
+                and not any(s in str(k).lower() for s in _REASONING_SUBSTRINGS)
+            }
+        except Exception:
+            cleaned.pop("provider_specific_fields", None)
+    return cleaned
+
+
+def _sanitize_single_message(msg: BaseMessage) -> BaseMessage:
+    """Return a replay-safe copy of one message (same role, text only)."""
+    try:
+        raw_content = getattr(msg, "content", "")
+        clean_content: Any = _clean_content_blocks(raw_content)
+        if isinstance(clean_content, list) and not clean_content:
+            # Providers reject empty content lists; fall back to plain
+            # text ("" when the message held reasoning only).
+            try:
+                clean_content = _as_text(raw_content)
+            except Exception:
+                clean_content = ""
+        clean_kwargs = _clean_additional_kwargs(getattr(msg, "additional_kwargs", {}))
+        update: Dict[str, Any] = {
+            "content": clean_content,
+            "additional_kwargs": clean_kwargs,
+        }
+        if hasattr(msg, "invalid_tool_calls"):
+            update["invalid_tool_calls"] = []
+        if hasattr(msg, "artifact"):
+            update["artifact"] = None
+        for attr in (
+            "reasoning_content",
+            "reasoning_details",
+            "thinking_blocks",
+            "thought_signature",
+            "signature",
+            "encrypted_content",
+        ):
+            if hasattr(msg, attr):
+                update[attr] = None
+        if hasattr(msg, "content_blocks"):
+            try:
+                blocks = getattr(msg, "content_blocks", None)
+                if isinstance(blocks, list):
+                    update["content_blocks"] = [
+                        b for b in blocks if not _is_reasoning_block(b)
+                    ]
+            except Exception:
+                pass
+        model_copy = getattr(msg, "model_copy", None)
+        if callable(model_copy):
+            try:
+                return model_copy(update=update)  # type: ignore[call-arg]
+            except Exception:
+                pass
+    except Exception:
+        return msg
+    # Fallback when model_copy is unavailable: rebuild a minimal
+    # message of the same role with text only (never raises).
+    try:
+        text = clean_content if isinstance(clean_content, str) else _as_text(clean_content)
+        if isinstance(msg, ToolMessage):
+            try:
+                return ToolMessage(
+                    content=text,
+                    tool_call_id=str(getattr(msg, "tool_call_id", "") or ""),
+                )
+            except Exception:
+                return msg
+        if isinstance(msg, AIMessage):
+            try:
+                calls = getattr(msg, "tool_calls", []) or []
+                return AIMessage(
+                    content=text,
+                    additional_kwargs=clean_kwargs,
+                    tool_calls=list(calls),
+                )
+            except Exception:
+                return AIMessage(content=text)
+        if isinstance(msg, HumanMessage):
+            return HumanMessage(content=clean_content, additional_kwargs=clean_kwargs)
+        if isinstance(msg, SystemMessage):
+            return SystemMessage(content=text if isinstance(text, str) else "")
+        return msg
+    except Exception:
+        return msg
+
+
+def sanitize_messages_for_provider(messages: Any) -> Any:
+    """Strip non-replayable reasoning so history works on any tier.
+
+    Every model call must pass through here before hitting the wire:
+    encrypted thinking (Anthropic encrypted_content / thought_signature,
+    OpenRouter reasoning_details, ...) is bound to the issuing model +
+    key, and any other tier rejects it with "was not issued to this
+    caller". We forward only text/image content plus tool_calls.
+
+    Accepts the shapes _invoke_bounded receives: a plain string (probe),
+    a single BaseMessage, or a list/tuple of messages. Anything else
+    passes through untouched. Never raises: on failure the original
+    messages are returned.
+    """
+    try:
+        if messages is None or isinstance(messages, str):
+            return messages
+        if isinstance(messages, BaseMessage):
+            return _sanitize_single_message(messages)
+        if isinstance(messages, (list, tuple)):
+            cleaned = [
+                _sanitize_single_message(m) if isinstance(m, BaseMessage) else m
+                for m in messages
+            ]
+            return type(messages)(cleaned) if isinstance(messages, tuple) else cleaned
+        if isinstance(messages, Sequence):
+            try:
+                return [
+                    _sanitize_single_message(m) if isinstance(m, BaseMessage) else m
+                    for m in messages
+                ]
+            except Exception:
+                return messages
+        return messages
+    except Exception:
+        return messages

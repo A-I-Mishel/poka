@@ -48,6 +48,19 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
     lowered = text.lower()
     if isinstance(error, TimeoutError) or "timed out after" in lowered:
         return ("timeout", True)
+    # Encrypted-reasoning replay (Anthropic encrypted_content /
+    # thought_signature via a gateway): a stale payload issue, not a
+    # broken tier. Sanitize-on-send (executor) prevents it; if one still
+    # slips through, fail over fast with a transient cool-down instead
+    # of the hour-long "invalid" ban. Must precede the 400/invalid
+    # branch below since gateways report it as HTTP 400.
+    if (
+        "encrypted_content" in lowered
+        or "thought_signature" in lowered
+        or "not issued to this caller" in lowered
+        or ("reasoning" in lowered and "signature" in lowered)
+    ):
+        return ("unknown", True)
     if (
         "429" in text
         or "quota" in lowered
