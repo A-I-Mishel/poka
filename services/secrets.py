@@ -34,18 +34,20 @@ def is_placeholder(value: Optional[str]) -> bool:
 def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Return a secret from the environment, else default.
 
+    Unreplaced placeholder values (your_* / example hosts) never count
+    as configured: they resolve to default so callers cannot mistake
+    a template .env for real credentials.
+
     Args:
         name: Secret name, e.g. "GEMINI_API_KEY" or "PLUTO_ACCESS_TOKENS".
-        default: Value when the secret is set nowhere.
+        default: Value when the secret is set nowhere (or placeholder).
 
     Returns:
         The secret value, or default if not set anywhere.
     """
     val = os.getenv(name, default)
-    # Don't return placeholders as valid secrets — treat as unset
-    if is_placeholder(val) and default is None:
-        # keep placeholder detection for validation; callers use _is_placeholder separately
-        pass
+    if val is not None and val != default and is_placeholder(val):
+        return default
     return val
 
 def validate_secrets() -> list[str]:
