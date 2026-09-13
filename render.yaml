@@ -31,7 +31,9 @@ services:
       - key: PLUTO_FRONTEND_ORIGIN
         value: https://poka-nine.vercel.app
       - key: PLUTO_AUTH_MODE
-        value: open
+        value: private
+      - key: PLUTO_ACCESS_TOKENS
+        sync: false
       # Persistent storage for accounts + chats + uploads + memory.
       # Without this, data/accounts.json lives on the ephemeral filesystem
       # and every redeploy/restart wipes all accounts: old tokens 401 and

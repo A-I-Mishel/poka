@@ -238,7 +238,8 @@ python -m pytest tests/ -q
 
 All tests use stubbed models and temp directories — no API quota spent.
 GitHub Actions runs compile + pytest on every push; the dependency
-audit (`pip-audit`) is blocking — a known vulnerability fails CI.
+audit (`pip-audit`) is advisory — it reports known vulnerabilities
+without failing CI.
 
 ## Known limitations
 
