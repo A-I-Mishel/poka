@@ -164,10 +164,23 @@ def test_resolve_env(monkeypatch):
     assert mcp_svc._resolve_env({"MISSING": "PLUTO_MCP_NOPE"}) == {}
 
 
-PROBE_SERVER = '''
-from mcp.server.mcpserver import MCPServer
+def test_resolve_headers_env(monkeypatch):
+    monkeypatch.setenv("MY_MCP_TOKEN", "tok-abc")
+    assert mcp_svc._resolve_headers(
+        {"Authorization": "env:MY_MCP_TOKEN"}) == {"Authorization": "tok-abc"}
+    # Literals still pass through (backward compat).
+    assert mcp_svc._resolve_headers(
+        {"Authorization": "Bearer static"}) == {"Authorization": "Bearer static"}
+    assert mcp_svc._resolve_headers({"Authorization": "env:MISSING"}) == {}
 
-mcp = MCPServer("probe")
+
+PROBE_SERVER = '''
+try:  # mcp >= 2: FastMCP was renamed to MCPServer
+    from mcp.server.mcpserver import MCPServer as _Server
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as _Server
+
+mcp = _Server("probe")
 
 
 @mcp.tool()
