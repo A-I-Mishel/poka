@@ -80,6 +80,7 @@ def fake():
 @pytest.fixture(autouse=True)
 def _ctx(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PLUTO_AUTH_MODE", "private")
     ctx.set_current_user_id("cal-user")
     ctx.set_limit_key("cal-user")
     yield
@@ -151,6 +152,11 @@ def test_unconfigured_degrades(monkeypatch):
 
 def test_no_user_denied():
     ctx.set_current_user_id(None)
+    assert list_calendar_events.invoke({}).startswith("STATUS=DENIED")
+
+
+def test_open_mode_denied(monkeypatch):
+    monkeypatch.setenv("PLUTO_AUTH_MODE", "open")
     assert list_calendar_events.invoke({}).startswith("STATUS=DENIED")
 
 

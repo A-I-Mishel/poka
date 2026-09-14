@@ -103,6 +103,7 @@ class FakeGmailService:
 @pytest.fixture(autouse=True)
 def _ctx(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PLUTO_AUTH_MODE", "private")
     ctx.set_current_user_id("gmail-user")
     ctx.set_limit_key("gmail-user")
     gmail_svc.configure_service(FakeGmailService({"msg-1": FULL_MESSAGE}))
@@ -174,6 +175,11 @@ def test_unconfigured_degrades(monkeypatch):
 
 def test_no_user_denied():
     ctx.set_current_user_id(None)
+    assert search_gmail.invoke({"query": "x"}).startswith("STATUS=DENIED")
+
+
+def test_open_mode_denied(monkeypatch):
+    monkeypatch.setenv("PLUTO_AUTH_MODE", "open")
     assert search_gmail.invoke({"query": "x"}).startswith("STATUS=DENIED")
 
 

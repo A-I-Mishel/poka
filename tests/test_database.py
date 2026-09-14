@@ -88,7 +88,7 @@ def test_identifier_validation():
 def test_per_user_isolation():
     db.import_csv("db-user", "people", CSV_BYTES)
     assert db.list_tables("other-user") == []
-    assert db.query("other-user", "SELECT * FROM people")["error"].startswith("Query failed")
+    assert db.query("other-user", "SELECT * FROM people")["error"].startswith("Database query failed")
 
 
 def test_tool_flow_end_to_end():

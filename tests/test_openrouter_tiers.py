@@ -27,15 +27,18 @@ def test_no_key_means_skipped(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert config.get_tier_openrouter_ultra_llm() is None
     assert config.get_tier_openrouter_gemma_llm() is None
+    assert config.get_tier_openrouter_free_router_llm() is None
 
 
 def test_clients_built_with_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     ultra = config.get_tier_openrouter_ultra_llm()
     gemma = config.get_tier_openrouter_gemma_llm()
-    assert ultra is not None and gemma is not None
+    router = config.get_tier_openrouter_free_router_llm()
+    assert ultra is not None and gemma is not None and router is not None
     assert _model_of(ultra) == config.OPENROUTER_ULTRA_MODEL
     assert _model_of(gemma) == config.OPENROUTER_GEMMA_MODEL
+    assert _model_of(router) == config.OPENROUTER_FREE_ROUTER_MODEL
     base = getattr(ultra, "openai_api_base", "")
     assert "openrouter.ai" in str(base)
 
@@ -47,10 +50,11 @@ def test_clients_cached(monkeypatch):
 
 def test_cascade_position_is_tail(monkeypatch):
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names[-8:] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
+    assert names[-9:] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
                           "OpenRouter Nemotron Super", "OpenRouter Nemotron 3.5",
                           "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
-                          "OpenRouter Inkling Small", "OpenRouter Laguna"]
+                          "OpenRouter Inkling Small", "OpenRouter Laguna",
+                          "OpenRouter Free Router"]
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert config.get_tier_llm("OpenRouter Gemma", temperature=0.5) is None
 
@@ -59,7 +63,8 @@ def test_provider_table_includes_openrouter():
     from agent import providers
 
     names = [name for name, _ in providers.TIER_AGENT_GETTERS]
-    assert names[-8:] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
+    assert names[-9:] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
                           "OpenRouter Nemotron Super", "OpenRouter Nemotron 3.5",
                           "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
-                          "OpenRouter Inkling Small", "OpenRouter Laguna"]
+                          "OpenRouter Inkling Small", "OpenRouter Laguna",
+                          "OpenRouter Free Router"]

@@ -88,28 +88,41 @@ def test_window_expiry_allows_again():
     assert lim.check("u", "t").allowed
 
 
-def test_prune_evicts_stale_keys(fresh_limiter):
-    from services.ratelimit import MemoryRateLimiter
-
-    lim = fresh_limiter
-    stale = time.time() - 7200.0
-    lim._hits[("ghost-1", "chat")] = deque([stale])
-    lim._hits[("ghost-2", "upload")] = deque([stale])
-    lim.check("fresh-user", "chat")
-    assert ("ghost-1", "chat") not in lim._hits
-    assert ("ghost-2", "upload") not in lim._hits
-    assert ("fresh-user", "chat") in lim._hits
-
-
-def test_prune_evicts_emptied_queues():
+def test_idle_key_still_allows_after_window():
     from services.ratelimit import MemoryRateLimiter
 
     lim = MemoryRateLimiter({"t": (100, 0.05)})
     lim.check("u", "t")
-    assert ("u", "t") in lim._hits
     time.sleep(0.06)
-    lim.check("other", "t")
-    assert ("u", "t") not in lim._hits
+    # A fully-expired key is allowed again; the fresh hit is recorded.
+    assert lim.check("u", "t").allowed is True
+    assert ("u", "t") in lim._hits
+    # An untouched idle key from another identity waits for the cadence sweep.
+    stale = time.time() - 7200.0
+    lim._hits[("other", "t")] = deque([stale])
+    while lim._check_count % lim._PRUNE_CADENCE != lim._PRUNE_CADENCE - 1:
+        lim.check("u", "t")
+    assert ("other", "t") in lim._hits
+    lim.check("u", "t")
+    assert ("other", "t") not in lim._hits
+
+
+def test_prune_full_sweep_on_cadence():
+    from services.ratelimit import MemoryRateLimiter
+
+    lim = MemoryRateLimiter({"t": (100, 0.05)})
+    stale = time.time() - 7200.0
+    lim._hits[("ghost-1", "t")] = deque([stale])
+    lim._hits[("ghost-2", "t")] = deque([stale])
+    # Under the cadence no global sweep runs: untouched ghosts survive.
+    for _ in range(lim._PRUNE_CADENCE - 1):
+        lim.check("fresh", "t")
+    assert ("ghost-1", "t") in lim._hits
+    assert ("ghost-2", "t") in lim._hits
+    # The cadence check sweeps the whole table.
+    lim.check("fresh", "t")
+    assert ("ghost-1", "t") not in lim._hits
+    assert ("ghost-2", "t") not in lim._hits
 
 
 def test_stores_create_no_dirs(open_env):

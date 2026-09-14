@@ -29,7 +29,16 @@ Excerpt semantics:
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from services.limits import MAX_BRIEF_EXCERPT_CHARS, MAX_BRIEF_QUERY_CHARS
+from services.limits import (
+    MAX_BRIEF_EXCERPT_CHARS,
+    MAX_BRIEF_QUERY_CHARS,
+    RESEARCH_DISPLAY_TITLE_CHARS,
+    RESEARCH_DOCX_ERROR_CHARS,
+    RESEARCH_MARKDOWN_CHARS,
+    RESEARCH_MAX_SOURCES,
+    RESEARCH_SCOPE_NAME_CHARS,
+    RESEARCH_TITLE_CHARS,
+)
 from services.storage import clean_generation_spec, clean_source_record, is_valid_id
 
 #: Cap for the visible Research list (compact).
@@ -37,7 +46,7 @@ MAX_VISIBLE_BRIEFS: int = 8
 
 
 def validated_brief_sources(message: Any) -> List[Dict[str, str]]:
-    """Validated source records from structured provenance (max 6)."""
+    """Validated source records from structured provenance (max RESEARCH_MAX_SOURCES)."""
     if not isinstance(message, dict):
         return []
     stored = message.get("sources")
@@ -48,7 +57,7 @@ def validated_brief_sources(message: Any) -> List[Dict[str, str]]:
         cleaned = clean_source_record(entry)
         if cleaned is not None:
             out.append(cleaned)
-        if len(out) >= 6:
+        if len(out) >= RESEARCH_MAX_SOURCES:
             break
     return out
 
@@ -215,7 +224,7 @@ def format_brief_created(created: Any) -> str:
     return moment.strftime("%b %d, %Y")
 
 
-def brief_display_title(brief: Any, limit: int = 60) -> str:
+def brief_display_title(brief: Any, limit: int = RESEARCH_DISPLAY_TITLE_CHARS) -> str:
     """Short query-derived title for list rows (never raises)."""
     try:
         query = str(brief.get("query", "")).strip() if isinstance(brief, dict) else ""
@@ -266,7 +275,7 @@ def brief_scope_badge(brief: Any, project_name: Any = None) -> str:
         if not name:
             return "Project"
         flat = " ".join(name.split())
-        return flat[:30] if len(flat) <= 30 else flat[:29].rstrip() + "…"
+        return flat[:RESEARCH_SCOPE_NAME_CHARS] if len(flat) <= RESEARCH_SCOPE_NAME_CHARS else flat[:RESEARCH_SCOPE_NAME_CHARS - 1].rstrip() + "…"
     except Exception:
         return "Personal"
 
@@ -337,9 +346,9 @@ def brief_markdown_for_docx(brief: Any) -> Tuple[str, str]:
             cleaned = clean_source_record(entry)
             if cleaned is not None:
                 sources.append(cleaned)
-            if len(sources) >= 6:
+            if len(sources) >= RESEARCH_MAX_SOURCES:
                 break
-    title = query[:120].strip() or "Research Brief"
+    title = query[:RESEARCH_TITLE_CHARS].strip() or "Research Brief"
     lines: List[str] = []
     lines.append(f"# {title}")
     lines.append("")
@@ -355,7 +364,7 @@ def brief_markdown_for_docx(brief: Any) -> Tuple[str, str]:
         lines.append("## Sources")
         lines.append("")
         for src in sources:
-            safe_title = " ".join(str(src.get("title", "")).split())[:120] or src.get("domain", "")
+            safe_title = " ".join(str(src.get("title", "")).split())[:RESEARCH_TITLE_CHARS] or src.get("domain", "")
             lines.append(f"- {safe_title} — {src.get('domain', '')}")
             lines.append(f"  {src.get('url', '')}")
         lines.append("")
@@ -364,7 +373,7 @@ def brief_markdown_for_docx(brief: Any) -> Tuple[str, str]:
         lines.append("")
         lines.append("No validated sources stored.")
         lines.append("")
-    markdown_text = "\n".join(lines)[:20000]
+    markdown_text = "\n".join(lines)[:RESEARCH_MARKDOWN_CHARS]
     return title, markdown_text
 
 
@@ -403,7 +412,7 @@ def generate_docx_from_brief(user_store: Any, file_store: Any, brief_id: Any) ->
 
     out = build_document.invoke({"title": title, "markdown_text": markdown_text})
     if isinstance(out, str) and out.startswith("STATUS="):
-        raise RuntimeError(out[:500])
+        raise RuntimeError(out[:RESEARCH_DOCX_ERROR_CHARS])
     fresh = _new_outputs_since(file_store, before)
     if not fresh:
         raise RuntimeError("STATUS=FAILED tool=build_document: no artifact registered.")
@@ -494,7 +503,7 @@ def regenerate_artifact(file_store: Any, artifact_id: Any) -> Any:
     else:  # pragma: no cover — cleaner already rejects unknown tools
         raise ValueError("This file cannot be regenerated.")
     if isinstance(out, str) and out.startswith("STATUS="):
-        raise RuntimeError(out[:500])
+        raise RuntimeError(out[:RESEARCH_DOCX_ERROR_CHARS])
     fresh = _new_outputs_since(file_store, before)
     if not fresh:
         raise RuntimeError("STATUS=FAILED: no artifact registered.")

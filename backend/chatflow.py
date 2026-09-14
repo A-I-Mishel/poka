@@ -195,6 +195,59 @@ def _resolve_attachments(ctx: UserContext,
     return attachments, image_ids
 
 
+def _recent_image_ids(ctx: UserContext,
+                        messages: List[Any],
+                        exclude: List[str],
+                        limit: int = MAX_IMAGE_ATTACHMENTS) -> List[str]:
+    """Recent owned image upload IDs from history (most-recent first source).
+
+    Follow-up questions ("can you read the image?") often arrive as a
+    separate text-only turn after the upload turn. Vision only sees the
+    current turn's IDs, so without this the image bytes never reach the
+    model and even Gemini honestly replies it cannot see anything.
+    Scans the last 10 messages for image attachments, validates
+    ownership + file presence, and returns up to `limit` IDs in
+    chronological order (never raises).
+    """
+    excluded = set(str(i) for i in (exclude or []))
+    found: List[str] = []
+    try:
+        recent = [m for m in (messages or []) if isinstance(m, dict)][-10:]
+        for msg in reversed(recent):
+            atts = msg.get("attachments")
+            if not isinstance(atts, list):
+                # Legacy single-image marker on old user messages.
+                legacy = msg.get("image")
+                candidates = [{"id": legacy, "kind": "image"}] if legacy else []
+            else:
+                candidates = atts
+            for entry in candidates:
+                if not isinstance(entry, dict):
+                    continue
+                uid = str(entry.get("id", "") or "")
+                if not uid or uid in excluded or uid in found:
+                    continue
+                if str(entry.get("kind", "") or "") != "image":
+                    continue
+                try:
+                    meta = ctx.file_store.get_upload(uid)
+                except (StorageError, FileValidationError):
+                    meta = None
+                if meta is None:
+                    continue
+                try:
+                    if ctx.file_store.resolve_upload(uid) is None:
+                        continue
+                except (StorageError, FileValidationError):
+                    continue
+                found.append(uid)
+                if len(found) >= limit:
+                    return list(reversed(found))
+    except Exception:
+        return list(reversed(found))[:limit]
+    return list(reversed(found))
+
+
 def _check_limits(limit_key: str, deep_mode: bool) -> None:
     """Enforce chat (+deep) rate limits; raises HTTPException(429)."""
     from fastapi import HTTPException
@@ -302,12 +355,14 @@ def _memory_and_project(store: Any, project_id: Optional[str]) -> Tuple[str, str
     try:
         memory_notes = store.load_notes()
     except StorageError:
+        obs_event("chatflow.memory", status="degraded", reason="memory-unavailable")
         memory_notes = ""
     project_context = ""
     if isinstance(project_id, str) and project_id:
         try:
             project_context = store.load_project_context(project_id)
         except Exception:
+            obs_event("chatflow.memory", status="degraded", reason="project-unavailable")
             project_context = ""
     return memory_notes, project_context
 
@@ -363,8 +418,22 @@ def run_chat(ctx: UserContext, content: str,
         dict(m) for m in current if isinstance(m, dict)]
     memory_notes, project_context = _memory_and_project(store, project_id)
 
+    # Follow-up questions ("can you read the image?") often arrive as a
+    # separate text-only turn after the upload turn. Reuse recent
+    # conversation images for VISION ONLY (stored attachments stay
+    # truthful) so Gemini actually receives the bytes.
+    vision_ids = list(image_ids)
+    if not vision_ids:
+        vision_ids = _recent_image_ids(ctx, current, [])
+        if vision_ids:
+            send_text += (
+                "\n\n[Note: the user refers to image(s) sent earlier in "
+                "this conversation; their content is provided alongside "
+                "this request when answered by a vision-capable model.]"
+            )
+
     assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
-        ctx, send_text, prior_history, prior_raw, image_ids,
+        ctx, send_text, prior_history, prior_raw, vision_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier, on_token, on_reset,
         on_progress)
@@ -454,8 +523,18 @@ def regenerate_chat(ctx: UserContext, index: int,
     prior_raw = [dict(m) for m in prior]
     memory_notes, project_context = _memory_and_project(store, project_id)
 
+    vision_ids = list(image_ids)
+    if not vision_ids:
+        vision_ids = _recent_image_ids(ctx, prior, [])
+        if vision_ids:
+            send_text += (
+                "\n\n[Note: the user refers to image(s) sent earlier in "
+                "this conversation; their content is provided alongside "
+                "this request when answered by a vision-capable model.]"
+            )
+
     fresh_msg, tier, task_type, fallback = _complete_turn_guarded(
-        ctx, send_text, prior_history, prior_raw, image_ids,
+        ctx, send_text, prior_history, prior_raw, vision_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier)
 

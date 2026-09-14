@@ -12,7 +12,8 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from agent.budget import BudgetExhausted, RequestBudget
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text
-from agent.toolrun import MAX_TOOL_ROUNDS, _note_tier_failure, run_tool_loop
+from agent.toolrun import MAX_TOOL_ROUNDS, TOOL_MAP, _note_tier_failure, run_tool_loop
+from services.limits import PLAN_MAX_CHARS
 
 
 def plan_then_execute(
@@ -64,9 +65,11 @@ def plan_then_execute(
         except BudgetExhausted:
             return _loop(user_input)
     try:
+        tool_names = ", ".join(sorted(TOOL_MAP))
         plan_prompt = (
             "Given this user request, create a short step-by-step plan. "
-            "Do NOT execute tools yet. Output only the numbered plan.\n\n"
+            "Do NOT execute tools yet. You may plan around ONLY these tools: "
+            f"{tool_names}\n\n"
             f"Request: {user_input}\nPlan:"
         )
         plan_response = agent._invoke_bounded(
@@ -79,6 +82,9 @@ def plan_then_execute(
             budget=budget,
         )
         plan_text = _as_text(plan_response.content)
+        # Bounded before injection into the execution prompt: a runaway
+        # plan must not crowd the context budget.
+        plan_text = plan_text[:PLAN_MAX_CHARS]
         execution_prompt = (
             f"Follow this plan to complete the request:\n{plan_text}\n\n"
             f"Original request: {user_input}\n\n"

@@ -3,6 +3,11 @@
 Creating is low-risk (visible on the user's own calendar, trivially
 undoable). Deleting refuses without confirm=true — set it only when
 the user explicitly asked to delete that event.
+
+Single-account note: the host configures ONE Google calendar via
+GOOGLE_* env vars. Every app user would share it, so these tools are
+private-mode only (PLUTO_AUTH_MODE=private), like Gmail — open mode
+is denied outright.
 """
 
 import logging
@@ -11,6 +16,7 @@ from langchain_core.tools import tool
 
 from services import calendar as calendar_svc
 from services.context import get_current_user_id, get_limit_key
+from services.identity import auth_mode
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
 
@@ -18,7 +24,14 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _gate(tool_name: str):
-    """User context + rate check + configured service, or (None, error)."""
+    """Private-mode + user context + rate check + service, or (None, error)."""
+    if auth_mode() != "private":
+        obs_event("ratelimit.deny", action="calendar", tool=tool_name, reason="open_mode")
+        return None, (
+            f"STATUS=DENIED tool={tool_name}: Calendar is disabled "
+            "in open mode (single shared calendar would leak to visitors). "
+            "Set PLUTO_AUTH_MODE=private (trusted/owner use only)."
+        )
     user_id = get_current_user_id()
     if not user_id:
         return None, f"STATUS=DENIED tool={tool_name}: no user context."

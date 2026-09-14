@@ -36,7 +36,19 @@ def gemini_embed(texts: List[str]) -> List[List[float]]:
     key = (get_secret("GEMINI_API_KEY", "") or "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not configured; document search needs it.")
-    emb = GoogleGenerativeAIEmbeddings(model=default_model(), google_api_key=key)
+    model = default_model()
+    # Reuse the app's cached-client pattern (config._cached_client): the
+    # client holds only model config + key, never user data, so sharing
+    # one constructed instance process-wide is safe and avoids ~700ms
+    # construction on every ingest/search.
+    from config import _cached_client
+
+    emb = _cached_client(
+        "KB embeddings",
+        0.0,
+        key,
+        lambda: GoogleGenerativeAIEmbeddings(model=model, google_api_key=key),
+    )
     return [[float(x) for x in vec] for vec in emb.embed_documents(cleaned)]
 
 

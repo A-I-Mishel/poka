@@ -6,6 +6,7 @@ never selected here. BudgetExhausted is never swallowed and never cools
 a tier (it is our limit, not theirs).
 """
 
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -39,6 +40,12 @@ _TIER_SKIP_UNTIL: Dict[str, float] = {}
 # metadata-only (truncated like _friendly_cascade_error, never prompts).
 _TIER_LAST_ERROR: Dict[str, tuple] = {}
 
+# Concurrency: tier state is shared across the bounded daemon pool, so
+# every read-modify-write on the _TIER_* dicts goes through ONE lock
+# (mirrors services.ratelimit). Misses here are benign (two callers
+# cooling the same tier) but serializing keeps streak counting exact.
+_STATE_LOCK = threading.Lock()
+
 
 def _friendly_reason(kind: str) -> str:
     """Short user-facing reason for a tier failure kind (every tier)."""
@@ -56,14 +63,61 @@ def last_tier_error(name: str) -> Optional[tuple]:
     """Return (kind, detail) of a tier's most recent failure, or None."""
     if not isinstance(name, str) or not name:
         return None
-    hit = _TIER_LAST_ERROR.get(name)
-    if hit is None:
-        return None
-    kind, detail, _ = hit
+    with _STATE_LOCK:
+        hit = _TIER_LAST_ERROR.get(name)
+        if hit is None:
+            return None
+        kind, detail, _ = hit
     return kind, detail
 
 # Deterministic router stats (process-aggregate metrics, no user data).
 ROUTER_STATS: Dict[str, int] = {"rule": 0, "llm": 0}
+
+
+def _http_status(error: Any) -> Optional[int]:
+    """Best-effort HTTP status code from a provider exception."""
+    if error is None:
+        return None
+    for attr in ("status_code", "status"):
+        code = getattr(error, attr, None)
+        if isinstance(code, int):
+            return code
+        if code is not None:
+            try:
+                parsed = int(code)
+                return parsed
+            except (TypeError, ValueError):
+                pass
+    resp = getattr(error, "response", None)
+    code = getattr(resp, "status_code", None) if resp is not None else None
+    return code if isinstance(code, int) else None
+
+
+def _retry_after_seconds(error: Any) -> Optional[float]:
+    """Best-effort Retry-After seconds from a provider 429 (headers)."""
+    if error is None:
+        return None
+    candidates: List[Any] = []
+    resp = getattr(error, "response", None)
+    if resp is not None:
+        headers = getattr(resp, "headers", None)
+        if headers is not None and hasattr(headers, "get"):
+            candidates.append(headers.get("Retry-After"))
+            candidates.append(headers.get("retry-after"))
+    hdrs = getattr(error, "headers", None)
+    if hdrs is not None and hasattr(hdrs, "get"):
+        candidates.append(hdrs.get("Retry-After"))
+        candidates.append(hdrs.get("retry-after"))
+    for raw in candidates:
+        if raw is None:
+            continue
+        try:
+            parsed = float(str(raw).strip())
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def classify_provider_error(error: Any) -> Tuple[str, bool]:
@@ -75,7 +129,8 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
     """
     text = str(error)
     lowered = text.lower()
-    if isinstance(error, TimeoutError) or "timed out after" in lowered:
+    status = _http_status(error)
+    if isinstance(error, TimeoutError) or status == 408 or "timed out after" in lowered:
         return ("timeout", True)
     # Encrypted-reasoning replay (Anthropic encrypted_content /
     # thought_signature via a gateway): a stale payload issue, not a
@@ -91,17 +146,21 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
     ):
         return ("unknown", True)
     if (
-        "429" in text
+        status == 429
+        or "429" in text
         or "quota" in lowered
         or "rate limit" in lowered
         or "freeusagelimit" in lowered
         or "resource_exhausted" in lowered
         or "overloaded" in lowered
+        or "usage limit" in lowered
+        or "usagelimit" in lowered
         or "529" in text
     ):
         return ("rate_limit", True)
     if (
-        "401" in text
+        status in (401, 403)
+        or "401" in text
         or "403" in text
         or "unauthorized" in lowered
         or "invalid api key" in lowered
@@ -111,7 +170,8 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
     ):
         return ("auth", False)
     if (
-        "500" in text
+        status in (500, 502, 503, 504)
+        or "500" in text
         or "502" in text
         or "503" in text
         or "504" in text
@@ -119,7 +179,7 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
         or "unavailable" in lowered
     ):
         return ("server", True)
-    if "400" in text or "invalid" in lowered or "bad request" in lowered:
+    if status in (400, 404, 422) or "400" in text or "invalid" in lowered or "bad request" in lowered:
         return ("invalid", False)
     if isinstance(error, ConnectionError) or "connection" in lowered or "network" in lowered or "dns" in lowered:
         return ("network", True)
@@ -128,22 +188,33 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
 
 def _tier_skipped(name: str) -> bool:
     """Check whether a tier is currently in its cool-down window."""
-    return time.time() < _TIER_SKIP_UNTIL.get(name, 0.0)
+    with _STATE_LOCK:
+        return time.time() < _TIER_SKIP_UNTIL.get(name, 0.0)
 
 
 def _record_tier_success(name: str) -> None:
     """Clear failure state after a tier answers successfully."""
-    _TIER_FAILS.pop(name, None)
-    _TIER_TIMEOUTS.pop(name, None)
-    _TIER_SKIP_UNTIL.pop(name, None)
+    with _STATE_LOCK:
+        _TIER_FAILS.pop(name, None)
+        _TIER_TIMEOUTS.pop(name, None)
+        _TIER_SKIP_UNTIL.pop(name, None)
 
 
-def _cooldown_for_kind(kind: str) -> float:
-    """Cool-down window for one classify_provider_error kind."""
+def _cooldown_for_kind(kind: str, error: Any = None) -> float:
+    """Cool-down window for one classify_provider_error kind.
+
+    Rate-limit windows prefer the provider's own Retry-After when it is
+    shorter than the blanket quota cool-down, so a 60s-per-provider 429
+    recovers the tier in a minute instead of hours.
+    """
     if kind == "timeout":
         return TIER_COOLDOWN_TIMEOUT_SECONDS
     if kind == "rate_limit":
-        return TIER_COOLDOWN_QUOTA_SECONDS
+        window: float = TIER_COOLDOWN_QUOTA_SECONDS
+        retry_after = _retry_after_seconds(error)
+        if retry_after is not None and 0 < retry_after < window:
+            return retry_after
+        return window
     if kind in ("auth", "invalid"):
         return TIER_COOLDOWN_PERMANENT_SECONDS
     return TIER_COOLDOWN_TRANSIENT_SECONDS
@@ -159,30 +230,32 @@ def _record_tier_failure(name: str, kind: str = "unknown", error: Any = None) ->
     in _TIER_LAST_ERROR — even timeout free passes — so fallbacks can
     be explained for any tier.
     """
-    try:
-        if isinstance(name, str) and name:
-            detail = str(error)[:200] if error is not None else kind
-            _TIER_LAST_ERROR[name] = (kind, detail, time.time())
-    except Exception:
-        pass
-    if kind == "timeout":
-        streak: int = _TIER_TIMEOUTS.get(name, 0) + 1
-        _TIER_TIMEOUTS[name] = streak
-        if streak >= TIMEOUT_STRIKES_BEFORE_COOL:
-            _TIER_SKIP_UNTIL[name] = time.time() + TIER_COOLDOWN_TIMEOUT_SECONDS
-        return
-    _TIER_TIMEOUTS.pop(name, None)
-    fails: int = _TIER_FAILS.get(name, 0) + 1
-    _TIER_FAILS[name] = fails
-    if fails >= SKIP_AFTER_FAILS:
-        _TIER_SKIP_UNTIL[name] = time.time() + _cooldown_for_kind(kind)
+    with _STATE_LOCK:
+        try:
+            if isinstance(name, str) and name:
+                detail = str(error)[:200] if error is not None else kind
+                _TIER_LAST_ERROR[name] = (kind, detail, time.time())
+        except Exception:
+            pass
+        if kind == "timeout":
+            streak: int = _TIER_TIMEOUTS.get(name, 0) + 1
+            _TIER_TIMEOUTS[name] = streak
+            if streak >= TIMEOUT_STRIKES_BEFORE_COOL:
+                _TIER_SKIP_UNTIL[name] = time.time() + TIER_COOLDOWN_TIMEOUT_SECONDS
+            return
+        _TIER_TIMEOUTS.pop(name, None)
+        fails: int = _TIER_FAILS.get(name, 0) + 1
+        _TIER_FAILS[name] = fails
+        if fails >= SKIP_AFTER_FAILS:
+            _TIER_SKIP_UNTIL[name] = time.time() + _cooldown_for_kind(kind, error)
 
 
 def _friendly_cascade_error(last_error: Any) -> str:
     """Translate raw provider errors into a human-readable message."""
     raw: str = str(last_error)
     lowered: str = raw.lower()
-    if "429" in raw or "quota" in lowered or "rate limit" in lowered or "freeusagelimit" in lowered:
+    if "429" in raw or "quota" in lowered or "rate limit" in lowered or "freeusagelimit" in lowered \
+            or "usage limit" in lowered or "usagelimit" in lowered:
         return (
             "All model tiers are unavailable right now: the free services are "
             "rate-limited (daily quotas reset tomorrow) or temporarily down. "

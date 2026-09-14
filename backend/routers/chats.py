@@ -84,6 +84,25 @@ def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_
     return {"chats": rest, "current": messages}
 
 
+@router.get("/{chat_id}/messages")
+def chat_messages(chat_id: str, ctx: UserContext = Depends(current_user)):
+    """Read one archived conversation's messages without opening it.
+
+    Strictly read-only: stored state is untouched, so exporting any chat
+    from the sidebar never disturbs the open conversation.
+    """
+    chats, _current = _load(ctx)
+    for chat in chats:
+        if isinstance(chat, dict) and str(chat.get("id", "")) == chat_id:
+            messages = chat.get("messages", [])
+            return {
+                "id": chat_id,
+                "title": chat.get("title", "Untitled"),
+                "messages": messages if isinstance(messages, list) else [],
+            }
+    raise HTTPException(status_code=404, detail="Chat not found.")
+
+
 @router.patch("/{chat_id}", response_model=schemas.ChatsResponse)
 def rename_chat(chat_id: str, body: schemas.RenameRequest,
                 ctx: UserContext = Depends(current_user)):

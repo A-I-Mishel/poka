@@ -457,3 +457,22 @@ def test_truncate_cuts_open_conversation(client, stub_agent):
     assert res.status_code == 200
     assert [m["role"] for m in res.json()["current"]] == ["user"]
     assert client.post("/api/chats/truncate", json={"index": 99}).status_code == 400
+
+
+def test_chat_messages_reads_archived_without_opening(client, stub_agent):
+    client.post("/api/chat/send", json={"content": "archived topic"})
+    assert client.post("/api/chats/new", json={}).status_code == 200
+    state = client.get("/api/chats").json()
+    assert state["current"] == []
+    assert len(state["chats"]) == 1
+    cid = state["chats"][0]["id"]
+
+    res = client.get(f"/api/chats/{cid}/messages")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["id"] == cid
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+
+    # Read-only: the open conversation is untouched by the export read.
+    assert client.get("/api/chats").json()["current"] == []
+    assert client.get("/api/chats/does-not-exist/messages").status_code == 404

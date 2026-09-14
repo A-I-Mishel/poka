@@ -20,7 +20,11 @@ _PLACEHOLDERS = frozenset({
     "your_opencode_key_here",
     "your_gemini_key_here",
     "your_groq_key_here",
+    "your_cerebras_key_here",
     "your_openrouter_key_here",
+    "your_github_models_token_here",
+    "your_mistral_key_here",
+    "your_nvidia_key_here",
     "your_client_id.apps.googleusercontent.com",
 })
 
@@ -63,7 +67,8 @@ def validate_secrets() -> list[str]:
     # warn if no LLM tier is configured at all
     has_any = any(
         os.getenv(k) and not is_placeholder(os.getenv(k))
-        for k in ("OPENCODE_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY")
+        for k in ("OPENCODE_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
+                  "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "NVIDIA_API_KEY")
     )
     if not has_any:
         warnings.append("No LLM API key configured — /api/health will show empty tiers")

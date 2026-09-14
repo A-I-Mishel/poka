@@ -110,3 +110,65 @@ def test_classify_kinds_drive_cooldowns():
     assert classify_provider_error(Exception("401 unauthorized"))[0] == "auth"
     assert classify_provider_error(Exception("500 internal error"))[0] == "server"
     assert classify_provider_error(Exception("400 bad request"))[0] == "invalid"
+
+
+class _HttpError(Exception):
+    def __init__(self, message="boom", status_code=None, retry_after=None):
+        super().__init__(message)
+        self.status_code = status_code
+        if retry_after is not None:
+
+            class _Resp:
+                headers = {"Retry-After": str(retry_after)}
+
+            self.response = _Resp()
+
+
+def test_classify_uses_status_code_attribute():
+    # No substring to match — solely the 429 status.
+    assert classify_provider_error(_HttpError(status_code=429))[0] == "rate_limit"
+    assert classify_provider_error(_HttpError(status_code=401))[0] == "auth"
+    assert classify_provider_error(_HttpError(status_code=503))[0] == "server"
+    assert classify_provider_error(_HttpError(status_code=408))[0] == "timeout"
+
+
+def test_classify_usage_limit_phrases():
+    assert classify_provider_error(Exception("daily usage limit reached for model"))[0] == "rate_limit"
+    assert classify_provider_error(Exception("usagelimit: exceeded budget"))[0] == "rate_limit"
+
+
+def test_rate_limit_honors_retry_after():
+    err = _HttpError(status_code=429, retry_after=60)
+    assert classify_provider_error(err)[0] == "rate_limit"
+    _record_tier_failure("r", "rate_limit", err)
+    assert _remaining("r") == pytest.approx(60.0, abs=5.0)
+    assert _remaining("r") < TIER_COOLDOWN_QUOTA_SECONDS
+
+
+def test_rate_limit_ignores_large_retry_after():
+    err = _HttpError(status_code=429, retry_after=999999)
+    _record_tier_failure("r", "rate_limit", err)
+    assert _remaining("r") == pytest.approx(TIER_COOLDOWN_QUOTA_SECONDS, abs=10.0)
+
+
+def test_threaded_failure_accounting_is_exact():
+    # Real race the lock prevents: many workers incrementing the same
+    # tier's timeout streak must end with the exact sum.
+    import threading
+    import agent as agent_mod
+
+    workers = 8
+    iters = 100
+
+    def hammer():
+        for _ in range(iters):
+            _record_tier_failure("th", "timeout")
+
+    threads = [threading.Thread(target=hammer) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert agent_mod._TIER_TIMEOUTS.get("th") == workers * iters
+    # Clean slate for the fixture teardown.
+    agent_mod._TIER_TIMEOUTS.pop("th", None)

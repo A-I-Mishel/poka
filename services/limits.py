@@ -85,9 +85,11 @@ MAX_WORKFLOW_INPUT_CHARS: int = 2000
 # Sandboxed code execution (services.codeexec via tools.python_tool).
 # Code/output caps keep snippets and transcripts small; the iteration
 # budget bounds `for`/comprehension/range workloads (see codeexec).
+# Wall-clock timeout bounds giant-int/CPU burns the AST check cannot see.
 MAX_PYTHON_CODE_CHARS: int = 4000
 MAX_PYTHON_OUTPUT_CHARS: int = 4000
 MAX_PYTHON_ITERATIONS: int = 100000
+MAX_PYTHON_EXEC_SECONDS: float = 10.0
 
 # Per-user code workspace (services.workspace via tools.workspace_tool).
 # Private-mode writes + execution; list/read stay per-user isolated.
@@ -113,7 +115,9 @@ MODEL_TIMEOUT_SECONDS: float = 90.0
 # First-response deadline: a tier that emits no token within this window
 # is abandoned and the cascade falls through to the next tier. Applies to
 # every model call (classify, answer, tools, reflection, vision).
-FIRST_TOKEN_TIMEOUT_SECONDS: float = 3.0
+# 12s: free tiers routinely need 5-10s for the first token; 3s caused
+# constant false-timeout churn, wasted quota, and latency.
+FIRST_TOKEN_TIMEOUT_SECONDS: float = 12.0
 TOOL_TIMEOUT_SECONDS: float = 90.0
 MCP_TIMEOUT_SECONDS: float = 60.0
 PROBE_TIMEOUT_SECONDS: float = 20.0
@@ -125,6 +129,24 @@ MAX_SEARCH_CALLS_PER_REQUEST: int = 2
 MAX_REFLECTION_CALLS: int = 1
 MAX_PLANNING_CALLS: int = 1
 MAX_TOTAL_REQUEST_TIME: float = 300.0
+
+# Self-reflection tuning (agent/reflection.py)
+# Short draft or task type triggers re-critique; keywords hint at a failed
+# answer worth one more pass.
+REFLECT_SHORT_DRAFT_CHARS: int = 80
+REFLECT_FAILURE_KEYWORDS: tuple = ("error", "failed", "unable to", "could not")
+# The draft is fed to the critic in a bounded window (chat history stays
+# untruncated): critic quality holds while long research drafts no longer
+# blow the prompt. A rewrite is only accepted when it is substantive —
+# at least REFLECT_MIN_IMPROVE_RATIO x the draft length (guards against
+# a shorter, lossy rewrite winning).
+REFLECT_DRAFT_WINDOW_CHARS: int = 4000
+REFLECT_MIN_IMPROVE_RATIO: float = 0.5
+
+# Plan-then-execute (agent/planning.py): the plan text is injected into
+# the execution prompt verbatim, so it is capped to keep a runaway plan
+# from crowding the context budget.
+PLAN_MAX_CHARS: int = 4000
 
 # Context budgets (tokens, approximated — see services.tokens)
 CONTEXT_MAX_TOKENS: int = 24000
@@ -173,6 +195,16 @@ KB_INGEST_EXTS: frozenset = frozenset({"pdf", "csv", "tsv", "txt", "md", "markdo
 # Image ingest cap: full-file bytes (not the 400 KB text cap — a truncated
 # image is undecodable). Pixel gate lives in services/kb._image_text.
 MAX_KB_IMAGE_BYTES: int = 5 * 1024 * 1024
+
+# Research briefs (services/research.py): source and text caps for the
+# brief/docx surface. Display and docx text stay bounded the same way
+# the storage cleaners bound titles — no literal limits at call sites.
+RESEARCH_MAX_SOURCES: int = 6
+RESEARCH_TITLE_CHARS: int = 120
+RESEARCH_MARKDOWN_CHARS: int = 20000
+RESEARCH_DISPLAY_TITLE_CHARS: int = 60
+RESEARCH_SCOPE_NAME_CHARS: int = 30
+RESEARCH_DOCX_ERROR_CHARS: int = 500
 
 # Tier cooldowns (agent cascade): driven by classify_provider_error kinds.
 # Timeouts are congestion, not outage (brief cool, 2nd consecutive strike);

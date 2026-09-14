@@ -223,7 +223,9 @@ def execute(code: str) -> Dict[str, Any]:
 
     Returns {"output": str, "truncated": bool} on completion (even with
     empty output), or {"error": str, "invalid": bool} — invalid for
-    policy/syntax rejections, else runtime failures.
+    policy/syntax rejections, else runtime failures. Execution runs on
+    a daemon worker with a wall-clock timeout so giant-int/CPU burns
+    the AST check cannot see fail instead of wedging a pool thread.
     """
     if not isinstance(code, str) or not code.strip():
         return {"error": "no code provided", "invalid": True}
@@ -246,19 +248,46 @@ def execute(code: str) -> Dict[str, Any]:
         compiled = compile(tree, "<sandbox>", "exec")
     except (SyntaxError, ValueError) as e:
         return {"error": "could not compile code (%s)" % (e,), "invalid": True}
+    return _exec_timed(compiled)
+
+
+def _exec_timed(compiled: Any) -> Dict[str, Any]:
+    """Run compiled sandbox code with a wall-clock bound. Never raises."""
+    import threading as _threading
+
+    from services.limits import MAX_PYTHON_EXEC_SECONDS
+
     buf = io.StringIO()
-    try:
-        namespace = _fresh_namespace()
-        with contextlib.redirect_stdout(buf):
-            exec(compiled, namespace, namespace)  # noqa: S102 -- sandboxed
-    except _IterationBudgetExceeded as e:
-        return {"error": str(e), "invalid": False}
-    except RecursionError:
-        return {"error": "recursion limit exceeded", "invalid": False}
-    except Exception as e:
-        detail = ("%s: %s" % (type(e).__name__, e)).strip()
-        return {"error": detail[:300] or type(e).__name__, "invalid": False}
-    out = buf.getvalue()
+    outcome: Dict[str, Any] = {}
+    errors: list = []
+
+    def _run() -> None:
+        try:
+            namespace = _fresh_namespace()
+            with contextlib.redirect_stdout(buf):
+                exec(compiled, namespace, namespace)  # noqa: S102 -- sandboxed
+            outcome["output"] = buf.getvalue()
+        except BaseException as exc:  # captured, classified below
+            errors.append(exc)
+
+    worker = _threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(MAX_PYTHON_EXEC_SECONDS)
+    if worker.is_alive():
+        return {
+            "error": "timed out after %gs (break early or shrink the workload)"
+            % (MAX_PYTHON_EXEC_SECONDS,),
+            "invalid": False,
+        }
+    if errors:
+        exc = errors[0]
+        if isinstance(exc, _IterationBudgetExceeded):
+            return {"error": str(exc), "invalid": False}
+        if isinstance(exc, RecursionError):
+            return {"error": "recursion limit exceeded", "invalid": False}
+        detail = ("%s: %s" % (type(exc).__name__, exc)).strip()
+        return {"error": detail[:300] or type(exc).__name__, "invalid": False}
+    out = str(outcome.get("output", ""))
     if len(out) > MAX_PYTHON_OUTPUT_CHARS:
         return {"output": out[:MAX_PYTHON_OUTPUT_CHARS], "truncated": True}
     return {"output": out, "truncated": False}

@@ -61,7 +61,11 @@ python -m pytest tests/ -q
 | `OPENCODE_API_KEY` | yes (or Gemini key) | Tier 1–2 models via OpenCode |
 | `GEMINI_API_KEY` | yes (or OpenCode key) | Tier 3–4 Google Gemini models |
 | `GROQ_API_KEY` | no | Groq fast-inference tier |
+| `CEREBRAS_API_KEY` | no | Cerebras free-tier (no card; ~1M tokens/day) |
 | `OPENROUTER_API_KEY` | no | OpenRouter fallback tiers (free models) |
+| `GITHUB_MODELS_TOKEN` | no | GitHub Models free tier (PAT with `models:read`) |
+| `MISTRAL_API_KEY` | no | Mistral free evaluation tier (no card) |
+| `NVIDIA_API_KEY` | no | NVIDIA NIM free trial tier (NGC key, no card) |
 | `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
 | `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
 | `PLUTO_USER_ID` | no | Pin a stable local/dev identity |
@@ -127,10 +131,16 @@ Cascade (first live tier wins, failed tiers cool down):
    Ling 3.0 Flash (OpenCode free tier, rotating promos;
    DeepSeek V4 Flash free retired Sep 2026 — now paid only)
 4. Groq (fast inference; model via `GROQ_MODEL`)
-5. Gemini 3.6 Flash (Google, free tier ~20 req/day)
-6. Gemini 3.5 Flash (Google fallback)
-7. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
-   + Gemma 26B + Ling Fin + Inkling Small + Laguna (free fallbacks)
+5. Cerebras (free tier, no card; gpt-oss-120b via `CEREBRAS_MODEL`)
+6. Gemini 3.6 Flash (Google, free tier ~20 req/day)
+7. Gemini 3.5 Flash (Google fallback)
+8. GitHub Models (free, no card; `openai/gpt-4o-mini` via `GITHUB_MODELS_MODEL`)
+9. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL`)
+10. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
+11. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
+    + Gemma 26B + Ling Fin + Inkling Small + Laguna (free fallbacks)
+12. OpenRouter Free Router (`openrouter/free`; smart auto-selection
+    of a free model filtered by request features)
 
 Per-task temperatures apply when a tier answers (creative 0.85,
 factual/research lower). Deep Mode (UI toggle) enables planning +

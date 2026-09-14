@@ -12,6 +12,12 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from agent.budget import BudgetExhausted, RequestBudget
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text
+from services.limits import (
+    REFLECT_DRAFT_WINDOW_CHARS,
+    REFLECT_FAILURE_KEYWORDS,
+    REFLECT_MIN_IMPROVE_RATIO,
+    REFLECT_SHORT_DRAFT_CHARS,
+)
 
 REFLECTION_ENABLED: bool = True
 
@@ -31,12 +37,48 @@ def should_reflect(
         return False
     if task_type in ("creative", "multi_step"):
         return True
-    if len(draft_output.strip()) < 80:
+    if len(draft_output.strip()) < REFLECT_SHORT_DRAFT_CHARS:
         return True
     lowered = draft_output.lower()
-    if any(kw in lowered for kw in ["error", "failed", "unable to", "could not"]):
+    if any(kw in lowered for kw in REFLECT_FAILURE_KEYWORDS):
         return True
     return False
+
+
+def _strip_fences(text: str) -> str:
+    """Strip a leading ```lang ... ``` wrapper if present (return as-is otherwise)."""
+    stripped = (text or "").strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        first = lines[0].strip()
+        if first.startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return stripped
+
+
+def _has_improve_marker(text: str) -> bool:
+    """True when a reply line starts with the [IMPROVE] marker.
+
+    Matched at line start (after stripping fences) so the model echoing
+    the instructions verbatim cannot false-positive a pass.
+    """
+    body = _strip_fences(text or "").lstrip("`").strip()
+    for line in body.splitlines():
+        if line.lstrip().upper().startswith("[IMPROVE]"):
+            return True
+    return False
+
+
+def _improved_text(text: str) -> str:
+    """Extract the improved version after an anchored [IMPROVE] marker."""
+    body = _strip_fences(text or "")
+    for line in body.splitlines():
+        if line.lstrip().upper().startswith("[IMPROVE]"):
+            return line.split("]", 1)[1].strip() if "]" in line else ""
+    return ""
 
 
 def reflect_and_improve(
@@ -58,15 +100,18 @@ def reflect_and_improve(
             budget.count_reflect()
         except BudgetExhausted:
             return draft_output
+    draft_window = (draft_output or "")[:REFLECT_DRAFT_WINDOW_CHARS]
+    truncated = len(draft_output or "") > REFLECT_DRAFT_WINDOW_CHARS
     try:
         reflection_prompt = (
             "You just produced this output for the user. Critique it honestly: "
             "is it accurate, complete, well-structured?\n\n"
             f"Original request: {original_input}\n"
-            f"Draft output: {draft_output}\n\n"
+            f"Draft output:{' (first part shown; full text was truncated)' if truncated else ''}\n{draft_window}\n\n"
             "If the draft is good, reply with exactly: [PASS]\n"
             "If it needs improvement, reply with: [IMPROVE] followed by the "
-            "full improved version."
+            "full improved version. The rewrite must be at least as long and "
+            "complete as the draft — never shorten it."
         )
         reflection = agent._invoke_bounded(
             llm_instance,
@@ -80,9 +125,15 @@ def reflect_and_improve(
             budget=budget,
         )
         reflection_text = _as_text(reflection.content)
-        if "[IMPROVE]" in reflection_text:
-            improved = reflection_text.split("[IMPROVE]", 1)[1].strip()
-            return improved if improved else draft_output
+        if _has_improve_marker(reflection_text):
+            improved = _improved_text(reflection_text)
+            if not improved:
+                return draft_output
+            base_len = len((draft_output or "").strip())
+            if base_len and len(improved) < base_len * REFLECT_MIN_IMPROVE_RATIO:
+                # A substantially shorter rewrite is likely lossy — keep the draft.
+                return draft_output
+            return improved
         return draft_output
     except Exception:
         return draft_output

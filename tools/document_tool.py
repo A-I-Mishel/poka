@@ -9,7 +9,6 @@ presented as exact.
 """
 
 import html as _html
-import io
 import re
 import zipfile
 from html.parser import HTMLParser
@@ -200,7 +199,7 @@ def _read_zip_file(path) -> str:
         raise ValueError(f"cannot open zip ({e})")
     with z:
         try:
-            infos = list(z.infolist())
+            list(z.infolist())  # validates the central directory; members come from _safe_zip_members
         except Exception as e:
             raise ValueError(f"cannot list zip ({e})")
         files = [(i, n) for i, n in _safe_zip_members(z)]
@@ -256,7 +255,7 @@ def _read_zip_file(path) -> str:
                 blob = z.read(info.filename)
             except RuntimeError:
                 raise ValueError("archive is password-protected and cannot be read.")
-            except Exception as e:
+            except Exception:
                 skipped.append(f"{name} (unreadable)")
                 continue
             try:

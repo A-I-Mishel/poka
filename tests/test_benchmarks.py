@@ -135,7 +135,7 @@ def test_bench_pdf(env, monkeypatch):
         ("reading", [{"name": "read_pdf", "args": {"upload_id": meta.id}}]),
         "document summary here",
     ])
-    out = agent.answer_with_fallback(
+    agent.answer_with_fallback(
         f"summarize the pdf {meta.id}", tiers=_tiers(fake), raw_messages=[]
     )
     assert counter.llm_calls == 2
@@ -197,7 +197,6 @@ def test_bench_pptx_fast_vs_deep(env, monkeypatch):
     assert deep_calls == 4, deep_calls          # plan + loop x2 + reflect
     assert deep_calls > fast_calls
     assert "deck ready" in out_fast["output"]
-    from services.files import FileStore
 
     assert len(FileStore("bench-user").list_outputs()) >= 1
     ctx.set_current_user_id(None)

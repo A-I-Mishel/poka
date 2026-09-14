@@ -100,28 +100,50 @@ class MemoryRateLimiter(RateLimiter):
     multi-process setups each process enforces independently, which is
     fail-open on counts — documented, acceptable for abuse friction,
     not for hard billing.
+
+    Memory stays bounded without an O(n) sweep per check: each check
+    prunes only its own (idle) identity at O(1), and a full sweep of
+    dead identities runs on a cadence (see _PRUNE_CADENCE).
     """
+
+    _PRUNE_CADENCE: int = 64
 
     def __init__(self, limits: Optional[Dict[str, Tuple[int, float]]] = None) -> None:
         self._limits: Dict[str, Tuple[int, float]] = dict(limits or RATE_LIMITS)
         self._lock = threading.Lock()
         self._hits: Dict[Tuple[str, str], Deque[float]] = {}
+        self._check_count: int = 0
 
     def check(self, user_id: str, action: str) -> RateLimitResult:
         """Allow/deny one action unit for a limiting identity in its window.
 
         `user_id` is an opaque limiting identity: a stable user ID, or an
         `ip:<addr>` key for ephemeral visitors (see limit_key_for).
-        Entries whose newest hit predates their window are evicted on
-        every check, so one-shot identities cannot accumulate forever.
+        A touched identity with no hits inside its window is released
+        immediately; dead identities across the whole table are swept on
+        a cadence, so one-shot identities cannot accumulate forever
+        without paying O(n) on every request.
         """
         max_calls, window = self._limits.get(action, (10**9, 60.0))
         now = time.time()
         key = (user_id or "anonymous", action)
         with self._lock:
-            queue = self._hits.setdefault(key, deque())
-            while queue and queue[0] <= now - window:
-                queue.popleft()
+            self._check_count += 1
+            if self._check_count % self._PRUNE_CADENCE == 0:
+                self._prune_locked(now)
+            queue = self._hits.get(key)
+            if queue is None:
+                queue = deque()
+                self._hits[key] = queue
+            else:
+                while queue and queue[0] <= now - window:
+                    queue.popleft()
+                if not queue:
+                    # Entire window idle: release the identity instead of
+                    # leaving an empty deque behind (O(1) local prune).
+                    del self._hits[key]
+                    queue = deque()
+                    self._hits[key] = queue
             if len(queue) >= max_calls:
                 retry = max(0.0, queue[0] + window - now) if queue else window
                 return RateLimitResult(
@@ -133,7 +155,6 @@ class MemoryRateLimiter(RateLimiter):
                     window=window,
                 )
             queue.append(now)
-            self._prune_locked(now)
             remaining = max(0, max_calls - len(queue))
             return RateLimitResult(allowed=True, limit=max_calls, remaining=remaining, window=window)
 

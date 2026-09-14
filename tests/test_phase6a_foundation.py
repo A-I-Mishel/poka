@@ -7,7 +7,6 @@ a request-scoped user (no LLM calls). No UI, no network.
 import json
 import os
 import sys
-import time
 
 import pytest
 
@@ -256,7 +255,6 @@ def test_brief_legacy_no_file(fenv):
 # -- artifact specs: cleaner ----------------------------------------------------
 
 def test_spec_cleaner_valid():
-    from services.storage import clean_generation_spec
 
     good = {"kind": "docx", "tool": "build_document",
             "input": {"title": "T", "markdown_text": "# Hi"},
@@ -268,7 +266,6 @@ def test_spec_cleaner_valid():
 
 
 def test_spec_cleaner_rejects():
-    from services.storage import clean_generation_spec
 
     base = {"kind": "docx", "tool": "build_document",
             "input": {"title": "T", "markdown_text": "M"}, "created": 1.0}

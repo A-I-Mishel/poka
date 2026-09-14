@@ -120,6 +120,21 @@ class AccountRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class SessionInfo(BaseModel):
+    created: float = 0.0
+    current: bool = False
+    agent: str = ""
+
+
+class SessionListResponse(BaseModel):
+    sessions: List[SessionInfo] = Field(default_factory=list)
+
+
 class SessionResponse(BaseModel):
     token: str
     username: str

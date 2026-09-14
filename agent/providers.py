@@ -18,10 +18,15 @@ from config import (
     get_tier2_llm,
     get_tier3_llm,
     get_tier_big_pickle_llm,
+    get_tier_cerebras_llm,
+    get_tier_github_models_llm,
     get_tier_groq_llm,
     get_tier_ling_llm,
     get_tier_mimo_llm,
+    get_tier_mistral_llm,
+    get_tier_nvidia_llm,
     get_tier_nemotron_ultra_llm,
+    get_tier_openrouter_free_router_llm,
     get_tier_openrouter_gemma26_llm,
     get_tier_openrouter_gemma_llm,
     get_tier_openrouter_inkling_llm,
@@ -42,8 +47,12 @@ TIER_AGENT_GETTERS: List[
     ("MiMo V2.5", get_tier_mimo_llm),  # type: ignore[arg-type]
     ("Ling 3.0 Flash", get_tier_ling_llm),  # type: ignore[arg-type]
     ("Groq", get_tier_groq_llm),  # type: ignore[arg-type]
+    ("Cerebras", get_tier_cerebras_llm),  # type: ignore[arg-type]
     ("Gemini 3.6 Flash", get_tier2_llm),  # type: ignore[arg-type]
     ("Gemini 3.5 Flash", get_tier3_llm),  # type: ignore[arg-type]
+    ("GitHub Models", get_tier_github_models_llm),  # type: ignore[arg-type]
+    ("Mistral", get_tier_mistral_llm),  # type: ignore[arg-type]
+    ("NVIDIA", get_tier_nvidia_llm),  # type: ignore[arg-type]
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),  # type: ignore[arg-type]
     ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),  # type: ignore[arg-type]
     ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),  # type: ignore[arg-type]
@@ -52,4 +61,5 @@ TIER_AGENT_GETTERS: List[
     ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),  # type: ignore[arg-type]
     ("OpenRouter Inkling Small", get_tier_openrouter_inkling_llm),  # type: ignore[arg-type]
     ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),  # type: ignore[arg-type]
+    ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),  # type: ignore[arg-type]
 ]

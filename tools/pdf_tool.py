@@ -76,16 +76,47 @@ def _ocr_image_bytes(blob: bytes) -> str:
         return ""
 
 
+def _vision_ocr_image_bytes(blob: bytes) -> str:
+    """Transcribe image bytes via a vision tier; "" when unusable (never raises)."""
+    try:
+        # Lazy: agent.* must not load at tools import time (import cycle
+        # via agent.toolrun -> tools -> agent.vision -> agent.cascade).
+        from agent.vision import vision_ocr_bytes
+
+        return vision_ocr_bytes(blob) or ""
+    except Exception:
+        return ""
+
+
+def _vision_ocr_configured() -> bool:
+    """True when a vision-capable tier builds a client (no network call)."""
+    try:
+        from agent.cascade import _usable_tiers
+        from services.vision import vision_supported_tier
+
+        for name, getter in _usable_tiers(None, None):
+            if not vision_supported_tier(name):
+                continue
+            try:
+                if getter() is not None:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
 def _ocr_scanned_pages(reader, total_pages: int) -> str:
     """OCR embedded page images of text-less pages (bounded, never raises).
 
     Scanned PDFs store each page as embedded raster images, extractable
     via pypdf without any PDF renderer or system package. Only pages
     with no native text are attempted, capped by MAX_OCR_PAGES.
-    Returns combined OCR text or "" when nothing usable is found.
+    Engine: on-device tesseract when available, otherwise the free
+    Gemini vision tier (verbatim transcription). Page labels name the
+    engine used. Returns combined OCR text or "" when nothing usable.
     """
-    if not _ocr_available():
-        return ""
     try:
         from services.limits import MAX_OCR_PAGES
     except Exception:
@@ -94,6 +125,7 @@ def _ocr_scanned_pages(reader, total_pages: int) -> str:
         pages = list(reader.pages[: min(int(MAX_OCR_PAGES or 5), int(total_pages or 0))])
     except Exception:
         return ""
+    on_device = _ocr_available()
     parts: List[str] = []
     for i, page in enumerate(pages):
         try:
@@ -110,11 +142,17 @@ def _ocr_scanned_pages(reader, total_pages: int) -> str:
                 data = getattr(img, "data", None)
                 if data is None:
                     continue
-                text = _ocr_image_bytes(bytes(data))
+                blob = bytes(data)
+                if on_device:
+                    text = _ocr_image_bytes(blob)
+                    label = f"[page {i + 1} OCR]"
+                else:
+                    text = _vision_ocr_image_bytes(blob)
+                    label = f"[page {i + 1} vision-OCR]"
             except Exception:
                 continue
             if text.strip():
-                parts.append(f"[page {i + 1} OCR]\n{text.strip()}")
+                parts.append(f"{label}\n{text.strip()}")
     return "\n".join(parts).strip()
 
 
@@ -175,27 +213,30 @@ def read_pdf(upload_id: str) -> str:
                 ocr_text = _ocr_scanned_pages(reader, total_pages)
                 if ocr_text.strip():
                     combined = ocr_text.strip()
-                    ocr_note = ("\n[Note: text extracted via on-device OCR "
+                    engine = "on-device OCR" if _ocr_available() else "vision-model OCR"
+                    ocr_note = (f"\n[Note: text extracted via {engine} "
                                 "from scanned pages — may contain errors.]")
                     if len(combined) > MAX_PDF_CHARS:
                         combined = combined[:MAX_PDF_CHARS]
                         ocr_note += " [Note: text truncated due to length.]"
                     return combined + ocr_note + notes
                 if _pytesseract_importable() and not _tesseract_binary_present():
-                    return (
-                        "STATUS=EMPTY tool=read_pdf: this PDF appears to be scanned "
-                        f"images ({total_pages} pages, no extractable text). "
-                        "The OCR library is installed but the `tesseract` binary "
-                        "is missing on this host, so on-device OCR cannot run. "
-                        "On a Gemini vision tier, export the pages as PNG/JPG "
-                        "and re-upload them for vision reading." + notes
-                    )
+                    why = ("The OCR library is installed but the `tesseract` "
+                           "binary is missing on this host, so on-device OCR "
+                           "cannot run. ")
+                else:
+                    why = "No on-device OCR engine in this deployment. "
+                if _vision_ocr_configured():
+                    why += ("Vision-model OCR was attempted automatically but "
+                            "returned no text (vision tiers may be cooling "
+                            "down or rate-limited). ")
+                else:
+                    why += ("Configure a Gemini vision tier to enable "
+                            "automatic vision-model OCR for scanned pages. ")
                 return (
                     "STATUS=EMPTY tool=read_pdf: this PDF appears to be scanned "
                     f"images ({total_pages} pages, no extractable text). "
-                    "No OCR engine in this deployment. On a Gemini vision "
-                    "tier, export the pages as PNG/JPG and re-upload them "
-                    "for vision reading." + notes
+                    + why + notes
                 )
             return "STATUS=EMPTY tool=read_pdf: no extractable text." + notes
         return text + notes

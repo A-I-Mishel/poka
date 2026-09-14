@@ -29,8 +29,10 @@ async def upload(file: UploadFile = File(...),
             detail=f"Upload rate limit exceeded, retry in {verdict.retry_after:.0f}s.",
             headers=rate_limit_headers(verdict, "upload"),
         )
-    # Streamed read — never buffer more than MAX_UPLOAD_BYTES, chunk by chunk
-    # to avoid 200 MB × concurrency OOM (previous await file.read() did).
+    # Streamed read into a disk-spooled temp file: at most 1 MiB stays
+    # in RAM per request while receiving; the full bytes are materialized
+    # once for validation/storage (MAX_UPLOAD_BYTES bound). Previous
+    # list-of-chunks + b"".join held ~2x the file in RAM at peak.
     from services.limits import MAX_UPLOAD_BYTES
 
     # Early reject if client advertised a too-large Content-Length
@@ -47,22 +49,23 @@ async def upload(file: UploadFile = File(...),
     except Exception:
         pass
     try:
-        chunks: list[bytes] = []
+        import tempfile
+
         total = 0
-        while True:
-            chunk = await file.read(1024 * 1024)  # 1 MB chunks
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > MAX_UPLOAD_BYTES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"File too large. Maximum is {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
-                )
-            chunks.append(chunk)
-            # Guard concurrent huge uploads — don't let one request hold >200 MB in RAM
-            # via many chunks; already bounded by total above.
-        data: bytes = b"".join(chunks) if len(chunks) > 1 else (chunks[0] if chunks else b"")
+        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024) as spool:
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1 MB chunks
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"File too large. Maximum is {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
+                    )
+                spool.write(chunk)
+            spool.seek(0)
+            data: bytes = spool.read()
         if not data:
             # Let FileStore validate empty file with its user-safe message
             pass
@@ -114,7 +117,12 @@ def list_uploads(ctx: UserContext = Depends(current_user)):
 
 @router.get("/{upload_id}/file")
 def download_upload(upload_id: str, ctx: UserContext = Depends(current_user)):
-    """Download raw bytes of an owned upload (images render from here)."""
+    """Download raw bytes of an owned upload (images render from here).
+
+    Active content (HTML/SVG/XML/JS) is forced to download as an
+    attachment with nosniff + sandbox so it can never execute in the
+    UI origin (stored-XSS guard — see backend/main security headers).
+    """
     try:
         meta = ctx.file_store.get_upload(upload_id)
     except (StorageError, FileValidationError):
@@ -132,7 +140,24 @@ def download_upload(upload_id: str, ctx: UserContext = Depends(current_user)):
     if path is None:
         raise HTTPException(status_code=404, detail="Upload file is unavailable.")
     name = str(getattr(meta, "display_name", "file") or "file")
-    return FileResponse(str(path), filename=name)
+    lowered = name.lower()
+    media_type: str | None = None
+    # Force inert bytes for types browsers would otherwise render +
+    # execute (html/svg/xml/xhtml). Images/PDFs keep their type so
+    # <img>/preview still works, but disposition stays attachment-safe
+    # below with nosniff + sandbox.
+    if lowered.endswith((".html", ".htm", ".xhtml", ".shtml", ".svg", ".xml")):
+        media_type = "application/octet-stream"
+    return FileResponse(
+        str(path),
+        filename=name,
+        media_type=media_type,
+        content_disposition_type="attachment",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+        },
+    )
 
 
 @router.delete("/{upload_id}")

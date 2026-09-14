@@ -34,12 +34,20 @@ from services.identity import AuthRequired, UserIdentity
 from services.limits import STORAGE_HYGIENE_INTERVAL_SECONDS
 from services.memory import set_memory_dir
 from services.ratelimit import extract_client_ip, limit_key_for
-from services.storage import StorageError, UserStore
+from services.storage import UserStore
 
 # Client-minted visitor ids (open mode only): strict shape so the
 # header can never smuggle paths or collide with id namespaces by
 # accident. Anything else falls back to a per-request ephemeral id.
-_VISITOR_RE = re.compile(r"^[A-Za-z0-9_.-]{8,64}$")
+# Raw ids are capped at 56 chars so the namespaced vault id
+# ("visitor-<raw>") stays within the 64-char storage bound without
+# truncation collisions.
+_VISITOR_RE = re.compile(r"^[A-Za-z0-9_.-]{8,56}$")
+
+# Prefix isolating visitor vaults from stable namespaces (env ids,
+# "token-<hex>", "acct-<hex>"). Without it a visitor could set
+# X-Pluto-Visitor to another user's account id and read their vault.
+_VISITOR_PREFIX = "visitor-"
 
 # Storage-hygiene throttle: last run per user id (per process). The pass
 # itself is cheap (one chats JSON + two registries) but pointless more
@@ -122,6 +130,15 @@ def _visitor_id(raw: Optional[str]) -> Optional[str]:
     return text or None
 
 
+def visitor_vault_id(raw_visitor: str) -> str:
+    """Namespace a raw visitor id into its vault id (never collides).
+
+    Raw header values are client-minted bearer secrets; the vault id
+    is always prefixed so it can never equal an env/token/account id.
+    """
+    return f"{_VISITOR_PREFIX}{raw_visitor}"
+
+
 @dataclass
 class UserContext:
     """Everything a request needs, bound to the calling thread."""
@@ -162,11 +179,13 @@ async def current_user(
         # via its visitor id instead of a fresh random id per request
         # (which orphaned every chat on the very next refresh).
         # Private mode never reaches here without a credential (401
-        # above), so the header cannot bypass it.
+        # above), so the header cannot bypass it. The vault id is
+        # namespaced ("visitor-<raw>") so a visitor can never squat on
+        # an env/token/account vault by guessing its id.
         visitor = _visitor_id(x_pluto_visitor)
         if visitor is not None:
             result = AuthResult(
-                identity=UserIdentity(id=visitor, email=None, source="ephemeral"),
+                identity=UserIdentity(id=visitor_vault_id(visitor), email=None, source="ephemeral"),
                 authenticated=False,
                 method="ephemeral",
             )

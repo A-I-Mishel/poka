@@ -91,7 +91,6 @@ def validate_workflow(
     names; None skips that check (shape-only validation).
     """
     from services.limits import (
-        MAX_WORKFLOW_ARG_CHARS,
         MAX_WORKFLOW_DESC_CHARS,
         MAX_WORKFLOW_NAME_CHARS,
         MAX_WORKFLOW_STEPS,

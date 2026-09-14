@@ -93,6 +93,37 @@ def cosine(a: Any, b: Any) -> float:
     return dot / ((na ** 0.5) * (nb ** 0.5))
 
 
+def _l2_normalize(vec: Any) -> List[float]:
+    """L2-normalize a vector; input list (unmodified) for zero/empty (never raises)."""
+    try:
+        f = [float(x) for x in (vec or [])]
+    except (TypeError, ValueError):
+        return []
+    if not f:
+        return []
+    norm = sum(x * x for x in f) ** 0.5
+    if norm <= 0:
+        return f
+    return [x / norm for x in f]
+
+
+def _dot(a: Any, b: Any) -> float:
+    """Dot product over same-length vectors; 0.0 on mismatch (never raises).
+
+    Valid score only when both inputs are L2-normalized (see _l2_normalize);
+    ingest stores normalized vectors so the search hot loop skips the two
+    per-chunk norm computations of cosine().
+    """
+    try:
+        fa = [float(x) for x in (a or [])]
+        fb = [float(x) for x in (b or [])]
+    except (TypeError, ValueError):
+        return 0.0
+    if not fa or len(fa) != len(fb):
+        return 0.0
+    return sum(x * y for x, y in zip(fa, fb))
+
+
 def _blank_kb() -> Dict[str, Any]:
     return {"version": 1, "model": "", "docs": {}}
 
@@ -609,13 +640,21 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
     chunks = chunk_text(text)[:KB_MAX_CHUNKS_PER_DOC]
     if not chunks:
         return {"ingested": False, "chunks": 0, "reason": "empty"}
-    # Growth guard (checked BEFORE spending embedding quota): fail open
-    # to no cap when the vault is unreadable — the store step below
-    # still reports store-failed honestly.
+    # Growth + embedding-model guard (checked BEFORE spending embedding
+    # quota): fail open to no cap when the vault is unreadable — the
+    # store step below still reports store-failed honestly. Mixing
+    # chunks from two embedding models would silently orphan the old
+    # ones (dim mismatch score 0), so refuse clearly instead.
     try:
-        existing = load_kb(user_id).get("docs") or {}
+        kb_now = load_kb(user_id)
+        existing = kb_now.get("docs") or {}
         if not isinstance(existing, dict):
             existing = {}
+        cur_model = kb_embeddings.default_model()
+        vault_model = str(kb_now.get("model") or "")
+        if vault_model and vault_model != cur_model:
+            obs_event("kb.ingest_error", reason="embed-model-changed")
+            return {"ingested": False, "chunks": 0, "reason": "embed-model-changed"}
         if uid not in existing and len(existing) >= KB_MAX_DOCS_PER_USER:
             obs_event("kb.ingest_error", reason="kb-full")
             return {"ingested": False, "chunks": 0, "reason": "kb-full"}
@@ -639,6 +678,12 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
         obs_event("kb.ingest_error", reason="embed-count-mismatch")
         return {"ingested": False, "chunks": 0, "reason": "embed-count-mismatch"}
     dim = len(vectors[0]) if vectors else 0
+    if dim <= 0 or any(len(v) != dim for v in vectors):
+        obs_event("kb.ingest_error", reason="embed-dim-mismatch")
+        return {"ingested": False, "chunks": 0, "reason": "embed-dim-mismatch"}
+    # Store L2-normalized vectors so search becomes a plain dot product
+    # (old vaults without "normalized" still fall back to cosine()).
+    stored_vectors: List[List[float]] = [_l2_normalize(v) for v in vectors]
     try:
         kb = load_kb(user_id)
         docs = kb.get("docs")
@@ -648,8 +693,9 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
             "name": str(display_name or "file"),
             "model": kb_embeddings.default_model(),
             "dim": dim,
+            "normalized": True,
             "ingested_at": time.time(),
-            "chunks": [{"text": c, "vector": v} for c, v in zip(chunks, vectors)],
+            "chunks": [{"text": c, "vector": v} for c, v in zip(chunks, stored_vectors)],
         }
         kb["model"] = kb_embeddings.default_model()
         _save_kb(user_id, kb)
@@ -659,6 +705,42 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
     return {"ingested": True, "chunks": len(chunks), "reason": ""}
 
 
+def _lexical_search(docs: Dict[str, Any], query: str, valid_ids: Optional[set] = None) -> List[Dict[str, Any]]:
+    """Term-overlap fallback when embeddings are unavailable (never raises).
+
+    Labeled plainly: this is lexical (keyword) retrieval, not semantic;
+    it lets KB search degrade to useful results during a Gemini 429
+    window instead of returning nothing.
+    """
+    import re as _re
+
+    tokens = set(_re.findall(r"[a-z0-9]+", query.lower()))
+    if not tokens:
+        return []
+    scored: List[Dict[str, Any]] = []
+    for uid, doc in docs.items():
+        if not isinstance(doc, dict):
+            continue
+        if valid_ids is not None and uid not in valid_ids:
+            continue
+        name = str(doc.get("name") or "document")
+        for idx, ch in enumerate(doc.get("chunks") or []):
+            if not isinstance(ch, dict):
+                continue
+            text = str(ch.get("text") or "")
+            overlap = len(tokens & set(_re.findall(r"[a-z0-9]+", text.lower())))
+            if overlap <= 0:
+                continue
+            scored.append({
+                "upload_id": uid,
+                "name": name,
+                "chunk": idx,
+                "text": text,
+                "score": round(float(overlap), 4),
+            })
+    return scored
+
+
 def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
            valid_ids: Optional[set] = None) -> List[Dict[str, Any]]:
     """Vector search over a user's documents (never raises; [] when unusable).
@@ -666,6 +748,8 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
     valid_ids optionally restricts to currently existing uploads, so
     pruned documents stop matching without any delete hook.
     Returns [{upload_id, name, chunk, text, score}] sorted by score desc.
+    Re-scoring embeddings hitting a rate limit degrades to lexical
+    term-overlap search (emits obs metadata), never an empty failure.
     """
     q = str(query or "").strip()
     if not q:
@@ -673,21 +757,32 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
     try:
         kb = load_kb(user_id)
         docs = kb.get("docs") or {}
+        if not isinstance(docs, dict):
+            docs = {}
+    except Exception as e:
+        obs_event("kb.search_error", reason="load", detail=str(e)[:120])
+        return []
+    qv: List[float] = []
+    try:
         qvecs = kb_embeddings.embed_texts([q])
-        if not qvecs:
-            return []
-        qv = qvecs[0]
+        if qvecs:
+            qv = _l2_normalize(qvecs[0])
+    except Exception as e:
+        obs_event("kb.search_error", reason="embed", detail=str(e)[:120])
+    if qv:
         scored: List[Dict[str, Any]] = []
         for uid, doc in docs.items():
             if not isinstance(doc, dict):
                 continue
             if valid_ids is not None and uid not in valid_ids:
                 continue
+            normalized = bool(doc.get("normalized"))
             name = str(doc.get("name") or "document")
             for idx, ch in enumerate(doc.get("chunks") or []):
                 if not isinstance(ch, dict):
                     continue
-                s = cosine(qv, ch.get("vector") or [])
+                vec = ch.get("vector") or []
+                s = _dot(qv, vec) if normalized else cosine(qv, vec)
                 if s <= 0:
                     continue
                 scored.append({
@@ -697,10 +792,10 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
                     "text": str(ch.get("text") or ""),
                     "score": round(s, 4),
                 })
-        scored.sort(key=lambda r: r["score"], reverse=True)
-        return scored[:max(1, int(top_k or KB_TOP_K))]
-    except Exception:
-        return []
+    else:
+        scored = _lexical_search(docs, q, valid_ids)
+    scored.sort(key=lambda r: r["score"], reverse=True)
+    return scored[:max(1, int(top_k or KB_TOP_K))]
 
 
 def drop_document(user_id: Any, upload_id: Any) -> bool:

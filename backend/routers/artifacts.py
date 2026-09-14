@@ -69,11 +69,18 @@ def download_artifact(artifact_id: str, ctx: UserContext = Depends(current_user)
     elif lowered.endswith(".doc"):
         media = "application/msword"
     elif lowered.endswith((".html", ".htm")):
-        media = "text/html"
+        # Generated HTML pages are downloadable artifacts: force inert
+        # bytes so opening the link downloads instead of executing
+        # script in the API/UI origin.
+        media = "application/octet-stream"
     return Response(
         content=data,
         media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+        },
     )
 
 

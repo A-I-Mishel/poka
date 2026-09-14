@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 
 from services.vision import (
     build_vision_messages,
+    encode_image_bytes,
     prepare_image_data_url,
     resolve_local_image,
     vision_supported_tier,
@@ -27,6 +28,50 @@ from agent.executor import TokenStream
 from agent.prompts import _as_text, strip_internal_reasoning
 
 logger = logging.getLogger(__name__)
+
+
+def vision_ocr_bytes(blob: bytes) -> str:
+    """Transcribe image bytes via a vision-capable tier ("" when unusable).
+
+    OCR fallback for scanned PDFs when no on-device engine exists: the
+    page raster is sent to a vision tier with a verbatim-transcription
+    prompt. The caller bounds the page count (MAX_OCR_PAGES); this helper
+    makes at most one model call per invocation. Returns "" when no
+    vision tier is configured or every attempt fails — never raises, so
+    tools degrade to an honest STATUS=EMPTY instead of failing.
+    """
+    try:
+        url, _err = encode_image_bytes(blob)
+        if not url:
+            return ""
+        prompt = (
+            vision_trust_preamble()
+            + "\n\nTranscribe ALL visible text in this image verbatim. "
+            "Return only the transcription, no commentary."
+        )
+        payload = build_vision_messages(prompt, [url])
+        for name, getter in _usable_tiers(None, None):
+            if not vision_supported_tier(name):
+                continue
+            try:
+                llm_instance = getter()
+            except Exception:
+                continue
+            if llm_instance is None:
+                continue
+            try:
+                response = agent._invoke_bounded(
+                    llm_instance, [HumanMessage(content=payload)], budget=None)
+                text = strip_internal_reasoning(_as_text(response.content).strip())
+                if text:
+                    logger.info("tier=%s vision-ocr ok (%d chars)", name, len(text))
+                    return text
+            except Exception as e:
+                logger.info("tier=%s vision-ocr failed: %s", name, e)
+                continue
+    except Exception:
+        return ""
+    return ""
 
 
 def _try_vision_answer(

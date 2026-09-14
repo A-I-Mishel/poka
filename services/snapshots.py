@@ -43,7 +43,6 @@ import io
 import logging
 import os
 import tarfile
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -173,6 +172,30 @@ def _local_data_present(root: Optional[Path] = None) -> bool:
         return False
 
 
+def _local_data_partial(root: Optional[Path] = None) -> bool:
+    """True when the auth registry survived but its user data vanished.
+
+    The unambiguous partial-wipe signal: `accounts.json` still exists but
+    says users should be here, while data/users/ is missing or empty. The
+    inverse (users present, no accounts.json) is the *normal* open-mode
+    layout, so it is never treated as partial — otherwise open-mode
+    installs could never upload a snapshot.
+    """
+    base = root or _data_root()
+    try:
+        if not (base / "accounts.json").exists():
+            return False
+        users = base / "users"
+        if not users.is_dir():
+            return True
+        try:
+            return not any(users.iterdir())
+        except OSError:
+            return True
+    except OSError:
+        return False
+
+
 def _iter_data_files(root: Path) -> List[Tuple[str, Path]]:
     """Sorted (relpath, path) for every file, skipping in-flight tmp files."""
     found: List[Tuple[str, Path]] = []
@@ -271,10 +294,10 @@ def _upload_now(client: Any = None, force: bool = False) -> bool:
         if cfg is None:
             return False
         root = _data_root()
-        if not force and not _local_data_present(root):
+        if not force and (not _local_data_present(root) or _local_data_partial(root)):
             with _lock:
                 _dirty = False
-            return False  # never overwrite a good remote copy with nothing
+            return False  # never overwrite a good remote with an empty or half-wiped disk
         fp = _fingerprint(root)
         with _lock:
             if not force and fp == _last_fingerprint:
@@ -377,13 +400,13 @@ def _download_now(client: Any = None) -> Optional[bytes]:
 
 
 def maybe_restore(client: Any = None) -> bool:
-    """Restore data/ from R2 when the local disk is empty. Never raises."""
+    """Restore data/ from R2 when the local disk is empty or half-wiped. Never raises."""
     try:
         if not configured():
             return False
         root = _data_root()
-        if _local_data_present(root):
-            return False  # local data wins; never clobber
+        if _local_data_present(root) and not _local_data_partial(root):
+            return False  # full local data wins; never clobber
         payload = _download_now(client)
         if not payload:
             return False

@@ -41,15 +41,26 @@ def client(tmp_path, monkeypatch):
 
 
 def test_visitor_id_shapes():
+    from backend.deps import visitor_vault_id
     assert _visitor_id("a1b2c3d4e5f60718293a4b5c6d7e8f90") is not None
     assert _visitor_id("  a1b2c3d4  ") == "a1b2c3d4"
     assert _visitor_id("") is None
     assert _visitor_id(None) is None
     assert _visitor_id("short") is None
-    assert _visitor_id("x" * 65) is None
+    assert _visitor_id("x" * 57) is None
     assert _visitor_id("../escape") is None
     assert _visitor_id("a/b") is None
     assert _visitor_id("semi;colon") is None
+    # Namespacing prevents squatting on stable vault ids.
+    assert visitor_vault_id("browser111") == "visitor-browser111"
+    assert not visitor_vault_id("acct-abc123").startswith("acct-")
+
+
+def test_visitor_cannot_squat_account_vault(client):
+    # Even when the raw header equals an account-style id, the vault
+    # id is namespaced away from it.
+    from backend.deps import visitor_vault_id
+    assert visitor_vault_id("acct-abc123") != "acct-abc123"
 
 
 def test_same_visitor_shares_vault(client):
@@ -61,7 +72,7 @@ def test_same_visitor_shares_vault(client):
     assert again.status_code == 200, again.text
     assert again.json() == {"text": "visitor note"}
     me = client.get("/api/auth/me", headers=headers)
-    assert me.json()["user_id"] == "browser111222333444"
+    assert me.json()["user_id"] == "visitor-browser111222333444"
     assert me.json()["source"] == "ephemeral"
 
 

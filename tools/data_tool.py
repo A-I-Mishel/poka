@@ -1,12 +1,15 @@
 ﻿from langchain_core.tools import tool
 import csv
 import io
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, TYPE_CHECKING
 
 from services.context import get_current_user_id
 from services.files import FileStore
 from services.limits import MAX_CSV_COLUMNS, MAX_CSV_PARSE_BYTES, MAX_CSV_ROWS, MAX_UPLOAD_BYTES
 from services.obs import timed as obs_timed
+
+if TYPE_CHECKING:  # pandas is imported lazily inside _load_csv_frame
+    import pandas as pd
 
 _CSV_SNIFF_BYTES: int = 65536
 

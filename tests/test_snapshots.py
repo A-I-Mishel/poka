@@ -205,6 +205,55 @@ def test_restore_never_clobbers_local_data(tmp_path, monkeypatch):
     assert (root / "accounts.json").read_text(encoding="utf-8") == '{"users": {"local": 1}}'
 
 
+def test_restore_repairs_partial_wipe(tmp_path, monkeypatch):
+    _configure(monkeypatch)
+    fake = FakeS3()
+    monkeypatch.setattr(snap, "_get_client", lambda: fake)
+    root = tmp_path / "data"
+    _seed_data(root)
+    assert snap._upload_now() is True
+
+    # Half-wipe: the auth registry survived, user data vanished.
+    import shutil
+
+    shutil.rmtree(root / "users")
+    assert snap._local_data_partial() is True
+    assert snap._local_data_present() is True
+
+    assert snap.maybe_restore() is True
+    assert (root / "users" / "alice" / "chats.json").exists()
+
+
+def test_partial_wipe_skips_upload(tmp_path, monkeypatch):
+    """Half-wiped local must never be pushed over a good remote snapshot."""
+    _configure(monkeypatch)
+    fake = FakeS3()
+    monkeypatch.setattr(snap, "_get_client", lambda: fake)
+    root = tmp_path / "data"
+    _seed_data(root)
+    assert snap._upload_now() is True
+
+    # Half-wipe: push must be suppressed (good remote preserved).
+    import shutil
+
+    shutil.rmtree(root / "users")
+    assert snap._local_data_partial() is True
+    (root / "data.log").write_text("new", encoding="utf-8")
+    snap.notify()
+    assert snap._upload_now() is False
+    assert fake.puts == 1
+
+
+def test_open_mode_layout_is_not_partial(tmp_path):
+    """users/ without accounts.json is the normal open-mode layout."""
+    root = tmp_path / "data"
+    chats = root / "users" / "guest" / "chats.json"
+    chats.parent.mkdir(parents=True)
+    chats.write_text('{"chats": []}', encoding="utf-8")
+    assert snap._local_data_partial() is False
+    assert snap._local_data_present() is True
+
+
 def test_restore_with_no_remote_snapshot_is_quiet(tmp_path, monkeypatch):
     _configure(monkeypatch)
     fake = FakeS3()  # empty bucket

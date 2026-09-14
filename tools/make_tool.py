@@ -301,7 +301,7 @@ def _build_pdf(title: str, blocks: List[Tuple[str, Any]]) -> bytes:
 
     objects: Dict[int, bytes] = {}
     kids = " ".join(f"{n} 0 R" for n in page_obj_nums)
-    objects[1] = f"<< /Type /Catalog /Pages 2 0 R >>".encode("latin-1")
+    objects[1] = "<< /Type /Catalog /Pages 2 0 R >>".encode("latin-1")
     objects[2] = f"<< /Type /Pages /Kids [{kids}] /Count {n_pages} >>".encode("latin-1")
     for fnum, base in zip(font_obj_nums, basefonts):
         objects[fnum] = (f"<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>").encode("latin-1")

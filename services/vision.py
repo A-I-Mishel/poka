@@ -84,6 +84,44 @@ def prepare_image_data_url(upload_id: str) -> Tuple[Optional[str], Optional[str]
         return None, f"STATUS=FAILED vision: cannot decode image ({str(e)[:120]})."
 
 
+def encode_image_bytes(blob: bytes) -> Tuple[Optional[str], Optional[str]]:
+    """Validate raw image bytes and return (data_url, None) or (None, error).
+
+    Same bounds as prepare_image_data_url (pixel gate before decode,
+    RGB + thumbnail + JPEG re-encode) but without any vault ownership
+    check — for in-memory images such as PDF-embedded page rasters used
+    by the vision-OCR fallback. Never raises.
+    """
+    raw = bytes(blob or b"")
+    if not raw:
+        return None, "STATUS=INVALID vision: empty image bytes."
+    if len(raw) > VISION_MAX_BYTES:
+        return None, (
+            "STATUS=DENIED vision: image is "
+            f"{len(raw)} bytes, limit is {VISION_MAX_BYTES} bytes."
+        )
+    try:
+        from PIL import Image
+    except Exception:
+        return None, "STATUS=FAILED vision: image processing unavailable in this deployment."
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            pixels = img.width * img.height
+            if pixels > VISION_MAX_PIXELS:
+                return None, (
+                    "STATUS=DENIED vision: image dimensions too large "
+                    f"({img.width}x{img.height})."
+                )
+            img = img.convert("RGB")
+            img.thumbnail((VISION_MAX_DIM, VISION_MAX_DIM))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}", None
+    except Exception as e:
+        return None, f"STATUS=FAILED vision: cannot decode image ({str(e)[:120]})."
+
+
 def build_vision_messages(prompt: str, data_urls: List[str]) -> List[Dict[str, Any]]:
     """Build a multimodal HumanMessage payload (text + image blocks)."""
     parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]

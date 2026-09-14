@@ -32,6 +32,9 @@ function apiUrl(path) { return API_BASE + path; }
 /* ---------- token (localStorage, legacy migration) ---------- */
 var TOKEN_KEY = "pluto_token";
 var LEGACY_TOKEN_KEY = "poka_token";
+/* Backend message cap (POST /api/chat schema): long edits get a friendly
+ * warning instead of a silent 422, and the textarea stays open (no loss). */
+var MAX_MSG_CHARS = 20000;
 function getToken() {
   try {
     var t = localStorage.getItem(TOKEN_KEY) || "";
@@ -64,12 +67,14 @@ function authHeaders() {
  * Without this, open-mode requests without a token each mint a fresh
  * server-side id, so chats saved by one request are unreadable by the
  * next and the conversation vanishes after every reply. Accounts still
- * win whenever a Bearer token is present. */
+ * win whenever a Bearer token is present. The raw id is 128-bit and
+ * the server namespaces it ("visitor-<raw>") so it can never collide
+ * with account/token vaults. */
 var VISITOR_KEY = "pluto_visitor";
 function getVisitor() {
   try {
     var v = localStorage.getItem(VISITOR_KEY) || "";
-    if (!/^[A-Za-z0-9_.-]{8,64}$/.test(v)) {
+    if (!/^[A-Za-z0-9_.-]{8,56}$/.test(v)) {
       var bytes = null;
       try {
         bytes = (window.crypto && window.crypto.getRandomValues)
@@ -80,7 +85,12 @@ function getVisitor() {
           return ("0" + b.toString(16)).slice(-2);
         }).join("");
       } else {
-        v = "v" + Date.now().toString(36) + Math.floor(Math.random() * 1e9).toString(36);
+        // No WebCrypto: 128 bits from Math.random (weak but correctly
+        // shaped; replaced by a crypto id on next load when available).
+        v = "";
+        for (var i = 0; i < 32; i++) {
+          v += Math.floor(Math.random() * 16).toString(16);
+        }
       }
       localStorage.setItem(VISITOR_KEY, v);
     }
@@ -159,6 +169,7 @@ function showAuth(title) {
   $("authTitle").textContent = title || "Log in to Pluto";
   $("authErr").classList.add("hidden");
   $("authErr").textContent = "";
+  $("authHint").textContent = "";
   $("authDlg").classList.remove("hidden");
   setTimeout(function () { $("authUser").focus(); }, 30);
 }
@@ -188,6 +199,25 @@ async function authSubmit(path) {
   var p = $("authPass").value;
   var err = $("authErr");
   err.classList.add("hidden");
+  if (!/^[A-Za-z0-9_.-]{3,32}$/.test(u)) {
+    err.textContent = "Username must be 3-32 characters: letters, digits, _, ., -.";
+    err.classList.remove("hidden");
+    return;
+  }
+  if (p.length < 8) {
+    err.textContent = "Password must be at least 8 characters.";
+    err.classList.remove("hidden");
+    return;
+  }
+  if (path.indexOf("signup") > -1) {
+    var hint = pwHint(p, u);
+    if (hint) {
+      err.textContent = hint;
+      err.classList.remove("hidden");
+      return;
+    }
+  }
+  err.classList.add("hidden");
   try {
     var out = await authCall(path, { username: u, password: p });
     setToken(out.token);
@@ -216,6 +246,107 @@ async function signOut() {
   toast("Signed out");
   try { await refreshProjects(); } catch (e) {}
   try { await refreshChats(); } catch (e) {}
+}
+
+/* ---------- password strength hint (mirrors services/accounts rules) ---------- */
+function pwHint(p, u) {
+  p = String(p || "");
+  u = String(u || "").trim().toLowerCase();
+  if (!p) return "";
+  if (p.length < 8) return "Password needs at least 8 characters.";
+  if (u && (p.toLowerCase() === u || p.toLowerCase().indexOf(u) > -1)) {
+    return "Password must not contain your username.";
+  }
+  var classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(function (re) {
+    return re.test(p);
+  }).length;
+  if (classes < 3) return "Weak — mix 3 of: a-z, A-Z, 0-9, symbols.";
+  return "";
+}
+
+/* ---------- account dialog (sessions + change password) ---------- */
+function openAcct() {
+  if (!ACCT.username) { showAuth("Log in to Pluto"); return; }
+  $("acctName").textContent = "Signed in as " + ACCT.username;
+  $("acctCur").value = "";
+  $("acctNew").value = "";
+  $("acctConfirm").value = "";
+  $("acctPassErr").classList.add("hidden");
+  $("acctPassErr").textContent = "";
+  $("acctSessions").textContent = "Loading…";
+  $("acctDlg").classList.remove("hidden");
+  setTimeout(function () { $("acctClose").focus(); }, 30);
+  loadSessions();
+}
+function hideAcct() {
+  $("acctDlg").classList.add("hidden");
+  $("acctCur").value = "";
+  $("acctNew").value = "";
+  $("acctConfirm").value = "";
+}
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+async function loadSessions() {
+  var box = $("acctSessions");
+  try {
+    var res = await fetch(apiUrl("/api/auth/sessions"), { headers: authHeaders() });
+    if (!res.ok) throw new Error(res.statusText);
+    var data = await res.json();
+    var list = (data && data.sessions) || [];
+    if (!list.length) { box.textContent = "No active sessions."; return; }
+    box.innerHTML = list.map(function (s) {
+      var when = "";
+      try { when = new Date(s.created * 1000).toLocaleString(); } catch (e) { when = ""; }
+      var dev = s.agent ? escHtml(s.agent) : "Unknown device";
+      return "<div>" + (s.current ? '<span class="now">This device</span> · ' : "")
+        + escHtml(when) + " · " + dev + "</div>";
+    }).join("");
+  } catch (e) {
+    box.textContent = "Could not load sessions.";
+  }
+}
+async function submitPasswordChange() {
+  var cur = $("acctCur").value;
+  var nw = $("acctNew").value;
+  var cf = $("acctConfirm").value;
+  var err = $("acctPassErr");
+  err.classList.add("hidden");
+  if (!cur) { err.textContent = "Enter your current password."; err.classList.remove("hidden"); return; }
+  if (nw !== cf) { err.textContent = "New passwords do not match."; err.classList.remove("hidden"); return; }
+  var hint = pwHint(nw, ACCT.username);
+  if (hint) { err.textContent = hint; err.classList.remove("hidden"); return; }
+  try {
+    var res = await fetch(apiUrl("/api/auth/change-password"), {
+      method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      body: JSON.stringify({ current_password: cur, new_password: nw })
+    });
+    if (!res.ok) {
+      var detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch (e) {}
+      throw new Error(detail);
+    }
+    var out = await res.json();
+    setToken(out.token);
+    hideAcct();
+    toast("Password changed — other devices signed out");
+  } catch (e) {
+    err.textContent = String((e && e.message) || "Could not change password.");
+    err.classList.remove("hidden");
+  }
+}
+async function signOutEverywhere() {
+  try {
+    await req("/api/auth/logout-all", { method: "POST", body: "{}" });
+  } catch (e) {
+    toast("Could not sign out everywhere: " + e.message);
+    return;
+  }
+  hideAcct();
+  await signOut();
 }
 
 /* ---------- generic dialog (promise form) ---------- */
@@ -364,6 +495,7 @@ function fmtSize(b) {
 function toast(msg) {
   var t = document.createElement("div");
   t.className = "toast";
+  t.setAttribute("role", "status");
   t.textContent = msg;
   $("toasts").appendChild(t);
   setTimeout(function () { t.style.opacity = "0"; t.style.transition = "opacity .3s"; }, 2200);
@@ -395,14 +527,47 @@ function artIcon(kind) {
 /* ---------- markdown (message content only, always escaped first) ---------- */
 function md(t) {
   var s = esc(t);
-  s = s.replace(/```([\s\S]*?)```/g, function (m, c) {
-    return "<pre><code>" + c.replace(/^\n|\n$/g, "") + "</code></pre>";
+  var stash = [];
+  function hold(html) { var k = "\u0001" + stash.length + "\u0001"; stash.push(html); return k; }
+  /* fenced code: language hint becomes a class; content stays verbatim */
+  s = s.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, function (m, lang, c) {
+    var cls = lang ? ' class="lang-' + String(lang).replace(/[^\w-]/g, "") + '"' : "";
+    return hold("<pre><code" + cls + ">" + c.replace(/\n$/, "") + "</code></pre>");
   });
-  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-  s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  /* inline code — stashed so later passes never touch code contents */
+  s = s.replace(/`([^`\n]+)`/g, function (m, c) { return hold("<code>" + c + "</code>"); });
+  /* links: only https/http/mailto; target=_blank + noopener */
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\]"'<>]+|mailto:[^\s)\]"'<>]+)\)/g,
+    function (m, txt, url) {
+      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + txt + "</a>";
+    });
+  /* bare URLs autolink (after links so already-built hrefs are untouched) */
+  s = s.replace(/(^|[\s(\[])(https?:\/\/[^\s)\]"'<>]+)/g,
+    function (m, pre, url) {
+      return pre + '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + "</a>";
+    });
+  /* headings (longest first so #### stays a 4th-level heading) */
+  s = s.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
+  s = s.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
+  s = s.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
+  s = s.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
+  s = s.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
+  s = s.replace(/^#\s+(.+)$/gm, "<h2>$1</h2>");
+  /* inline emphasis */
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  s = s.replace(/~~([^~\n]+)~~/g, "<s>$1</s>");
+  s = s.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,;:!?)])/g, "$1<em>$2</em>");
+  /* block-level pass: paragraphs, and lists (only when a chunk is a list) */
   return s.split(/\n{2,}/).map(function (p) {
-    return p.indexOf("<pre") === 0 ? p : "<p>" + p.replace(/\n/g, "<br>") + "</p>";
-  }).join("");
+    if (/^\u0001\d+\u0001$/.test(p)) return p; // stashed code block — restored below
+    if (/^\s*(?:-|\*|[0-9]+\.)\s+\S/m.test(p)) {
+      var lis = p.split(/\n/).map(function (line) {
+        return "<li>" + line.replace(/^\s*(?:-|\*|[0-9]+\.)\s+/, "") + "</li>";
+      }).join("");
+      return /^\s*[0-9]+\./.test(p) ? "<ol>" + lis + "</ol>" : "<ul>" + lis + "</ul>";
+    }
+    return "<p>" + p.replace(/\n/g, "<br>") + "</p>";
+  }).join("").replace(/\u0001(\d+)\u0001/g, function (m, i) { return stash[Number(i)]; });
 }
 
 /* ---------- chat render ---------- */
@@ -516,7 +681,7 @@ function msgEl(m, idx) {
     mt2.className = "meta";
     var metaHtml = "<span>" + esc(fmtTime(m.time)) + "</span>";
     if (m && m.model) metaHtml += "<span> · " + esc(m.model) + "</span>";
-    metaHtml += '<button data-act="copy">Copy</button><button data-act="regen">Regenerate</button><button data-act="brief">Brief</button>';
+    metaHtml += '<button data-act="copy">Copy</button><button data-act="speak">Listen</button><button data-act="regen">Regenerate</button><button data-act="brief">Brief</button>';
     mt2.innerHTML = metaHtml;
     body.appendChild(mt2);
     if (m && m.fallback && m.fallback.requested && m.model && m.fallback.requested !== m.model) {
@@ -529,14 +694,27 @@ function msgEl(m, idx) {
   }
   return w;
 }
+var uploadBlobCache = {};
+var liveUploadUrls = {};
 function hydrateUploadImages() {
   chatCol.querySelectorAll("img[data-up]").forEach(function (im) {
     var id = im.getAttribute("data-up");
+    function attach(blob) {
+      // Re-hydrating the same upload must not leak an object URL per render.
+      if (liveUploadUrls[id]) URL.revokeObjectURL(liveUploadUrls[id]);
+      var url = URL.createObjectURL(blob);
+      liveUploadUrls[id] = url;
+      im.src = url;
+    }
+    if (uploadBlobCache[id]) { attach(uploadBlobCache[id]); return; }
     fetch(apiUrl("/api/uploads/" + id + "/file"), { headers: authHeaders() }).then(function (res) {
       if (!res.ok) throw new Error("gone");
       return res.blob();
     }).then(function (blob) {
-      im.src = URL.createObjectURL(blob);
+      uploadBlobCache[id] = blob;
+      var keys = Object.keys(uploadBlobCache);
+      if (keys.length > 50) delete uploadBlobCache[keys[0]];
+      attach(blob);
     }).catch(function () { im.remove(); });
   });
 }
@@ -590,6 +768,7 @@ function versionGroup(start, end) {
   return wrap;
 }
 function renderChat() {
+  stopSpeaking();
   chatTitle.textContent = openTitle();
   chatCol.innerHTML = "";
   if (!current.length) {
@@ -661,6 +840,15 @@ function clearComposer() {
   attachments.innerHTML = "";
   pendingFiles.forEach(function (f) { if (f._preview) URL.revokeObjectURL(f._preview); });
   pendingFiles = [];
+}
+/* Restore a draft after a failed send (never clobbers anything the user
+ * typed meanwhile; addChip regenerates image previews itself). */
+function restoreComposer(text, files) {
+  var restored = false;
+  if (text && !input.value) { input.value = text; input.style.height = "auto"; restored = true; }
+  var have = pendingFiles.slice();
+  (files || []).forEach(function (f) { if (have.indexOf(f) === -1) addChip(f); });
+  if (restored || (files && files.length)) input.focus();
 }
 async function uploadPending(files) {
   var list = files || pendingFiles;
@@ -742,6 +930,10 @@ function streamInto(bodyEl, onMeta) {
   });
 }
 async function sendText(text, files, reuse) {
+  if (streaming) return; // synchronous re-entry guard: no double submit
+  stopSpeaking();
+  streaming = true;
+  sendBtnToStop(true);
   var atts = files || [];
   /* Edit flow passes already-vaulted attachments (reuse) so resends
    * reference the original upload IDs instead of re-uploading (which
@@ -751,12 +943,17 @@ async function sendText(text, files, reuse) {
   }).map(function (a) {
     return { id: a.id, kind: a.kind || "document", name: a.name || "file" };
   }) : [];
-  if (!text && !atts.length && !uploaded.length) return;
-  if (atts.length > 5) { toast("At most 5 files per message."); return; }
+  if (!text && !atts.length && !uploaded.length) { streaming = false; sendBtnToStop(false); return; }
+  if (atts.length > 5) { toast("At most 5 files per message."); streaming = false; sendBtnToStop(false); return; }
   if (!uploaded.length && atts.length) {
     try { uploaded = await uploadPending(atts); }
-    catch (e) { toast("Upload failed: " + e.message); return; }
+    catch (e) { toast("Upload failed: " + e.message); streaming = false; sendBtnToStop(false); return; }
   }
+  /* Commit point: uploads succeeded, so clear the composer. The draft is
+   * stashed so a failed send can restore it (nothing lost on error). */
+  var draftText = String(text || "").trim();
+  var draftFiles = (atts || []).slice();
+  clearComposer();
   var empty = chatCol.querySelector(".empty");
   if (empty) empty.remove();
   /* optimistic user bubble (server state replaces it on refresh) */
@@ -766,11 +963,10 @@ async function sendText(text, files, reuse) {
   scrollBottom(true);
   var tmp = document.createElement("div");
   tmp.className = "msg ai";
+  tmp.setAttribute("aria-busy", "true");
   tmp.innerHTML = '<div class="mark-p">' + planet(13) + '</div><div class="ai-body"><div class="body"><span class="dots"><i></i><i></i><i></i></span></div></div>';
   chatCol.appendChild(tmp);
   scrollBottom(true);
-  streaming = true;
-  sendBtnToStop(true);
   streamInto._text = text || "(attachment)";
   streamInto._ids = uploaded.map(function (a) { return a.id; });
   try {
@@ -789,7 +985,9 @@ async function sendText(text, files, reuse) {
       tmp.querySelector(".body").innerHTML = "<p>Error: " + esc(e.message) + "</p>";
       toast("Send failed: " + e.message);
     }
+    try { restoreComposer(draftText, draftFiles); } catch (ignored) {}
   } finally {
+    try { tmp.removeAttribute("aria-busy"); } catch (ignored) {}
     streaming = false;
     streamAbort = null;
     sendBtnToStop(false);
@@ -803,8 +1001,7 @@ function send() {
   var text = input.value.trim();
   var files = pendingFiles.slice();
   if (!text && !files.length) return;
-  clearComposer();
-  sendText(text, files);
+  sendText(text, files); /* composer clears only once committed in sendText */
 }
 $("sendBtn").addEventListener("click", send);
 input.addEventListener("keydown", function (e) {
@@ -836,6 +1033,7 @@ chatCol.addEventListener("click", async function (e) {
   var i = msg._i;
   var act = btn.getAttribute("data-act");
   if (act === "copy") { copyText(msg._raw); }
+  else if (act === "speak") { speakText(msg._raw, btn); }
   else if (act === "edit") {
     if (streaming) { toast("Wait for the current reply"); return; }
     var old = msg._raw;
@@ -870,6 +1068,11 @@ chatCol.addEventListener("click", async function (e) {
     if (streaming) { toast("Wait for the current reply"); return; }
     var v = (msg.querySelector(".edit-ta").value || "").trim();
     if (!v) { renderChat(); return; }
+    if (v.length > MAX_MSG_CHARS) {
+      toast("Message is limited to " + MAX_MSG_CHARS + " characters; shorten it and save.");
+      msg.querySelector(".edit-ta").focus();
+      return; // keep the edit open so nothing is lost
+    }
     /* Keep the edited message's attachments: truncate drops the message,
      * so carry its vaulted upload refs into the resend (no re-upload). */
     var prev = (typeof current !== "undefined" && current[i]) || {};
@@ -911,6 +1114,47 @@ chatCol.addEventListener("click", async function (e) {
     } catch (err) { toast("Cannot save brief: " + err.message); }
   }
 });
+
+/* ---------- read aloud (free browser speechSynthesis, no backend) ----------
+ * Per-message Listen button on assistant replies. Markdown is stripped to
+ * speakable prose and capped so a long research answer cannot queue
+ * minutes of speech. Any new send, chat switch, or second press stops. */
+var speakingBtn = null;
+function stopSpeaking() {
+  try { if ("speechSynthesis" in window) window.speechSynthesis.cancel(); } catch (e) {}
+  if (speakingBtn) {
+    speakingBtn.textContent = "Listen";
+    speakingBtn.classList.remove("active");
+    speakingBtn = null;
+  }
+}
+function speakable(raw) {
+  var s = String(raw || "");
+  s = s.replace(/```[\s\S]*?```/g, " code omitted ");
+  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  s = s.replace(/[#>*`_~]/g, "");
+  return s.replace(/\s+/g, " ").trim().slice(0, 4000);
+}
+function speakText(text, btn) {
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+    toast("Speech not supported in this browser");
+    return;
+  }
+  if (speakingBtn === btn) { stopSpeaking(); return; }
+  var words = speakable(text);
+  if (!words) { toast("Nothing to read"); return; }
+  stopSpeaking();
+  var u = new SpeechSynthesisUtterance(words);
+  u.onend = function () { stopSpeaking(); };
+  u.onerror = function () { stopSpeaking(); };
+  speakingBtn = btn;
+  btn.textContent = "Stop";
+  btn.classList.add("active");
+  try {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch (e) { stopSpeaking(); }
+}
 
 /* ---------- recents / projects ---------- */
 var ctxId = null;
@@ -1056,6 +1300,7 @@ $("ctxRename").addEventListener("click", function () {
 $("ctxDelete").addEventListener("click", async function () {
   $("ctxMenu").classList.add("hidden");
   if (!ctxId) return;
+  if (!window.confirm("Delete this chat? This cannot be undone.")) return;
   try {
     var data = await req("/api/chats/" + ctxId, { method: "DELETE" });
     chats = data.chats || [];
@@ -1088,10 +1333,9 @@ $("newChatBtn").addEventListener("click", async function () {
   if (window.innerWidth < 861) document.body.classList.add("folded");
   input.focus();
 });
-$("exportBtn").addEventListener("click", function () {
-  var title = openTitle();
+function chatMarkdown(title, messages) {
   var lines = ["# " + title, ""];
-  current.forEach(function (m) {
+  (messages || []).forEach(function (m) {
     lines.push("**" + (m.role === "user" ? "You" : "Pluto") + "** · " + (fmtTime(m.time) || ""));
     if (m.attachments && m.attachments.length)
       lines.push("_Attachments: " + m.attachments.map(function (a) { return a.name; }).join(", ") + "_");
@@ -1102,13 +1346,31 @@ $("exportBtn").addEventListener("click", function () {
       lines.push("");
     }
   });
-  var blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+  return lines.join("\n");
+}
+function downloadMarkdown(title, text) {
+  var blob = new Blob([text], { type: "text/markdown" });
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = (title.replace(/[^\w\- ]+/g, "").trim() || "chat") + ".md";
+  a.download = (String(title || "").replace(/[^\w\- ]+/g, "").trim() || "chat") + ".md";
   a.click();
   setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+}
+$("exportBtn").addEventListener("click", function () {
+  var title = openTitle();
+  downloadMarkdown(title, chatMarkdown(title, current));
   toast("Chat exported");
+});
+/* Export any archived chat without opening it (read-only endpoint). */
+$("ctxExport").addEventListener("click", async function () {
+  $("ctxMenu").classList.add("hidden");
+  if (!ctxId) return;
+  try {
+    var data = await req("/api/chats/" + ctxId + "/messages");
+    var title = (data && data.title) || "chat";
+    downloadMarkdown(title, chatMarkdown(title, (data && data.messages) || []));
+    toast("Chat exported");
+  } catch (err) { toast("Export failed: " + err.message); }
 });
 
 /* ---------- models (server-driven) ---------- */
@@ -1172,15 +1434,7 @@ $("modelBtn").addEventListener("click", function (e) {
   $("modelDD").classList.toggle("hidden");
 });
 $("accountBtn").addEventListener("click", function () {
-  if (ACCT.username) {
-    ask("Signed in as " + ACCT.username + ". Type OUT to sign out", "", function (v) {
-      if (v !== null && v.trim().toUpperCase() === "OUT") signOut();
-    });
-    return;
-  }
-  /* Logged out (with or without a stale operator token): always open
-   * the real login dialog — it has Log in, Sign up, and Use token. */
-  showAuth("Log in to Pluto");
+  openAcct();
 });
 if ($("loginBtn")) $("loginBtn").addEventListener("click", function () {
   if (ACCT.username) return;
@@ -1199,6 +1453,10 @@ $("authTokenBtn").addEventListener("click", function () {
 });
 $("authLogin").addEventListener("click", function () { authSubmit("/api/auth/login"); });
 $("authSignup").addEventListener("click", function () { authSubmit("/api/auth/signup"); });
+$("authPass").addEventListener("input", function () {
+  var h = pwHint($("authPass").value, $("authUser").value);
+  $("authHint").textContent = h;
+});
 $("authPass").addEventListener("keydown", function (e) {
   if (e.key === "Enter") authSubmit("/api/auth/login");
   if (e.key === "Escape") settleAuth(null);
@@ -1207,6 +1465,10 @@ $("authUser").addEventListener("keydown", function (e) {
   if (e.key === "Enter") authSubmit("/api/auth/login");
   if (e.key === "Escape") settleAuth(null);
 });
+$("acctClose").addEventListener("click", function () { hideAcct(); });
+$("acctSignOut").addEventListener("click", function () { hideAcct(); signOut(); });
+$("acctLogoutAll").addEventListener("click", function () { signOutEverywhere(); });
+$("acctSavePass").addEventListener("click", function () { submitPasswordChange(); });
 
 /* ---------- theme ---------- */
 function applyTheme() {
@@ -1319,16 +1581,18 @@ var SECTIONS = {
         return '<div class="card" data-wfid="' + esc(w.id) + '">' + ic("flask") +
           '<div class="g"><div class="t">' + esc(w.name || "Untitled") + '</div><div class="s">' + esc(sub) + "</div></div>" +
           '<button class="row-btn second" data-wfrun="' + esc(w.id) + '" title="Run">▶</button>' +
+          '<button class="row-btn second" data-wfedit="' + esc(w.id) + '" title="Edit">✎</button>' +
+          '<button class="row-btn second" data-wfdup="' + esc(w.id) + '" title="Duplicate">⧉</button>' +
           '<button class="row-btn" data-wfdel="' + esc(w.id) + '" title="Delete">✕</button></div>';
       }).join("");
       if (!list.length) rows = '<div class="sub" style="margin-top:16px">No workflows yet. Save a fixed tool sequence below and run it anytime.</div>';
       return "<h2>Workflows</h2><div class=\"sub\">Saved tool pipelines. Steps are JSON with {{input}} and {{steps.N.output}} templates; send_gmail is blocked.</div>" +
         '<div class="cards" id="wfList">' + rows + "</div>" +
-        "<h2 style=\"margin-top:22px\">New workflow</h2>" +
+        '<h2 style="margin-top:22px" id="wfFormTitle">New workflow</h2>' +
         '<input class="input panel-input" id="wfName" type="text" placeholder="Name">' +
         '<input class="input panel-input" id="wfDesc" type="text" placeholder="Description (optional)">' +
         '<textarea class="notes-ta" id="wfSteps" placeholder="Steps JSON array"></textarea>' +
-        '<div class="notes-actions"><button class="btn solid" id="wfSave">Save workflow</button></div>' +
+        '<div class="notes-actions"><button class="btn solid" id="wfSave">Save workflow</button><button class="btn ghost" id="wfCancelEdit" style="display:none">Cancel edit</button></div>' +
         '<div id="wfResult"></div>';
     }
   },
@@ -1466,6 +1730,16 @@ var SECTIONS = {
 };
 
 /* panel interactions (delegated) */
+/* Workflow edit mode (module scope: must survive across clicks). null =
+ * creating; otherwise the id being updated. exitWfEdit also runs when the
+ * workflows section re-renders, since the form DOM is rebuilt. */
+var wfEditingId = null;
+function exitWfEdit() {
+  wfEditingId = null;
+  var t = $("wfFormTitle"); if (t) t.textContent = "New workflow";
+  var s = $("wfSave"); if (s) s.textContent = "Save workflow";
+  var c = $("wfCancelEdit"); if (c) c.style.display = "none";
+}
 panelBody.addEventListener("click", async function (e) {
   var rm = e.target.closest("[data-fact]");
   if (rm) {
@@ -1548,6 +1822,14 @@ panelBody.addEventListener("click", async function (e) {
     window.open(op.getAttribute("data-open"), "_blank", "noopener");
     return;
   }
+  /* Workflow edit mode: null = creating; otherwise the id being updated. */
+  if (e.target.closest("#wfCancelEdit")) {
+    $("wfName").value = "";
+    $("wfDesc").value = "";
+    $("wfSteps").value = "";
+    exitWfEdit();
+    return;
+  }
   if (e.target.closest("#wfSave")) {
     var wname = ($("wfName").value || "").trim();
     var wdesc = ($("wfDesc").value || "").trim();
@@ -1557,10 +1839,50 @@ panelBody.addEventListener("click", async function (e) {
       if (!Array.isArray(wsteps)) throw new Error("not an array");
     } catch (err) { toast("Steps must be a JSON array"); return; }
     try {
-      await req("/api/workflows", { method: "POST", body: JSON.stringify({ name: wname, description: wdesc, steps: wsteps }) });
-      toast("Workflow saved");
+      /* The form DOM is rebuilt on every section render; only PUT when the
+       * visible form is genuinely in edit mode (title proves it). */
+      var editing = wfEditingId && $("wfFormTitle") && $("wfFormTitle").textContent === "Edit workflow";
+      if (editing) {
+        await req("/api/workflows/" + wfEditingId, { method: "PUT", body: JSON.stringify({ name: wname, description: wdesc, steps: wsteps }) });
+        toast("Workflow updated");
+      } else {
+        wfEditingId = null;
+        await req("/api/workflows", { method: "POST", body: JSON.stringify({ name: wname, description: wdesc, steps: wsteps }) });
+        toast("Workflow saved");
+      }
+      exitWfEdit();
       openSection("workflows");
     } catch (err) { toast("Save failed: " + err.message); }
+    return;
+  }
+  var wfe = e.target.closest("[data-wfedit]");
+  if (wfe) {
+    e.stopPropagation();
+    var eid = wfe.closest(".card").getAttribute("data-wfid");
+    try {
+      var w = await req("/api/workflows/" + eid);
+      $("wfName").value = w.name || "";
+      $("wfDesc").value = w.description || "";
+      $("wfSteps").value = JSON.stringify(w.steps || [], null, 2);
+      wfEditingId = eid;
+      $("wfFormTitle").textContent = "Edit workflow";
+      $("wfSave").textContent = "Update workflow";
+      $("wfCancelEdit").style.display = "";
+      $("wfFormTitle").scrollIntoView({ block: "nearest" });
+      $("wfName").focus();
+    } catch (err) { toast("Cannot load workflow: " + err.message); }
+    return;
+  }
+  var wdu = e.target.closest("[data-wfdup]");
+  if (wdu) {
+    e.stopPropagation();
+    var did2 = wdu.closest(".card").getAttribute("data-wfid");
+    try {
+      var src = await req("/api/workflows/" + did2);
+      await req("/api/workflows", { method: "POST", body: JSON.stringify({ name: String(src.name || "Workflow") + " (copy)", description: src.description || "", steps: src.steps || [] }) });
+      toast("Workflow duplicated");
+      openSection("workflows");
+    } catch (err) { toast("Duplicate failed: " + err.message); }
     return;
   }
   var wr = e.target.closest("[data-wfrun]");
@@ -1580,8 +1902,10 @@ panelBody.addEventListener("click", async function (e) {
   if (wd) {
     e.stopPropagation();
     var did = wd.closest(".card").getAttribute("data-wfid");
+    if (!window.confirm("Delete this workflow? This cannot be undone.")) return;
     try {
       await req("/api/workflows/" + did, { method: "DELETE" });
+      if (wfEditingId === did) exitWfEdit();
       toast("Workflow deleted");
       openSection("workflows");
     } catch (err) { toast("Delete failed: " + err.message); }
@@ -1694,6 +2018,7 @@ function openCamera() {
   camShot.classList.remove("hidden");
   camShot.disabled = false;
   shotTaken = false;
+  setTimeout(function () { if (!camShot.disabled) camShot.focus(); }, 60);
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     camVideo.classList.add("hidden");
     camShot.disabled = true;
@@ -1814,9 +2139,38 @@ $("micBtn").addEventListener("click", function () {
   } catch (e) { toast("Mic unavailable"); }
 });
 
+/* ---------- dialog focus trap (keyboard/screen-reader users) ----------
+ * Overlays are role=dialog + aria-modal; Tab must cycle inside the open
+ * one instead of escaping to the page behind it. */
+var DIALOG_IDS = ["camModal", "dlg", "authDlg", "acctDlg", "keys"];
+function openOverlay() {
+  for (var i = 0; i < DIALOG_IDS.length; i++) {
+    var el = $(DIALOG_IDS[i]);
+    if (el && !el.classList.contains("hidden")) return el;
+  }
+  return null;
+}
+function trapTab(e, overlay) {
+  var f = overlay.querySelectorAll("button, input, textarea, select, a[href], [tabindex]");
+  var vis = [];
+  for (var i = 0; i < f.length; i++) {
+    if (!f[i].disabled && f[i].offsetParent !== null) vis.push(f[i]);
+  }
+  if (!vis.length) { e.preventDefault(); return; }
+  var first = vis[0], last = vis[vis.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
 /* ---------- shortcuts ---------- */
 document.addEventListener("keydown", function (e) {
+  if (e.key === "Tab") {
+    var ov = openOverlay();
+    if (ov) trapTab(e, ov);
+    return;
+  }
   if (e.key === "Escape") {
+    stopSpeaking();
     closeAttachMenu();
     $("ctxMenu").classList.add("hidden");
     $("projMenu").classList.add("hidden");
@@ -1830,9 +2184,9 @@ document.addEventListener("keydown", function (e) {
   if (e.altKey && e.code === "KeyM") { e.preventDefault(); setMode(S.mode === "fast" ? "deep" : "fast"); }
   if (e.altKey && e.code === "KeyS") { e.preventDefault(); setWeb(!webBtn.classList.contains("active")); }
   if (e.ctrlKey && e.code === "KeyK") { e.preventDefault(); $("sideSearch").focus(); }
-  if (e.key === "?" && !typing) { e.preventDefault(); $("keys").classList.remove("hidden"); }
+  if (e.key === "?" && !typing) { e.preventDefault(); $("keys").classList.remove("hidden"); setTimeout(function () { $("keysClose").focus(); }, 30); }
 });
-$("keysBtn").addEventListener("click", function () { $("keys").classList.remove("hidden"); });
+$("keysBtn").addEventListener("click", function () { $("keys").classList.remove("hidden"); setTimeout(function () { $("keysClose").focus(); }, 30); });
 $("keysClose").addEventListener("click", function () { $("keys").classList.add("hidden"); });
 
 /* ---------- init (server-driven) ---------- */

@@ -17,7 +17,7 @@ import io
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from services.obs import event as obs_event
 from services.storage import user_dir
@@ -34,6 +34,12 @@ _READ_RE = re.compile(r"^\s*(select|with|explain)\b", re.IGNORECASE | re.DOTALL)
 
 def _db_path(user_id: Any) -> Path:
     return user_dir(str(user_id or ""), create=False) / DB_FILENAME
+
+
+def _safe_db_error(action: str, exc: Exception) -> str:
+    """User-safe DB failure (never echoes SQL, paths, or driver detail)."""
+    obs_event("database.error", action=action, errkind=type(exc).__name__)
+    return "Database %s failed (check table/column names and syntax)." % action
 
 
 def valid_identifier(name: Any) -> str:
@@ -86,8 +92,7 @@ def describe_table(user_id: Any, table: str) -> Dict[str, Any]:
             "rows": int(count[0]) if count else 0,
         }
     except Exception as e:
-        obs_event("database.error", action="describe")
-        return {"error": f"Describe failed: {e}"}
+        return {"error": _safe_db_error("describe", e)}
 
 
 def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
@@ -109,8 +114,7 @@ def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
             "rows": [[_cell(v) for v in r] for r in rows],
         }
     except Exception as e:
-        obs_event("database.error", action="query")
-        return {"error": f"Query failed: {e}"}
+        return {"error": _safe_db_error("query", e)}
 
 
 def _cell(value: Any) -> Any:
@@ -140,8 +144,7 @@ def execute_write(user_id: Any, sql: str) -> Dict[str, Any]:
             affected = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
         return {"ok": True, "affected": int(affected)}
     except Exception as e:
-        obs_event("database.error", action="write")
-        return {"error": f"Write failed: {e}"}
+        return {"error": _safe_db_error("write", e)}
 
 
 def _affinity(values: List[str]) -> str:
@@ -194,5 +197,4 @@ def import_csv(user_id: Any, table: str, data: bytes) -> Dict[str, Any]:
             conn.commit()
         return {"table": name, "rows": len(padded), "columns": columns}
     except Exception as e:
-        obs_event("database.error", action="import")
-        return {"error": f"CSV import failed: {e}"}
+        return {"error": _safe_db_error("import", e)}

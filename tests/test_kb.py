@@ -204,6 +204,50 @@ def test_ingest_embed_failure_degrades(open_env):
         kb_embeddings.configure_embedder(None)
 
 
+def test_ingest_stores_normalized_vectors(open_env):
+    # Embedder returns un-normalized vectors; the vault must store unit
+    # norms so search runs as a plain dot product.
+    kb_embeddings.configure_embedder(FakeEmbedder({"docs go here": (3.0, 4.0)}))
+    try:
+        assert kb_svc.ingest_document("u", "d", "a.csv", b"docs go here")["ingested"]
+    finally:
+        kb_embeddings.configure_embedder(None)
+    kb = kb_svc.load_kb("u")
+    vec = kb["docs"]["d"]["chunks"][0]["vector"]
+    assert kb["docs"]["d"]["normalized"] is True
+    assert sum(v * v for v in vec) == pytest.approx(1.0)
+
+
+def test_search_falls_back_to_lexical_when_embed_fails(open_env, stubbed_embedder):
+    kb_svc.ingest_document("u", "d", "a.csv", b"classic grocery list milk bread")
+    kb_embeddings.configure_embedder(lambda texts: (_ for _ in ()).throw(RuntimeError("429 no quota")))
+    try:
+        hits = kb_svc.search("u", "classic grocery")
+        assert len(hits) == 1, hits
+        assert "grocery" in hits[0]["text"]
+    finally:
+        kb_embeddings.configure_embedder(None)
+
+
+def test_search_own_lexical_does_not_match_when_no_overlap(open_env, stubbed_embedder):
+    kb_svc.ingest_document("u", "d", "a.csv", b"alpha beta gamma content here")
+    kb_embeddings.configure_embedder(lambda texts: (_ for _ in ()).throw(RuntimeError("429")))
+    try:
+        assert kb_svc.search("u", "zzzzz none") == []
+    finally:
+        kb_embeddings.configure_embedder(None)
+
+
+def test_ingest_rejects_embedding_model_change(open_env, monkeypatch, stubbed_embedder):
+    kb_svc.ingest_document("u", "d", "a.csv", b"persist with model A")
+    monkeypatch.setenv("PLUTO_KB_EMBED_MODEL", "models/gemini-embedding-999")
+    try:
+        res = kb_svc.ingest_document("u", "d2", "b.csv", b"would mix model B chunks")
+        assert res["ingested"] is False and res["reason"] == "embed-model-changed"
+    finally:
+        monkeypatch.delenv("PLUTO_KB_EMBED_MODEL", raising=False)
+
+
 def test_drop_document(open_env, stubbed_embedder):
     kb_svc.ingest_document("u", "d", "a.csv", b"forget this text")
     assert kb_svc.search("u", "forget this") != []

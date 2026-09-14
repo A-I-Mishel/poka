@@ -189,20 +189,21 @@
   </div>
 </main>
 
-<div class="ctx hidden" id="ctxMenu">
-  <button id="ctxRename">Rename</button>
-  <button id="ctxDelete" class="danger">Delete</button>
+<div class="ctx hidden" id="ctxMenu" role="menu" aria-label="Chat options">
+  <button id="ctxRename" role="menuitem">Rename</button>
+  <button id="ctxExport" role="menuitem">Export .md</button>
+  <button id="ctxDelete" role="menuitem" class="danger">Delete</button>
 </div>
 
-<div class="ctx hidden" id="projMenu">
-  <button id="projRename">Rename</button>
-  <button id="projContext">Edit context</button>
-  <button id="projArchive" class="danger">Archive</button>
+<div class="ctx hidden" id="projMenu" role="menu" aria-label="Project options">
+  <button id="projRename" role="menuitem">Rename</button>
+  <button id="projContext" role="menuitem">Edit context</button>
+  <button id="projArchive" role="menuitem" class="danger">Archive</button>
 </div>
 
-<div class="overlay hidden" id="camModal">
+<div class="overlay hidden" id="camModal" role="dialog" aria-modal="true" aria-labelledby="camTitle">
   <div class="dialog">
-    <h3>Take a photo</h3>
+    <h3 id="camTitle">Take a photo</h3>
     <div class="stage">
       <video id="camVideo" autoplay playsinline muted></video>
       <canvas id="camCanvas" class="hidden"></canvas>
@@ -217,7 +218,7 @@
   </div>
 </div>
 
-<div class="overlay hidden" id="dlg">
+<div class="overlay hidden" id="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
   <div class="dialog">
     <h3 id="dlgTitle">Name</h3>
     <input class="input" id="dlgInput" type="text">
@@ -228,11 +229,12 @@
   </div>
 </div>
 
-<div class="overlay hidden" id="authDlg">
+<div class="overlay hidden" id="authDlg" role="dialog" aria-modal="true" aria-labelledby="authTitle">
   <div class="dialog">
     <h3 id="authTitle">Log in to Pluto</h3>
     <input class="input" id="authUser" type="text" placeholder="Username" autocomplete="username">
-    <input class="input" id="authPass" type="password" placeholder="Password (8+ characters)" autocomplete="current-password">
+    <input class="input" id="authPass" type="password" placeholder="Password (8+, mixed characters)" autocomplete="current-password">
+    <div class="hint" id="authHint"></div>
     <div class="err hidden" id="authErr"></div>
     <div class="dialog-actions">
       <button class="btn ghost" id="authCancel">Cancel</button>
@@ -243,9 +245,29 @@
   </div>
 </div>
 
-<div class="overlay hidden" id="keys">
+<div class="overlay hidden" id="acctDlg" role="dialog" aria-modal="true" aria-labelledby="acctTitle">
   <div class="dialog">
-    <h3>Keyboard shortcuts</h3>
+    <h3 id="acctTitle">Account</h3>
+    <div class="hint" id="acctName"></div>
+    <h4>Sessions</h4>
+    <div class="hint" id="acctSessions">Loading…</div>
+    <h4>Change password</h4>
+    <input class="input" id="acctCur" type="password" placeholder="Current password" autocomplete="current-password">
+    <input class="input" id="acctNew" type="password" placeholder="New password (8+, mixed characters)" autocomplete="new-password">
+    <input class="input" id="acctConfirm" type="password" placeholder="Confirm new password" autocomplete="new-password">
+    <div class="err hidden" id="acctPassErr"></div>
+    <div class="dialog-actions">
+      <button class="btn ghost" id="acctClose">Close</button>
+      <button class="btn ghost" id="acctLogoutAll">Sign out everywhere</button>
+      <button class="btn ghost" id="acctSignOut">Sign out</button>
+      <button class="btn solid" id="acctSavePass">Save password</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay hidden" id="keys" role="dialog" aria-modal="true" aria-labelledby="keysTitle">
+  <div class="dialog">
+    <h3 id="keysTitle">Keyboard shortcuts</h3>
     <div class="keys-row"><span>Toggle Fast / Deep</span><kbd>Alt + M</kbd></div>
     <div class="keys-row"><span>Toggle web search</span><kbd>Alt + S</kbd></div>
     <div class="keys-row"><span>Send message</span><kbd>Enter</kbd></div>
@@ -260,7 +282,7 @@
   </div>
 </div>
 
-<div id="toasts"></div>
+<div id="toasts" aria-live="polite"></div>
 
 <script type="module" src="/src/app.js"></script>
 
