@@ -20,6 +20,10 @@ def create_pptx(topic: str, content: str) -> str:
     PowerPoint, or visual deck. Do NOT use for general questions,
     text-only responses, or "tell me about" without mentioning slides.
 
+    To convert an uploaded Word/PDF file: first read it with
+    read_document/read_pdf, condense the extracted text into one block
+    per slide (first line = slide title, rest = bullets), then call this.
+
     Args:
         topic: Presentation title shown on the title slide (concise).
         content: Slide text separated by double newlines. Each block's first

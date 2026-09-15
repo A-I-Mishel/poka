@@ -21,7 +21,8 @@ VISION_NOUNS = (
     "screenshot", "screenshots", "scan", "scanned", "what do you see",
 )
 DOC_NOUNS = (
-    "pdf", "document", "documents", "docx", "pptx", "ppt", "powerpoint",
+    "pdf", "document", "documents", "docx", "doc", "docs", "word",
+    "pptx", "ppt", "powerpoint",
     "presentation", "deck", "slides", "slide", "spreadsheet", "csv",
 )
 VISION_EXPLICIT = (

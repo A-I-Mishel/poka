@@ -13,7 +13,7 @@ import re
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Tuple
 
 from langchain_core.tools import tool
 
@@ -568,14 +568,54 @@ def _read_odp_file(path) -> str:
     return text
 
 
+def _docx_run_text(run: Any) -> str:
+    """One run as lightweight markdown (bold/italic preserved, never raises)."""
+    try:
+        text = str(run.text or "")
+    except Exception:
+        return ""
+    if not text.strip():
+        return text
+    try:
+        bold = bool(run.bold)
+    except Exception:
+        bold = False
+    try:
+        italic = bool(run.italic)
+    except Exception:
+        italic = False
+    if bold:
+        return f"**{text}**"
+    if italic:
+        return f"*{text}*"
+    return text
+
+
 def _read_docx_file(path) -> str:
     from docx import Document
 
     doc = Document(str(path))
     parts = []
     for para in doc.paragraphs:
-        text = (para.text or "").strip()
-        if text:
+        # ponytail: style-mapped markdown (headings/lists) so converters
+        # rebuild structure instead of guessing; plain paras unchanged.
+        try:
+            style = str(getattr(para.style, "name", "") or "")
+        except Exception:
+            style = ""
+        text = "".join(_docx_run_text(r) for r in para.runs).strip() or (para.text or "").strip()
+        if not text:
+            continue
+        if style.startswith("Heading"):
+            level = {"Heading 1": "# ", "Heading 2": "## "}.get(style, "### ")
+            parts.append(f"{level}{text}")
+        elif style == "Title":
+            parts.append(f"# {text}")
+        elif style == "List Bullet":
+            parts.append(f"- {text}")
+        elif style.startswith("List Number"):
+            parts.append(f"1. {text}")
+        else:
             parts.append(text)
     for table in doc.tables:
         for row in table.rows:
