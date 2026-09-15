@@ -21,5 +21,14 @@ memory/chats.json.tmp
 memory/memory.md
 structured_memory.json
 data/
+.e2e-data/
 .coverage
 coverage.xml
+# Local debug artifacts (never commit)
+result.txt
+test_out.txt
+test_output.txt
+deep_chain_test.txt
+load_tests/
+.ruff_cache/
+.venv/
