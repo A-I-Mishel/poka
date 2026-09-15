@@ -23,6 +23,7 @@ import io as _io
 import re
 import time
 import uuid
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Tuple
 
 from langchain_core.tools import tool
@@ -432,6 +433,10 @@ def create_pdf(title: str, markdown_text: str) -> str:
     # / ## / ### headings, paragraphs, - bullets, 1. numbered lists,
     > quotes, ``` code blocks, | tables |, --- page breaks.
 
+    To convert an uploaded Word/PDF/text file: first read it with
+    read_document/read_pdf, restructure the extracted text as lightweight
+    markdown (the reader already emits markdown markers), then call this.
+
     Args:
         title: Document title (first-page heading).
         markdown_text: The document body in lightweight markdown.
@@ -583,6 +588,52 @@ def _ensure_full_html(title: str, html_content: str) -> str:
     )
 
 
+class _ScriptStyleBalance(HTMLParser):
+    """Track script/style open/close only (the tags a truncation kills).
+
+    Narrow by design: browsers tolerate unclosed divs/paras, but an
+    unclosed <script> swallows the rest of the page. JS comparison
+    operators inside script bodies are CDATA to the parser, so they
+    cannot false-positive.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: List[tuple] = []
+        self.issues: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        t = str(tag or "").lower()
+        if t in ("script", "style"):
+            self.stack.append((t, self.getpos()))
+
+    def handle_endtag(self, tag: str) -> None:
+        t = str(tag or "").lower()
+        if t in ("script", "style"):
+            if self.stack and self.stack[-1][0] == t:
+                self.stack.pop()
+            # Stray closes are ignored, like browsers.
+
+    def close(self) -> None:
+        super().close()
+        for t, (line, _col) in self.stack:
+            self.issues.append(f"unclosed <{t}> (opened line {line})")
+
+
+def _html_structure_issues(payload: str) -> List[str]:
+    """Best-effort static check for broken generated HTML (never raises)."""
+    try:
+        text = str(payload or "")
+        if re.search(r"<[A-Za-z!/][^>]*$", text.rstrip()):
+            return ["truncated HTML: input ends inside a tag"]
+        checker = _ScriptStyleBalance()
+        checker.feed(text)
+        checker.close()
+        return list(checker.issues)
+    except Exception as e:
+        return [f"unparseable HTML ({str(e)[:80]})"]
+
+
 @tool
 def create_html(title: str, html_content: str) -> str:
     """Create a standalone web page (.html file).
@@ -591,6 +642,11 @@ def create_html(title: str, html_content: str) -> str:
     or .html export. Accepts a full HTML document or a fragment
     (fragments are wrapped in a minimal page with the title). Served
     as a download; opens in any browser.
+
+    Default to a single self-contained file with inline CSS/JS (no
+    external CDN or multi-file layout) unless the user explicitly asks
+    otherwise — the artifact downloads as one file, so external
+    references may not travel with it.
 
     Args:
         title: Page title (browser tab + filename basis).
@@ -612,6 +668,11 @@ def create_html(title: str, html_content: str) -> str:
         if len(text_only.strip()) < 3:
             return "STATUS=INVALID tool=create_html: no substantive content found."
         payload = _ensure_full_html(title.strip()[:120], html_content)
+        issues = _html_structure_issues(payload)
+        if issues:
+            return ("STATUS=INVALID tool=create_html: unbalanced HTML ("
+                    + "; ".join(issues)[:150]
+                    + "). Send the FULL page with all tags closed.")
         data = payload.encode("utf-8")
         filename: str = f"html_{uuid.uuid4().hex[:8]}.html"
         try:
@@ -620,7 +681,8 @@ def create_html(title: str, html_content: str) -> str:
                     "created": time.time()}
             meta = FileStore(user_id).register_output(filename, data, "html", spec)
             return (f"HTML page saved as {meta.display_name} (file ID: {meta.id}) "
-                    "[Standalone .html — opens in any browser.]")
+                    "[Standalone single-file .html — download it, then open the file "
+                    "in a browser to run interactive JavaScript.]")
         except StorageError as e:
             return f"STATUS=FAILED tool=create_html: {e}"
     except Exception as e:

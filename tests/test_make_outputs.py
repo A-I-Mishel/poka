@@ -132,6 +132,43 @@ def test_create_html_rejects_empty(fenv):
     assert create_html.invoke({"title": "T", "html_content": "<div><br></div>"}).startswith("STATUS=")
 
 
+def test_create_html_interactive_js_roundtrip(fenv):
+    from tools.make_tool import create_html
+
+    ctx.set_current_user_id("m-html")
+    page = ("<!DOCTYPE html><html><head><title>Todo</title></head><body>"
+            "<button id='add'>Add</button><ul id='list'></ul>"
+            "<script>document.getElementById('add').addEventListener('click',function(){"
+            "var li=document.createElement('li');li.textContent='item '+(document.querySelectorAll('#list li').length+1);"
+            "document.getElementById('list').appendChild(li);});</script>"
+            "</body></html>")
+    out = create_html.invoke({"title": "Todo", "html_content": page})
+    assert "file ID:" in out and "browser" in out
+    meta = FileStore("m-html").list_outputs()[0]
+    assert meta.kind == "html"
+    data = FileStore("m-html").read_output(meta.id).decode("utf-8")
+    assert "<script>" in data and "addEventListener" in data
+    assert meta.spec["tool"] == "create_html"
+
+
+def test_create_html_rejects_unclosed_script(fenv):
+    from tools.make_tool import create_html
+
+    ctx.set_current_user_id("m-html")
+    out = create_html.invoke({"title": "Broken", "html_content": "<p>Hi</p><script>const x = 1;"})
+    assert out.startswith("STATUS=INVALID") and "unclosed <script>" in out
+
+
+def test_create_html_rejects_truncated_tail(fenv):
+    from tools.make_tool import create_html
+
+    ctx.set_current_user_id("m-html")
+    cut = ("<!DOCTYPE html><html><head><title>Cut</title></head>"
+           "<body><p>Hello</p><div")
+    out = create_html.invoke({"title": "Cut", "html_content": cut})
+    assert out.startswith("STATUS=INVALID") and "truncated" in out
+
+
 def test_spec_cleaner_accepts_new_kinds():
     from services.storage import clean_generation_spec
 

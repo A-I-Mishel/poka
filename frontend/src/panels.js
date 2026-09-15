@@ -213,8 +213,9 @@ var SECTIONS = {
       var list = await req("/api/artifacts");
       if (!Array.isArray(list)) list = [];
       var rows = list.map(function (a) {
+        var hint = (a.kind === "html") ? "HTML — download, then open in browser to run" : (a.sub || a.kind || "");
         return '<div class="art" data-art="' + esc(a.id) + '" data-name="' + esc(a.name || "file") + '"><div class="th">' + IC[artIcon(a.kind)] + "</div>" +
-          '<div class="b"><div class="t">' + esc(a.name || "file") + '</div><div class="s">' + esc(a.sub || a.kind || "") + "</div></div>" +
+          '<div class="b"><div class="t">' + esc(a.name || "file") + '</div><div class="s">' + esc(hint) + "</div></div>" +
           '<button class="row-btn second" data-regen="' + esc(a.id) + '" title="Regenerate">↻</button>' +
           '<button class="row-btn" data-delart="' + esc(a.id) + '" title="Delete">✕</button></div>';
       }).join("");
