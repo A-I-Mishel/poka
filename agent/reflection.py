@@ -17,6 +17,7 @@ from services.limits import (
     REFLECT_FAILURE_KEYWORDS,
     REFLECT_MIN_IMPROVE_RATIO,
     REFLECT_SHORT_DRAFT_CHARS,
+    MAX_QUERY_CHARS,
 )
 
 REFLECTION_ENABLED: bool = True
@@ -73,11 +74,19 @@ def _has_improve_marker(text: str) -> bool:
 
 
 def _improved_text(text: str) -> str:
-    """Extract the improved version after an anchored [IMPROVE] marker."""
+    """Extract the improved version after an anchored [IMPROVE] marker.
+
+    Returns everything after the first [IMPROVE] marker (including newlines),
+    not just the first line.
+    """
     body = _strip_fences(text or "")
-    for line in body.splitlines():
+    for i, line in enumerate(body.splitlines()):
         if line.lstrip().upper().startswith("[IMPROVE]"):
-            return line.split("]", 1)[1].strip() if "]" in line else ""
+            # Return everything after the marker on this line, plus all subsequent lines
+            prefix = line.split("]", 1)[1] if "]" in line else ""
+            rest = "\n".join(body.splitlines()[i+1:])
+            combined = (prefix + "\n" + rest).strip()
+            return combined
     return ""
 
 
@@ -102,11 +111,13 @@ def reflect_and_improve(
             return draft_output
     draft_window = (draft_output or "")[:REFLECT_DRAFT_WINDOW_CHARS]
     truncated = len(draft_output or "") > REFLECT_DRAFT_WINDOW_CHARS
+    # Cap original_input to prevent unbounded prompt growth
+    capped_input = (original_input or "")[:MAX_QUERY_CHARS]
     try:
         reflection_prompt = (
             "You just produced this output for the user. Critique it honestly: "
             "is it accurate, complete, well-structured?\n\n"
-            f"Original request: {original_input}\n"
+            f"Original request: {capped_input}\n"
             f"Draft output:{' (first part shown; full text was truncated)' if truncated else ''}\n{draft_window}\n\n"
             "If the draft is good, reply with exactly: [PASS]\n"
             "If it needs improvement, reply with: [IMPROVE] followed by the "

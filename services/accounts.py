@@ -43,6 +43,10 @@ _SESSION_TTL_SECONDS = 30 * 86400.0
 # account for 15 minutes (429). Counters live on the user record and
 # reset on success. Unknown usernames never lock (that would oracle
 # existence) — they burn a dummy PBKDF2 and return the generic 401.
+# Trade-off: the 429 "Too many … Try again in Xs" confirms that the
+# username exists (vs 401 for unknown). Accepted for brute-force friction;
+# the alternative (always 401) would hide existence but let attackers
+# hammer without back-off.
 _LOCKOUT_MAX_FAILS = 5
 _LOCKOUT_WINDOW_SECONDS = 15 * 60.0
 _LOCKOUT_DURATION_SECONDS = 15 * 60.0
@@ -137,22 +141,6 @@ def _normalize_username(raw: Any) -> str:
             "Username must be 3-32 characters: letters, digits, _, ., -."
         )
     return text.lower()
-
-
-def _check_password(raw: Any) -> str:
-    """Validate a password's shape; return it or raise (never stored).
-
-    Shape only (length) — login must accept any 8-128-char secret so
-    past users are never locked out by later strength rules. New
-    passwords go through _check_new_password() instead.
-    """
-    text = str(raw or "")
-    if not (_MIN_PASSWORD_CHARS <= len(text) <= _MAX_PASSWORD_CHARS):
-        raise AccountError(
-            "Password must be %d-%d characters."
-            % (_MIN_PASSWORD_CHARS, _MAX_PASSWORD_CHARS)
-        )
-    return text
 
 
 # Small denylist of the most-guessed passwords (compared case-insensitively,
@@ -409,13 +397,14 @@ def login(username: Any, password: Any, agent: str = "") -> Tuple[str, Dict[str,
 
 
 def change_password(user_id: Any, current_password: Any,
-                    new_password: Any) -> Tuple[str, Dict[str, str]]:
+                    new_password: Any, agent: str = "") -> Tuple[str, Dict[str, str]]:
     """Rotate an account's password; revoke every session; open a fresh one.
 
     Verifies the current password (generic AccountAuthFailed on mismatch
     so a stolen session alone cannot probe), strength-checks the new one,
     then returns (raw_token, info) for the caller's new session. The
     caller must replace its stored token — all old ones are dead.
+    The new session preserves the device `agent` label (User-Agent).
     """
     target = str(user_id or "")
     path = _accounts_path()
@@ -442,7 +431,7 @@ def change_password(user_id: Any, current_password: Any,
         record["hash"] = _hash_password(new_secret, new_salt)
         _reset_fail(record)
         _revoke_user_sessions(reg, target)
-        token = _mint_session(reg, target)
+        token = _mint_session(reg, target, agent)
         try:
             _save_registry(reg)
         except Exception as e:

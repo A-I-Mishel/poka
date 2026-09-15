@@ -12,8 +12,24 @@ like code execution — open mode is denied outright.
 """
 
 import logging
+import re
 
 from langchain_core.tools import tool
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _valid_email(addr: str) -> bool:
+    text = str(addr or "").strip()
+    if not _EMAIL_RE.match(text):
+        return False
+    # no consecutive dots, no leading/trailing dot in local/domain
+    if ".." in text:
+        return False
+    local, domain = text.rsplit("@", 1)
+    if local.startswith(".") or local.endswith(".") or domain.startswith(".") or domain.endswith("."):
+        return False
+    return True
 
 from services import gmail as gmail_svc
 from services.context import get_current_user_id, get_limit_key
@@ -135,7 +151,7 @@ def create_gmail_draft(to: str, subject: str, body: str) -> str:
     if service is None:
         return err
     to = str(to or "").strip()
-    if "@" not in to:
+    if not _valid_email(to):
         return "STATUS=INVALID tool=create_gmail_draft: bad recipient address."
     try:
         draft = gmail_svc.create_draft(service, to, str(subject or ""), str(body or ""))
@@ -166,7 +182,7 @@ def send_gmail(to: str, subject: str, body: str, confirm: bool = False) -> str:
     if service is None:
         return err
     to = str(to or "").strip()
-    if "@" not in to:
+    if not _valid_email(to):
         return "STATUS=INVALID tool=send_gmail: bad recipient address."
     if confirm is not True:
         return (

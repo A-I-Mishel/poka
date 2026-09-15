@@ -30,6 +30,12 @@ MAX_TABLES_LISTED = 100
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ATTACH_RE = re.compile(r"\b(attach|detach)\b", re.IGNORECASE)
 _READ_RE = re.compile(r"^\s*(select|with|explain)\b", re.IGNORECASE | re.DOTALL)
+_WRITE_RE = re.compile(r"^\s*(create|insert|update|delete|drop|alter|replace|truncate)\b", re.IGNORECASE)
+# For read-path hardening: any of these outside string literals means non-SELECT.
+_WRITE_TOKENS_RE = re.compile(
+    r"\b(insert|update|delete|drop|alter|create|replace|truncate|pragma|vacuum|reindex|analyze)\b",
+    re.IGNORECASE,
+)
 
 
 def _db_path(user_id: Any) -> Path:
@@ -75,6 +81,12 @@ def list_tables(user_id: Any) -> List[str]:
         return []
 
 
+def _quote_ident(name: str) -> str:
+    """Quote a validated identifier for use in SQL (defense-in-depth)."""
+    # valid_identifier guarantees [A-Za-z_][A-Za-z0-9_]* so quoting is trivial
+    return '"' + name.replace('"', '""') + '"'
+
+
 def describe_table(user_id: Any, table: str) -> Dict[str, Any]:
     """Columns + row count for one table (validated name)."""
     name = valid_identifier(table)
@@ -82,10 +94,12 @@ def describe_table(user_id: Any, table: str) -> Dict[str, Any]:
         return {"error": "Unsafe table name rejected."}
     try:
         with _connect(user_id) as conn:
-            cols = conn.execute(f"PRAGMA table_info({name})").fetchall()
+            # PRAGMA table_info does not support ? placeholder — use quoted ident
+            qname = _quote_ident(name)
+            cols = conn.execute(f"PRAGMA table_info({qname})").fetchall()
             if not cols:
                 return {"error": "Unknown table."}
-            count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()
+            count = conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()
         return {
             "name": name,
             "columns": [{"name": str(c[1]), "type": str(c[2] or "")} for c in cols],
@@ -95,17 +109,133 @@ def describe_table(user_id: Any, table: str) -> Dict[str, Any]:
         return {"error": _safe_db_error("describe", e)}
 
 
+def _strip_sql_literals(sql: str) -> str:
+    """Return sql with string literals and comments replaced by spaces (for safe token checks)."""
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        c = sql[i]
+        # single-quoted string '' escapes as ''
+        if c == "'":
+            out.append(" ")
+            i += 1
+            while i < n:
+                if sql[i] == "'":
+                    if i + 1 < n and sql[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        # double-quoted identifier "" escapes as ""
+        if c == '"':
+            out.append(" ")
+            i += 1
+            while i < n:
+                if sql[i] == '"':
+                    if i + 1 < n and sql[i + 1] == '"':
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        # line comment -- until newline (not inside strings, handled above)
+        if c == "-" and i + 1 < n and sql[i + 1] == "-":
+            out.append("  ")
+            i += 2
+            while i < n and sql[i] != "\n":
+                i += 1
+            continue
+        # block comment /* ... */
+        if c == "/" and i + 1 < n and sql[i + 1] == "*":
+            out.append("  ")
+            i += 2
+            while i < n:
+                if sql[i] == "*" and i + 1 < n and sql[i + 1] == "/":
+                    i += 2
+                    break
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _is_safe_read_sql(sql: str) -> str:
+    """Validate read-only SQL. Returns "" when safe, else error message."""
+    stripped = _strip_sql_literals(sql)
+    # reject multi-statement (semicolon outside literals/comments)
+    if ";" in stripped:
+        return "Multiple statements are not allowed."
+    if _ATTACH_RE.search(stripped):
+        return "ATTACH/DETACH are not allowed."
+    if not _READ_RE.match(stripped):
+        return "Read path accepts SELECT/WITH/EXPLAIN only."
+    # Peel leading WITH ... to find the outer verb; if WITH present, ensure
+    # the final statement is SELECT/EXPLAIN SELECT and no write tokens appear
+    # outside the CTE definitions in a way that indicates DML.
+    # Simplest robust rule: after stripping literals, a read query must not
+    # contain write verbs at all — a pure SELECT/WITH...SELECT never needs them.
+    # This blocks WITH x AS (SELECT ...) DELETE ... and friends.
+    # Allow only SELECT/EXPLAIN as top-level; write verbs inside strings already stripped.
+    # Check for write tokens anywhere — safe because a legitimate SELECT never
+    # contains DELETE/INSERT/UPDATE/etc as keywords outside strings.
+    # Exception: allow the word inside CTE's inner SELECT's column aliases? Those would be quoted/aliases.
+    # Keep strict: if any write token found, reject.
+    if _WRITE_TOKENS_RE.search(stripped):
+        # Need to distinguish CTE's inner SELECTs which are fine: they contain SELECT but not write verbs.
+        # If a write verb appears, it's an injection like WITH ... DELETE or WITH ... PRAGMA.
+        # Re-check more precisely: normal SELECT with a column named pragmatically safe?
+        # Column names with those words would be without word boundaries due to underscore, so not matched.
+        return "Read path does not allow write operations (use the write path with confirm=true)."
+    # Final verb after optional WITH ... must be SELECT or EXPLAIN
+    # Remove leading WITH ... by finding the last top-level SELECT/EXPLAIN
+    # Heuristic: if stripped starts with WITH, ensure it contains a SELECT keyword after the CTEs
+    lower = stripped.strip().lower()
+    if lower.startswith("with"):
+        # Must contain a SELECT after the CTE definitions; crude but effective:
+        # locate the last occurrence of ') select' or 'select' that starts a query
+        if not re.search(r"\bselect\b", stripped, re.IGNORECASE):
+            return "WITH queries must end with SELECT."
+        # Ensure after the final CTE's closing paren, the remainder starts with SELECT/EXPLAIN
+        # For simplicity, ensure no write verb was found (already checked) — accept.
+        pass
+    # Additional: EXPLAIN must explain a SELECT, not a write
+    if re.match(r"^\s*explain\b", stripped, re.IGNORECASE):
+        after_explain = re.sub(r"^\s*explain(\s+query\s+plan)?\s+", "", stripped, flags=re.IGNORECASE)
+        if _WRITE_TOKENS_RE.search(after_explain):
+            return "EXPLAIN may only explain SELECT."
+        if not re.match(r"^\s*(select|with)\b", after_explain, re.IGNORECASE):
+            return "EXPLAIN may only explain SELECT."
+    return ""
+
+
 def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
     """Read-only query: single SELECT/WITH/EXPLAIN, capped rows."""
     text = str(sql or "").strip().rstrip(";").strip()
     if not text:
         return {"error": "Empty query."}
-    if _ATTACH_RE.search(text):
-        return {"error": "ATTACH/DETACH are not allowed."}
-    if not _READ_RE.match(text):
-        return {"error": "Read path accepts SELECT/WITH/EXPLAIN only."}
+    err = _is_safe_read_sql(text)
+    if err:
+        return {"error": err}
     try:
         with _connect(user_id) as conn:
+            # Defense in depth: authorizer denies any non-read operation even if regex misses.
+            try:
+                def _authorizer(action: int, _a: Any, _b: Any, _dbname: Any, _src: Any) -> int:
+                    # Allow SELECT (21), READ (20), and EXPLAIN's internal reads.
+                    # Deny everything else: INSERT/UPDATE/DELETE/DROP/etc.
+                    # SQLITE_SELECT=21, SQLITE_READ=20 exist in stdlib sqlite3.
+                    allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ}
+                    # SQLITE_PRAGMA is not allowed on read path (except internal PRAGMA journal_mode elsewhere)
+                    return sqlite3.SQLITE_OK if action in allowed else sqlite3.SQLITE_DENY
+
+                conn.set_authorizer(_authorizer)  # type: ignore[arg-type]
+            except Exception:
+                pass
             cur = conn.execute(text)
             cols = [d[0] for d in (cur.description or [])]
             rows = cur.fetchmany(max(1, min(int(max_rows or 200), MAX_ROWS)))
@@ -114,6 +244,9 @@ def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
             "rows": [[_cell(v) for v in r] for r in rows],
         }
     except Exception as e:
+        # Authorizer denial surfaces as DatabaseError — map to user-safe message.
+        if "not authorized" in str(e).lower() or "authorizer" in str(e).lower():
+            return {"error": "Read path does not allow write operations (use the write path with confirm=true)."}
         return {"error": _safe_db_error("query", e)}
 
 
@@ -127,16 +260,22 @@ def _cell(value: Any) -> Any:
 def execute_write(user_id: Any, sql: str) -> Dict[str, Any]:
     """Run one write statement (CREATE/INSERT/UPDATE/DELETE/...).
 
-    Single statement only; ATTACH/DETACH rejected. Returns rowcount.
+    Single statement only; ATTACH/DETACH rejected. PRAGMA/VACUUM and
+    other non-DML verbs are rejected — allowlist only. Returns rowcount.
     The tool layer gates on explicit user confirmation.
     """
     text = str(sql or "").strip().rstrip(";").strip()
     if not text:
         return {"error": "Empty statement."}
-    if _ATTACH_RE.search(text):
+    stripped = _strip_sql_literals(text)
+    if ";" in stripped:
+        return {"error": "Multiple statements are not allowed."}
+    if _ATTACH_RE.search(stripped):
         return {"error": "ATTACH/DETACH are not allowed."}
-    if _READ_RE.match(text):
+    if _READ_RE.match(stripped):
         return {"error": "Use the read path for SELECT queries."}
+    if not _WRITE_RE.match(stripped):
+        return {"error": "Write path accepts CREATE/INSERT/UPDATE/DELETE/DROP/ALTER/REPLACE/TRUNCATE only (PRAGMA/VACUUM not allowed)."}
     try:
         with _connect(user_id) as conn:
             cur = conn.execute(text)
@@ -188,12 +327,13 @@ def import_csv(user_id: Any, table: str, data: bytes) -> Dict[str, Any]:
         affinities = [_affinity([r[i] if i < len(r) else "" for r in rows]) for i in range(len(columns))]
         padded = [[(r[i] if i < len(r) else "") for i in range(len(columns))] for r in rows]
         with _connect(user_id) as conn:
-            conn.execute(f"DROP TABLE IF EXISTS {name}")
+            qname = _quote_ident(name)
+            qcols = [_quote_ident(c) for c in columns]
+            conn.execute(f"DROP TABLE IF EXISTS {qname}")
             conn.execute(
-                "CREATE TABLE %s (%s)" % (
-                    name, ", ".join('%s %s' % (c, a) for c, a in zip(columns, affinities))))
+                f"CREATE TABLE {qname} ({', '.join(f'{qc} {a}' for qc, a in zip(qcols, affinities))})")
             conn.executemany(
-                "INSERT INTO %s VALUES (%s)" % (name, ", ".join("?" * len(columns))), padded)
+                f"INSERT INTO {qname} VALUES ({', '.join('?' * len(columns))})", padded)
             conn.commit()
         return {"table": name, "rows": len(padded), "columns": columns}
     except Exception as e:

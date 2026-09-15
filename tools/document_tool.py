@@ -409,8 +409,26 @@ def _odf_content_root(blob: bytes) -> Tuple[object, dict]:
     """Return (ElementTree root, namespace map) for an ODF content.xml."""
     import xml.etree.ElementTree as ET
 
+    # XXE/billion-laughs guard: reject entity declarations before parsing.
+    # Stdlib ET ignores external SYSTEM entities but expands internal ones.
+    if len(blob) > 5 * 1024 * 1024:
+        raise ValueError("ODF content.xml too large")
+    # cheap case-insensitive check for DOCTYPE/ENTITY without lower-casing huge blob
+    head = blob[:8192].lower() if len(blob) > 8192 else blob.lower()
+    # also scan full for entity if head didn't contain but bomb could hide later — still cheap
+    if b"<!doctype" in head or b"<!entity" in head or b"<!doctype" in blob.lower() or b"<!entity" in blob.lower():
+        raise ValueError("XML entities are not allowed in ODF content")
     try:
-        root = ET.fromstring(blob)
+        # Prefer defusedxml when available (external entity forbid + entity expansion limit)
+        try:
+            import defusedxml.ElementTree as DET  # type: ignore
+            root = DET.fromstring(blob, forbid_dtd=True, forbid_entities=True)
+        except ImportError:
+            root = ET.fromstring(blob)
+        except Exception as e:
+            raise ValueError(f"cannot parse document content ({e})")
+    except ValueError:
+        raise
     except Exception as e:
         raise ValueError(f"cannot parse document content ({e})")
     ns = {
@@ -429,9 +447,14 @@ def _odf_para_text(elem, ns: dict) -> str:
 def _read_odt_file(path) -> str:
     try:
         with zipfile.ZipFile(str(path)) as z:
+            info = z.getinfo("content.xml")
+            if int(getattr(info, "file_size", 0) or 0) > 5 * 1024 * 1024:
+                raise ValueError("odt content.xml too large")
             blob = z.read("content.xml")
     except KeyError:
         raise ValueError("odt archive has no content.xml")
+    except ValueError:
+        raise
     except Exception as e:
         raise ValueError(f"cannot open odt ({e})")
     root, ns = _odf_content_root(blob)
@@ -451,9 +474,14 @@ def _read_odt_file(path) -> str:
 def _read_ods_file(path) -> str:
     try:
         with zipfile.ZipFile(str(path)) as z:
+            info = z.getinfo("content.xml")
+            if int(getattr(info, "file_size", 0) or 0) > 5 * 1024 * 1024:
+                raise ValueError("ods content.xml too large")
             blob = z.read("content.xml")
     except KeyError:
         raise ValueError("ods archive has no content.xml")
+    except ValueError:
+        raise
     except Exception as e:
         raise ValueError(f"cannot open ods ({e})")
     root, ns = _odf_content_root(blob)
@@ -491,9 +519,14 @@ def _read_ods_file(path) -> str:
 def _read_odp_file(path) -> str:
     try:
         with zipfile.ZipFile(str(path)) as z:
+            info = z.getinfo("content.xml")
+            if int(getattr(info, "file_size", 0) or 0) > 5 * 1024 * 1024:
+                raise ValueError("odp content.xml too large")
             blob = z.read("content.xml")
     except KeyError:
         raise ValueError("odp archive has no content.xml")
+    except ValueError:
+        raise
     except Exception as e:
         raise ValueError(f"cannot open odp ({e})")
     root, ns = _odf_content_root(blob)

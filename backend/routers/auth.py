@@ -106,6 +106,7 @@ def _require_account(ctx: UserContext) -> None:
 
 @router.post("/change-password", response_model=schemas.SessionResponse)
 def change_password(body: schemas.ChangePasswordRequest,
+                    request: Request,
                     ctx: UserContext = Depends(current_user)):
     """Rotate the password; every session dies, a fresh token returns.
 
@@ -115,7 +116,8 @@ def change_password(body: schemas.ChangePasswordRequest,
     _require_account(ctx)
     try:
         token, info = accounts_svc.change_password(
-            ctx.user_id, body.current_password, body.new_password)
+            ctx.user_id, body.current_password, body.new_password,
+            agent=_agent(request))
     except AccountAuthFailed as e:
         raise HTTPException(status_code=401, detail=str(e))
     except AccountWeakPassword as e:

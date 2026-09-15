@@ -19,10 +19,6 @@ GEMINI_35_MODEL: str = "gemini-3.5-flash"
 OPENCODE_BASE_URL: str = "https://opencode.ai/zen/v1"
 # Free OpenCode Zen models (Sept 2026; promos rotate — see
 # https://opencode.ai/docs/zen/ for the current free list).
-# NOTE (Sep 11 2026 docs): deepseek-v4-flash-free is RETIRED — the live
-# ID is deepseek-v4-flash and it is PAID ($0.14/$0.28 per 1M). Keep the
-# constant for reference but never call it (getter returns None below).
-DEEPSEEK_FREE_MODEL: str = "deepseek-v4-flash-free"
 NEMOTRON_ULTRA_MODEL: str = "nemotron-3-ultra-free"
 BIG_PICKLE_MODEL: str = "big-pickle"
 MIMO_MODEL: str = "mimo-v2.5-free"
@@ -89,7 +85,7 @@ TEMPERATURE: float = 0.7
 # client object requires. Bounded keyspace (tiers x task temperatures)
 # plus a hard cap; instances are never mutated after caching (callers
 # needing another temperature fetch their own entry via get_tier_llm).
-_CLIENT_CACHE: Dict[Tuple[str, float], Tuple[str, Any]] = {}
+_CLIENT_CACHE: Dict[Tuple[str, float, str], Tuple[str, Any]] = {}
 _CLIENT_CACHE_LOCK = threading.Lock()
 _MAX_CACHED_CLIENTS: int = 32
 
@@ -99,10 +95,10 @@ def _key_fingerprint(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-def _cached_client(tier: str, temperature: float, key: str, make: Callable[[], Any]) -> Any:
-    """Return the cached client for (tier, temperature, key), building once."""
-    cache_key = (tier, float(temperature))
-    fingerprint = _key_fingerprint(key)
+def _cached_client(tier: str, temperature: float, key: str, model: str, make: Callable[[], Any]) -> Any:
+    """Return the cached client for (tier, temperature, key, model), building once."""
+    cache_key = (tier, float(temperature), str(model))
+    fingerprint = _key_fingerprint(f"{key}\x00{model}")
     with _CLIENT_CACHE_LOCK:
         hit = _CLIENT_CACHE.get(cache_key)
         if hit is not None and secrets.compare_digest(hit[0], fingerprint):
@@ -110,7 +106,11 @@ def _cached_client(tier: str, temperature: float, key: str, make: Callable[[], A
     client = make()
     with _CLIENT_CACHE_LOCK:
         if len(_CLIENT_CACHE) >= _MAX_CACHED_CLIENTS:
-            _CLIENT_CACHE.clear()
+            # Evict oldest instead of nuking all hot clients (Gemini ~700ms each).
+            try:
+                _CLIENT_CACHE.pop(next(iter(_CLIENT_CACHE)))
+            except (StopIteration, KeyError):
+                pass
         _CLIENT_CACHE[cache_key] = (fingerprint, client)
     return client
 
@@ -130,11 +130,6 @@ def _get_secret(name: str) -> Optional[str]:
     return get_secret(name)
 
 
-def _is_placeholder(value: Optional[str], placeholder: str) -> bool:
-    """Check for missing or unreplaced placeholder secrets."""
-    return not value or value.strip() in ("", placeholder)
-
-
 def _get_opencode_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
     """Build an OpenCode Zen client for one model (shared factory).
 
@@ -142,7 +137,7 @@ def _get_opencode_llm(tier: str, model: str, temperature: float) -> Optional[Cha
     see identical behavior to the previous per-tier constructors.
     """
     key: Optional[str] = _get_secret("OPENCODE_API_KEY")
-    if _is_placeholder(key, "your_opencode_key_here"):
+    if key is None:
         return None
     assert key is not None
     try:
@@ -150,6 +145,7 @@ def _get_opencode_llm(tier: str, model: str, temperature: float) -> Optional[Cha
             tier,
             temperature,
             key,
+            model,
             lambda: ChatOpenAI(
                 model=model,
                 api_key=key,
@@ -173,7 +169,7 @@ def _get_opencode_responses_llm(tier: str, model: str, temperature: float) -> Op
     (invoke/stream/bind_tools) the cascade and tool loop expect.
     """
     key: Optional[str] = _get_secret("OPENCODE_API_KEY")
-    if _is_placeholder(key, "your_opencode_key_here"):
+    if key is None:
         return None
     assert key is not None
     try:
@@ -181,6 +177,7 @@ def _get_opencode_responses_llm(tier: str, model: str, temperature: float) -> Op
             tier,
             temperature,
             key,
+            model,
             lambda: ChatOpenAI(
                 model=model,
                 api_key=key,
@@ -206,17 +203,6 @@ def get_tier1_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
 def get_tier1b_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """TIER 1B: Nemotron 3.5 Lightning via OpenCode -- free tier, separate quota."""
     return _get_opencode_llm("Nemotron 3.5", FREE_MODEL, temperature)
-
-
-def get_tier_deepseek_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """DeepSeek V4 Flash -- RETIRED as a free tier (Sep 11 2026 docs).
-
-    The *-free ID no longer exists (live ID deepseek-v4-flash is paid),
-    so calling it only yields 400 invalid + a 1h cooldown. Always
-    return None so the tier is skipped and hidden from /api/health.
-    Kept for backward-compatible imports only.
-    """
-    return None
 
 
 def get_tier_nemotron_ultra_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
@@ -267,12 +253,12 @@ def _make_gemini(model: str, key: str, temperature: float):
 def get_tier2_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
     """TIER 2: Gemini 3.6 Flash -- latest stable free tier (Sept 2026)."""
     key: Optional[str] = _get_secret("GEMINI_API_KEY")
-    if _is_placeholder(key, "your_gemini_key_here"):
+    if key is None:
         return None
     assert key is not None
     try:
         return _cached_client(
-            "Gemini 3.6 Flash", temperature, key,
+            "Gemini 3.6 Flash", temperature, key, GEMINI_36_MODEL,
             lambda: _make_gemini(GEMINI_36_MODEL, key, temperature),
         )
     except Exception:
@@ -282,12 +268,12 @@ def get_tier2_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenera
 def get_tier3_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
     """TIER 3: Gemini 3.5 Flash -- older fallback, still free."""
     key: Optional[str] = _get_secret("GEMINI_API_KEY")
-    if _is_placeholder(key, "your_gemini_key_here"):
+    if key is None:
         return None
     assert key is not None
     try:
         return _cached_client(
-            "Gemini 3.5 Flash", temperature, key,
+            "Gemini 3.5 Flash", temperature, key, GEMINI_35_MODEL,
             lambda: _make_gemini(GEMINI_35_MODEL, key, temperature),
         )
     except Exception:
@@ -308,16 +294,18 @@ def _groq_model() -> str:
 def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """Groq tier: fast LPU inference via the OpenAI-compatible endpoint."""
     key: Optional[str] = _get_secret("GROQ_API_KEY")
-    if _is_placeholder(key, "your_groq_key_here"):
+    if key is None:
         return None
     assert key is not None
     try:
+        model = _groq_model()
         return _cached_client(
             "Groq",
             temperature,
             key,
+            model,
             lambda: ChatOpenAI(
-                model=_groq_model(),
+                model=model,
                 api_key=key,
                 base_url=GROQ_BASE_URL,
                 temperature=temperature,
@@ -343,16 +331,18 @@ def _cerebras_model() -> str:
 def get_tier_cerebras_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """Cerebras tier: free waferscale inference via OpenAI-compatible endpoint."""
     key: Optional[str] = _get_secret("CEREBRAS_API_KEY")
-    if _is_placeholder(key, "your_cerebras_key_here"):
+    if key is None:
         return None
     assert key is not None
     try:
+        model = _cerebras_model()
         return _cached_client(
             "Cerebras",
             temperature,
             key,
+            model,
             lambda: ChatOpenAI(
-                model=_cerebras_model(),
+                model=model,
                 api_key=key,
                 base_url=CEREBRAS_BASE_URL,
                 temperature=temperature,
@@ -389,7 +379,7 @@ def _get_generic_openai_tier(
     Older tiers keep their bespoke constructors untouched.
     """
     key: Optional[str] = _get_secret(key_name)
-    if _is_placeholder(key, placeholder):
+    if key is None:
         return None
     assert key is not None
     try:
@@ -397,6 +387,7 @@ def _get_generic_openai_tier(
             tier,
             temperature,
             key,
+            model,
             lambda: ChatOpenAI(
                 model=model,
                 api_key=key,
@@ -452,7 +443,7 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
     key, and model slug differ. Missing key -> None (tier skipped).
     """
     key: Optional[str] = _get_secret("OPENROUTER_API_KEY")
-    if _is_placeholder(key, "your_openrouter_key_here"):
+    if key is None:
         return None
     assert key is not None
     try:
@@ -460,6 +451,7 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
             tier,
             temperature,
             key,
+            model,
             lambda: ChatOpenAI(
                 model=model,
                 api_key=key,
