@@ -121,3 +121,54 @@ def classify_task(
     category = _as_text(response.content).strip().lower()
     valid = ["simple", "research", "creative", "data", "multi_step"]
     return category if category in valid else "simple"
+
+
+_ATTACHMENT_INTENTS = ("vision", "document", "presentation", "web", "none")
+
+
+def classify_attachment_need(
+    user_input: str,
+    available_kinds: Sequence[str],
+    llm_instance: BaseLanguageModel,
+    budget: Optional[RequestBudget] = None,
+) -> tuple:
+    """Auxiliary attachment intent: which historical resource (if any) applies.
+
+    Returns (intent, confidence) where intent is one of
+    vision|document|presentation|web|none. Small structured prompt so the
+    chatflow gate only pays for it on ambiguous pronouns. Never raises:
+    parse failures yield ("none", 0.0) so callers deny safely.
+    """
+    kinds = ", ".join(str(k) for k in (available_kinds or []) if k) or "none"
+    prompt = (
+        "Decide which prior attachment the current request refers to.\n"
+        f"Available kinds: {kinds}.\n"
+        "Reply exactly two lines:\n"
+        "intent: <vision|document|presentation|web|none>\n"
+        "confidence: <0-1>\n"
+        "- vision: refers to a prior image/photo/screenshot\n"
+        "- document: refers to a prior PDF/document/CSV\n"
+        "- presentation: refers to a prior PPT/PPTX/slides\n"
+        "- web: new search/music/code question, no prior file needed\n"
+        "- none: no prior file needed\n\n"
+        f"Request: {user_input}\n"
+    )
+    try:
+        response = agent._invoke_bounded(llm_instance, [HumanMessage(content=prompt)], budget=budget)
+        text = _as_text(response.content).strip().lower()
+    except Exception:
+        raise
+    intent = "none"
+    conf = 0.0
+    try:
+        m_intent = re.search(r"intent\s*:\s*(vision|document|presentation|web|none)", text)
+        if m_intent:
+            intent = m_intent.group(1)
+        m_conf = re.search(r"confidence\s*:\s*(0(?:\.\d+)?|1(?:\.0+)?)", text)
+        if m_conf:
+            conf = max(0.0, min(1.0, float(m_conf.group(1))))
+        if intent not in _ATTACHMENT_INTENTS:
+            return ("none", 0.0)
+        return (intent, conf)
+    except Exception:
+        return ("none", 0.0)

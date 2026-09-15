@@ -63,6 +63,7 @@ from agent.router import (
     _GREETING_RE,
     _signals,
     _UPLOAD_ID_RE,
+    classify_attachment_need,
     classify_task,
     rule_route,
 )
@@ -131,6 +132,7 @@ __all__ = [
     "answer_with_fallback",
     "classify_provider_error",
     "last_tier_error",
+    "classify_attachment_need",
     "classify_task",
     "plan_then_execute",
     "probe_live_tier",

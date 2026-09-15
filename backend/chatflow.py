@@ -345,6 +345,42 @@ def _recent_document_attachments(ctx: UserContext,
     return list(reversed(found))
 
 
+def _available_for_gate(ctx: UserContext,
+                        messages: List[Any]) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """AVAILABLE (not ACTIVE) history for the attachment gate (never raises)."""
+    try:
+        image_ids = _recent_image_ids(ctx, messages, [])
+    except Exception:
+        image_ids = []
+    images: List[Dict[str, str]] = []
+    for uid in image_ids or []:
+        try:
+            meta = ctx.file_store.get_upload(str(uid))
+            name = str(getattr(meta, "display_name", "image") or "image")
+        except Exception:
+            name = "image"
+        images.append({"id": str(uid), "kind": "image", "name": name})
+    try:
+        docs = _recent_document_attachments(ctx, messages, [])
+    except Exception:
+        docs = []
+    return images, [dict(d) for d in (docs or []) if isinstance(d, dict)]
+
+
+def _attachment_classifier(active_tier: Optional[str]):
+    """Cascade-backed (intent, confidence) callable for ambiguous pronouns."""
+    def _fn(text: str, kinds: List[str]):
+        from agent.cascade import _run_cascade_step
+        from agent.router import classify_attachment_need
+
+        def _call(_name, llm):
+            return classify_attachment_need(str(text), list(kinds or []), llm, budget=None)
+
+        _tier, result = _run_cascade_step(_call, first=(active_tier or None))
+        return result
+    return _fn
+
+
 def _check_limits(limit_key: str, deep_mode: bool) -> None:
     """Enforce chat (+deep) rate limits; raises HTTPException(429)."""
     from fastapi import HTTPException
@@ -528,39 +564,60 @@ def run_chat(ctx: UserContext, content: str,
         dict(m) for m in current if isinstance(m, dict)]
     memory_notes, project_context = _memory_and_project(store, project_id)
 
-    # Follow-up questions ("can you read the image?") often arrive as a
-    # separate text-only turn after the upload turn. Reuse recent
-    # conversation images for VISION ONLY (stored attachments stay
-    # truthful) so Gemini actually receives the bytes.
+    # CURRENT message decides ACTIVE context. History is AVAILABLE, never
+    # auto-injected: the gate selects only explicitly/clearly referenced
+    # files so one chat can mix image/doc/ppt/song/code turns safely.
+    # ponytail: gate scans last 10 msgs; widen only if multi-file chats miss.
     vision_ids = list(image_ids)
-    if not vision_ids:
-        vision_ids = _recent_image_ids(ctx, current, [])
-        if vision_ids:
-            send_text += (
-                "\n\n[Note: the user refers to image(s) sent earlier in "
-                "this conversation; their content is provided alongside "
-                "this request when answered by a vision-capable model.]"
-            )
+    needs_docs = not any(a.get("kind") in ("document", "pdf", "csv") for a in attachments)
+    if not vision_ids or needs_docs:
+        from agent.attachment_gate import decide as _gate_decide
 
-    # Same follow-up problem for documents: "can you read it?" often
-    # arrives text-only after the upload turn. Without this the model
-    # gets no upload ID and cannot call read_document/read_pdf.
-    # Re-inject recent document hints (stored message stays truthful).
-    if not any(a.get("kind") in ("document", "pdf", "csv") for a in attachments):
-        reused = _recent_document_attachments(ctx, current, [])
-        if reused:
-            total_r = len(reused)
-            if total_r > 1:
-                send_text += attachments_overview(reused)
-            for position, attach in enumerate(reused, start=1):
-                send_text += attachment_hint(
-                    attach["kind"], attach["id"], attach["name"], position, total_r)
-            for attach in reused:
-                send_text += _attachment_text_hint(ctx, attach)
-            send_text += (
-                "\n\n[Note: the user refers to file(s) sent earlier in "
-                "this conversation; use the upload ID(s) above.]"
-            )
+        avail_images, avail_docs = _available_for_gate(ctx, current)
+        decision = _gate_decide(text, avail_images, avail_docs,
+                                classifier=_attachment_classifier(active_tier))
+        if decision.get("clarify") and not attachments:
+            assistant_msg: Dict[str, Any] = {
+                "role": "assistant",
+                "content": str(decision["clarify"]),
+                "time": utcnow_iso(),
+                **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                                   "clarify", None),
+            }
+            current = current + [user_msg, assistant_msg]
+            store.save_chats(chats, current)
+            return {
+                "message": assistant_msg,
+                "active_tier": "clarify",
+                "task_type": "clarify",
+                "warnings": warnings,
+                "fallback": None,
+            }
+        if not vision_ids:
+            vision_ids = [str(e.get("id")) for e in (decision.get("use_images") or [])
+                          if isinstance(e, dict) and e.get("id")]
+            if vision_ids:
+                send_text += (
+                    "\n\n[Note: the user refers to image(s) sent earlier in "
+                    "this conversation; their content is provided alongside "
+                    "this request when answered by a vision-capable model.]"
+                )
+        if needs_docs:
+            reused = [dict(e) for e in (decision.get("use_docs") or [])
+                      if isinstance(e, dict) and e.get("id")]
+            if reused:
+                total_r = len(reused)
+                if total_r > 1:
+                    send_text += attachments_overview(reused)
+                for position, attach in enumerate(reused, start=1):
+                    send_text += attachment_hint(
+                        attach["kind"], attach["id"], attach["name"], position, total_r)
+                for attach in reused:
+                    send_text += _attachment_text_hint(ctx, attach)
+                send_text += (
+                    "\n\n[Note: the user refers to file(s) sent earlier in "
+                    "this conversation; use the upload ID(s) above.]"
+                )
 
     assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, vision_ids,
@@ -656,30 +713,55 @@ def regenerate_chat(ctx: UserContext, index: int,
     memory_notes, project_context = _memory_and_project(store, project_id)
 
     vision_ids = list(image_ids)
-    if not vision_ids:
-        vision_ids = _recent_image_ids(ctx, prior, [])
-        if vision_ids:
-            send_text += (
-                "\n\n[Note: the user refers to image(s) sent earlier in "
-                "this conversation; their content is provided alongside "
-                "this request when answered by a vision-capable model.]"
-            )
+    needs_docs = not any(isinstance(a, dict) and a.get("kind") in ("document", "pdf", "csv") for a in attachments)
+    if not vision_ids or needs_docs:
+        from agent.attachment_gate import decide as _gate_decide
 
-    if not any(isinstance(a, dict) and a.get("kind") in ("document", "pdf", "csv") for a in attachments):
-        reused = _recent_document_attachments(ctx, prior, [])
-        if reused:
-            total_r = len(reused)
-            if total_r > 1:
-                send_text += attachments_overview(reused)
-            for position, attach in enumerate(reused, start=1):
-                send_text += attachment_hint(
-                    attach["kind"], attach["id"], attach["name"], position, total_r)
-            for attach in reused:
-                send_text += _attachment_text_hint(ctx, attach)
-            send_text += (
-                "\n\n[Note: the user refers to file(s) sent earlier in "
-                "this conversation; use the upload ID(s) above.]"
-            )
+        avail_images, avail_docs = _available_for_gate(ctx, prior)
+        decision = _gate_decide(send_text, avail_images, avail_docs,
+                                classifier=_attachment_classifier(active_tier))
+        if decision.get("clarify") and not attachments:
+            fresh_msg: Dict[str, Any] = {
+                "role": "assistant",
+                "content": str(decision["clarify"]),
+                "time": utcnow_iso(),
+                **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                                   "clarify", None),
+            }
+            current = current + [fresh_msg]
+            store.save_chats(chats, current)
+            return {
+                "message": fresh_msg,
+                "active_tier": "clarify",
+                "task_type": "clarify",
+                "warnings": warnings,
+                "fallback": None,
+            }
+        if not vision_ids:
+            vision_ids = [str(e.get("id")) for e in (decision.get("use_images") or [])
+                          if isinstance(e, dict) and e.get("id")]
+            if vision_ids:
+                send_text += (
+                    "\n\n[Note: the user refers to image(s) sent earlier in "
+                    "this conversation; their content is provided alongside "
+                    "this request when answered by a vision-capable model.]"
+                )
+        if needs_docs:
+            reused = [dict(e) for e in (decision.get("use_docs") or [])
+                      if isinstance(e, dict) and e.get("id")]
+            if reused:
+                total_r = len(reused)
+                if total_r > 1:
+                    send_text += attachments_overview(reused)
+                for position, attach in enumerate(reused, start=1):
+                    send_text += attachment_hint(
+                        attach["kind"], attach["id"], attach["name"], position, total_r)
+                for attach in reused:
+                    send_text += _attachment_text_hint(ctx, attach)
+                send_text += (
+                    "\n\n[Note: the user refers to file(s) sent earlier in "
+                    "this conversation; use the upload ID(s) above.]"
+                )
 
     fresh_msg, tier, task_type, fallback = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, vision_ids,
