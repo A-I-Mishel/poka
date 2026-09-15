@@ -13,19 +13,13 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
 from config import (
-    get_tier1_llm,
-    get_tier1b_llm,
     get_tier2_llm,
     get_tier3_llm,
-    get_tier_big_pickle_llm,
     get_tier_cerebras_llm,
     get_tier_github_models_llm,
     get_tier_groq_llm,
-    get_tier_ling_llm,
-    get_tier_mimo_llm,
     get_tier_mistral_llm,
     get_tier_nvidia_llm,
-    get_tier_nemotron_ultra_llm,
     get_tier_openrouter_free_router_llm,
     get_tier_openrouter_gemma26_llm,
     get_tier_openrouter_gemma_llm,
@@ -40,12 +34,6 @@ from config import (
 TIER_AGENT_GETTERS: List[
     Tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogleGenerativeAI]]]]
 ] = [
-    ("Muse Spark 1.3", get_tier1_llm),  # type: ignore[arg-type]
-    ("Nemotron 3.5", get_tier1b_llm),  # type: ignore[arg-type]
-    ("Nemotron 3 Ultra", get_tier_nemotron_ultra_llm),  # type: ignore[arg-type]
-    ("Big Pickle", get_tier_big_pickle_llm),  # type: ignore[arg-type]
-    ("MiMo V2.5", get_tier_mimo_llm),  # type: ignore[arg-type]
-    ("Ling 3.0 Flash", get_tier_ling_llm),  # type: ignore[arg-type]
     ("Groq", get_tier_groq_llm),  # type: ignore[arg-type]
     ("Cerebras", get_tier_cerebras_llm),  # type: ignore[arg-type]
     ("Gemini 3.6 Flash", get_tier2_llm),  # type: ignore[arg-type]

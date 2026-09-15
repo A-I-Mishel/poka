@@ -1,4 +1,10 @@
-"""Multi-tier LLM cascade: OpenCode free models -> Groq -> Gemini -> OpenRouter free fallbacks."""
+"""Multi-tier LLM cascade: Groq -> Gemini -> OpenRouter free fallbacks.
+
+OpenCode Zen free tier retired Sep 2026: provider returns
+MissingSessionID ("free tier can only be used in OpenCode") for
+API calls, so the 6 free lanes were removed. Paid Zen models remain
+usable via the same base URL if billing is added.
+"""
 
 import hashlib
 import secrets
@@ -12,17 +18,13 @@ from services.secrets import get_secret
 
 load_dotenv()
 
-MUSE_MODEL: str = "muse-spark-1.3-contributor-free"
-FREE_MODEL: str = "nemotron-3.5-lightning-free"
 GEMINI_36_MODEL: str = "gemini-3.6-flash"
 GEMINI_35_MODEL: str = "gemini-3.5-flash"
-OPENCODE_BASE_URL: str = "https://opencode.ai/zen/v1"
-# Free OpenCode Zen models (Sept 2026; promos rotate — see
-# https://opencode.ai/docs/zen/ for the current free list).
-NEMOTRON_ULTRA_MODEL: str = "nemotron-3-ultra-free"
-BIG_PICKLE_MODEL: str = "big-pickle"
-MIMO_MODEL: str = "mimo-v2.5-free"
-LING_MODEL: str = "ling-3.0-flash-fin-free"
+# OpenCode Zen free tier retired Sep 2026 (MissingSessionID for API
+# calls). 6 free lanes removed: muse-spark-1.3-contributor-free,
+# nemotron-3.5-lightning-free, nemotron-3-ultra-free, big-pickle,
+# mimo-v2.5-free, ling-3.0-flash-fin-free. Paid Zen models remain
+# usable via https://opencode.ai/zen/v1 if billing is added.
 # Groq via its OpenAI-compatible endpoint (no extra dependency needed).
 # Llama models were retired from Groq in Aug 2026; gpt-oss-120b is the
 # current production flagship. Override with GROQ_MODEL if needed.
@@ -130,99 +132,10 @@ def _get_secret(name: str) -> Optional[str]:
     return get_secret(name)
 
 
-def _get_opencode_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
-    """Build an OpenCode Zen client for one model (shared factory).
-
-    Cache entries stay keyed by display tier name, so existing callers
-    see identical behavior to the previous per-tier constructors.
-    """
-    key: Optional[str] = _get_secret("OPENCODE_API_KEY")
-    if key is None:
-        return None
-    assert key is not None
-    try:
-        return _cached_client(
-            tier,
-            temperature,
-            key,
-            model,
-            lambda: ChatOpenAI(
-                model=model,
-                api_key=key,
-                base_url=OPENCODE_BASE_URL,
-                temperature=temperature,
-                # Native HTTP timeout: truly aborts hung provider calls.
-                request_timeout=MODEL_TIMEOUT_SECONDS,
-            ),
-        )
-    except Exception:
-        return None
-
-
-def _get_opencode_responses_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
-    """Build an OpenCode Zen client for Responses-API-only models.
-
-    Muse Spark tiers live at POST https://opencode.ai/zen/v1/responses
-    (see https://opencode.ai/docs/zen endpoints table), not
-    /chat/completions. ChatOpenAI with use_responses_api=True targets
-    that endpoint while keeping the same BaseLanguageModel surface
-    (invoke/stream/bind_tools) the cascade and tool loop expect.
-    """
-    key: Optional[str] = _get_secret("OPENCODE_API_KEY")
-    if key is None:
-        return None
-    assert key is not None
-    try:
-        return _cached_client(
-            tier,
-            temperature,
-            key,
-            model,
-            lambda: ChatOpenAI(
-                model=model,
-                api_key=key,
-                base_url=OPENCODE_BASE_URL,
-                temperature=temperature,
-                request_timeout=MODEL_TIMEOUT_SECONDS,
-                use_responses_api=True,
-            ),
-        )
-    except Exception:
-        return None
-
-
-def get_tier1_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """TIER 1: Muse Spark 1.3 via OpenCode -- limited-time free tier.
-
-    Responses-API-only model (Sep 2026 docs); must not use the
-    chat-completions factory.
-    """
-    return _get_opencode_responses_llm("Muse Spark 1.3", MUSE_MODEL, temperature)
-
-
-def get_tier1b_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """TIER 1B: Nemotron 3.5 Lightning via OpenCode -- free tier, separate quota."""
-    return _get_opencode_llm("Nemotron 3.5", FREE_MODEL, temperature)
-
-
-def get_tier_nemotron_ultra_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Nemotron 3 Ultra via OpenCode -- free tier (limited time)."""
-    return _get_opencode_llm("Nemotron 3 Ultra", NEMOTRON_ULTRA_MODEL, temperature)
-
-
-def get_tier_big_pickle_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Big Pickle (stealth) via OpenCode -- free tier (limited time)."""
-    return _get_opencode_llm("Big Pickle", BIG_PICKLE_MODEL, temperature)
-
-
-def get_tier_mimo_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """MiMo V2.5 via OpenCode -- free tier (limited time)."""
-    return _get_opencode_llm("MiMo V2.5", MIMO_MODEL, temperature)
-
-
-def get_tier_ling_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Ling 3.0 Flash via OpenCode -- free tier (limited time)."""
-    return _get_opencode_llm("Ling 3.0 Flash", LING_MODEL, temperature)
+# OpenCode Zen free lanes removed Sep 2026: provider returns
+# MissingSessionID ("free tier can only be used in OpenCode") for API
+# calls. Paid Zen models can be re-added here via the same base URL
+# (https://opencode.ai/zen/v1) when billing is added.
 
 
 def _make_gemini(model: str, key: str, temperature: float):
@@ -517,12 +430,6 @@ def get_tier_openrouter_free_router_llm(temperature: float = TEMPERATURE) -> Opt
 
 
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
-    "Muse Spark 1.3": get_tier1_llm,
-    "Nemotron 3.5": get_tier1b_llm,
-    "Nemotron 3 Ultra": get_tier_nemotron_ultra_llm,
-    "Big Pickle": get_tier_big_pickle_llm,
-    "MiMo V2.5": get_tier_mimo_llm,
-    "Ling 3.0 Flash": get_tier_ling_llm,
     "Groq": get_tier_groq_llm,
     "Cerebras": get_tier_cerebras_llm,
     "Gemini 3.6 Flash": get_tier2_llm,
@@ -559,12 +466,6 @@ def get_tier_llm(name: str, temperature: float = TEMPERATURE) -> Optional[Any]:
 
 
 TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogleGenerativeAI]]]]] = [
-    ("Muse Spark 1.3", get_tier1_llm),
-    ("Nemotron 3.5", get_tier1b_llm),
-    ("Nemotron 3 Ultra", get_tier_nemotron_ultra_llm),
-    ("Big Pickle", get_tier_big_pickle_llm),
-    ("MiMo V2.5", get_tier_mimo_llm),
-    ("Ling 3.0 Flash", get_tier_ling_llm),
     ("Groq", get_tier_groq_llm),
     ("Cerebras", get_tier_cerebras_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),

@@ -58,8 +58,8 @@ python -m pytest tests/ -q
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `OPENCODE_API_KEY` | yes (or Gemini key) | Tier 1–2 models via OpenCode |
-| `GEMINI_API_KEY` | yes (or OpenCode key) | Tier 3–4 Google Gemini models |
+| `GEMINI_API_KEY` | yes (or Groq/OpenRouter key) | Google Gemini models (free tier) |
+| `OPENCODE_API_KEY` | no (retired) | OpenCode Zen free tier retired Sep 2026 — `MissingSessionID` for API calls; paid Zen works if you re-add slugs |
 | `GROQ_API_KEY` | no | Groq fast-inference tier |
 | `CEREBRAS_API_KEY` | no | Cerebras free-tier (no card; ~1M tokens/day) |
 | `OPENROUTER_API_KEY` | no | OpenRouter fallback tiers (free models) |
@@ -125,22 +125,24 @@ Sessions work in both auth modes.
 ## Model configuration
 
 Cascade (first live tier wins, failed tiers cool down):
-1. Muse Spark 1.3 (OpenCode, Responses API, temperature 0.7)
-2. Nemotron 3.5 Lightning (OpenCode free tier)
-3. Nemotron 3 Ultra, Big Pickle, MiMo V2.5,
-   Ling 3.0 Flash (OpenCode free tier, rotating promos;
-   DeepSeek V4 Flash free retired Sep 2026 — now paid only)
-4. Groq (fast inference; model via `GROQ_MODEL`)
-5. Cerebras (free tier, no card; gpt-oss-120b via `CEREBRAS_MODEL`)
-6. Gemini 3.6 Flash (Google, free tier ~20 req/day)
-7. Gemini 3.5 Flash (Google fallback)
-8. GitHub Models (free, no card; `openai/gpt-4o-mini` via `GITHUB_MODELS_MODEL`)
-9. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL`)
-10. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
-11. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
-    + Gemma 26B + Ling Fin + Inkling Small + Laguna (free fallbacks)
-12. OpenRouter Free Router (`openrouter/free`; smart auto-selection
-    of a free model filtered by request features)
+1. Groq (fast inference; model via `GROQ_MODEL`)
+2. Cerebras (free tier, no card; gpt-oss-120b via `CEREBRAS_MODEL`)
+3. Gemini 3.6 Flash (Google, free tier ~20 req/day)
+4. Gemini 3.5 Flash (Google fallback)
+5. GitHub Models (free, no card; `openai/gpt-4o-mini` via `GITHUB_MODELS_MODEL`)
+6. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL`)
+7. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
+8. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
+   + Gemma 26B + Ling Fin + Inkling Small + Laguna (free fallbacks)
+9. OpenRouter Free Router (`openrouter/free`; smart auto-selection
+   of a free model filtered by request features)
+
+OpenCode Zen free tier (Muse Spark 1.3 contributor-free, Nemotron
+3.5/Ultra, Big Pickle, MiMo, Ling) retired Sep 2026 — provider now
+returns `MissingSessionID` ("free tier can only be used in OpenCode")
+for API calls. Paid Zen models remain usable via
+`https://opencode.ai/zen/v1` if billing is added (re-add slugs in
+`config.py`).
 
 Per-task temperatures apply when a tier answers (creative 0.85,
 factual/research lower). Deep Mode (UI toggle) enables planning +
