@@ -200,6 +200,8 @@ def _age_registry_record(api_env, name, record_id, days_old):
 
 def test_hygiene_prunes_stale_unreferenced_upload(client, api_env):
     import backend.deps as deps
+    from services.files import FileStore
+    from services.storage import UserStore
 
     up = client.post(
         "/api/uploads",
@@ -208,11 +210,13 @@ def test_hygiene_prunes_stale_unreferenced_upload(client, api_env):
     assert up.status_code == 200, up.text
     uid = up.json()["id"]
     _age_registry_record(api_env, "uploads.json", uid, days_old=8)
-    deps._last_hygiene.clear()
+    # Manually run hygiene (no longer runs on request path)
+    user_store = UserStore("api-user", run_migration=False)
+    file_store = FileStore("api-user")
+    file_store.prune_stale_uploads(referenced_ids=deps._referenced_upload_ids(user_store))
     listed = client.get("/api/uploads").json()
     assert all(u["id"] != uid for u in listed)
     assert client.get(f"/api/uploads/{uid}/file").status_code == 404
-    assert deps._last_hygiene.get("api-user") is not None
 
 
 def test_hygiene_keeps_referenced_upload(client, api_env, stub_agent):
@@ -234,13 +238,13 @@ def test_hygiene_keeps_referenced_upload(client, api_env, stub_agent):
 
 
 def test_hygiene_prunes_old_outputs(client, api_env):
-    import backend.deps as deps
-
     from services.files import FileStore
 
     meta = FileStore("api-user").register_output("old.txt", b"aging out", "file")
     _age_registry_record(api_env, "outputs.json", meta.id, days_old=31)
-    deps._last_hygiene.clear()
+    # Manually run hygiene (no longer runs on request path)
+    file_store = FileStore("api-user")
+    file_store.prune_stale_outputs()
     assert client.get("/api/artifacts").json() == []
 
 

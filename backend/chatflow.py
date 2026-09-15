@@ -34,28 +34,36 @@ from backend.deps import UserContext
 
 # --- attachment hints (same contract as the web composer) ---
 
+def _escape_hint(text: str) -> str:
+    """Escape user-controlled text for safe inclusion in tool hints."""
+    # Escape characters that could break the hint format or inject tool calls
+    return str(text or "").replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ").strip()[:MAX_DISPLAY_NAME_CHARS]
+
+
 def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int) -> str:
     """Tool hint for one staged attachment (ID-only, never paths)."""
+    safe_name = _escape_hint(name)
+    safe_upload_id = _escape_hint(upload_id)
     tag: str = "" if total <= 1 else f" {index}/{total}"
     if kind == "pdf":
         return (
-            f"\n\n[Attached PDF{tag} '{name}' with upload ID: {upload_id}. "
+            f"\n\n[Attached PDF{tag} '{safe_name}' with upload ID: {safe_upload_id}. "
             "To read it, call read_pdf(upload_id=\""
-            f"{upload_id}"
+            f"{safe_upload_id}"
             "\"). Never use any other path or ID.]"
         )
     if kind == "csv":
         return (
-            f"\n\n[Attached CSV{tag} '{name}' with upload ID: {upload_id}. "
+            f"\n\n[Attached CSV{tag} '{safe_name}' with upload ID: {safe_upload_id}. "
             "To analyze it, call analyze_csv(upload_id=\""
-            f"{upload_id}"
+            f"{safe_upload_id}"
             "\"). Never use any other path or ID.]"
         )
     if kind == "document":
         return (
-            f"\n\n[Attached document{tag} '{name}' with upload ID: {upload_id}. "
+            f"\n\n[Attached document{tag} '{safe_name}' with upload ID: {safe_upload_id}. "
             "To read it, call read_document(upload_id=\""
-            f"{upload_id}"
+            f"{safe_upload_id}"
             "\"). Never use any other path or ID.]"
         )
     # Images ride the vision fast-path (agent/runtime.py), not a tool call:
@@ -64,7 +72,7 @@ def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int
     # (which get an explicit could-not-analyze note from the runtime).
     # Claiming inability here contradicts the vision path, so don't.
     return (
-        f"\n\n[Attached image{tag}: {name}. "
+        f"\n\n[Attached image{tag}: {safe_name}. "
         "Its content is provided alongside this request when answered "
         "by a vision-capable model. Describe only what you can actually "
         "see; if no image content reaches you, say so plainly instead "
@@ -76,7 +84,7 @@ def attachments_overview(entries: List[Dict[str, str]]) -> str:
     """One-line multi-file header so the model can map files to blocks."""
     labels = {"pdf": "PDF", "csv": "CSV", "document": "Document", "image": "Image"}
     parts = [
-        f"'{str(e.get('name', 'file'))}' "
+        f"'{_escape_hint(str(e.get('name', 'file')))}' "
         f"({labels.get(str(e.get('kind', '')), 'File')})"
         for e in entries
     ]

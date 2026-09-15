@@ -5,7 +5,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend import schemas
 from backend.deps import UserContext, current_user
 from services import research as research_svc
+from services.obs import event as obs_event
+from services.ratelimit import get_rate_limiter, rate_limit_headers
 from services.storage import StorageError
+
+
+def _check_generate_limit(ctx: UserContext) -> None:
+    verdict = get_rate_limiter().check(ctx.limit_key or ctx.user_id, "generate")
+    if not verdict.allowed:
+        obs_event("ratelimit.deny", action="generate", user=ctx.user_id,
+                  retry_after_s=round(verdict.retry_after, 1))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Generate rate limit exceeded, retry in {verdict.retry_after:.0f}s.",
+            headers=rate_limit_headers(verdict, "generate"),
+        )
 
 router = APIRouter(prefix="/api/briefs", tags=["briefs"])
 
@@ -47,6 +61,7 @@ def save_brief(body: schemas.BriefFromMessage,
 @router.post("/{brief_id}/docx")
 def brief_docx(brief_id: str, ctx: UserContext = Depends(current_user)):
     """Generate a Word document from a brief (registers a new artifact)."""
+    _check_generate_limit(ctx)
     try:
         new_meta = research_svc.generate_docx_from_brief(
             ctx.user_store, ctx.file_store, brief_id)
