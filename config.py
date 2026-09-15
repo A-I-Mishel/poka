@@ -18,8 +18,8 @@ from services.secrets import get_secret
 
 load_dotenv()
 
-GEMINI_36_MODEL: str = "gemini-1.5-flash"
-GEMINI_35_MODEL: str = "gemini-1.5-flash-8b"
+GEMINI_36_MODEL: str = "gemini-3.6-flash"
+GEMINI_35_MODEL: str = "gemini-3.5-flash"
 # OpenCode Zen free tier retired Sep 2026 (MissingSessionID for API
 # calls). 6 free lanes removed: muse-spark-1.3-contributor-free,
 # nemotron-3.5-lightning-free, nemotron-3-ultra-free, big-pickle,
