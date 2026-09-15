@@ -30,6 +30,10 @@ from services.limits import (
     KB_MAX_TOTAL_CHUNKS_PER_USER,
     KB_TOP_K,
     MAX_KB_IMAGE_BYTES,
+    MAX_ZIP_FILES,
+    MAX_ZIP_UNCOMPRESSED_BYTES,
+    MAX_ZIP_FILE_BYTES,
+    MAX_ZIP_LISTED,
 )
 from services.obs import event as obs_event
 from services.storage import _read_json, _write_json, user_dir
@@ -128,15 +132,45 @@ def _blank_kb() -> Dict[str, Any]:
     return {"version": 1, "model": "", "docs": {}}
 
 
+# KB cache: user_id -> (mtime, kb_dict)
+# Invalidate on mtime change or explicit write operations
+_KB_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+
+
 def load_kb(user_id: Any) -> Dict[str, Any]:
-    """Load a user's knowledge base; blank (never raise) when missing/corrupt."""
+    """Load a user's knowledge base; blank (never raise) when missing/corrupt.
+
+    Caches parsed KB by mtime for faster subsequent reads.
+    """
+    path = _kb_path(user_id)
     try:
-        data, _ = _read_json(_kb_path(user_id))
+        mtime = path.stat().st_mtime
+        cached = _KB_CACHE.get(str(user_id))
+        if cached and cached[0] == mtime:
+            return cached[1]
+    except OSError:
+        mtime = 0.0  # File doesn't exist yet
+    try:
+        data, _ = _read_json(path)
     except Exception:
-        return _blank_kb()
-    if not isinstance(data, dict) or not isinstance(data.get("docs"), dict):
-        return _blank_kb()
-    return data
+        kb = _blank_kb()
+    else:
+        if not isinstance(data, dict) or not isinstance(data.get("docs"), dict):
+            kb = _blank_kb()
+        else:
+            kb = data
+            # Update mtime from the actual file we just read
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+    _KB_CACHE[str(user_id)] = (mtime, kb)
+    return kb
+
+
+def invalidate_kb_cache(user_id: Any) -> None:
+    """Invalidate KB cache for a user (call after write operations)."""
+    _KB_CACHE.pop(str(user_id), None)
 
 
 def _save_kb(user_id: Any, kb: Dict[str, Any]) -> None:
@@ -384,7 +418,8 @@ def _zip_text(blob: bytes) -> tuple:
             infos = zf.infolist()
         except Exception:
             return "", "zip-extract-failed"
-        if len(infos) > 2000:
+        # Enforce limits from services.limits to prevent zip bombs
+        if len(infos) > MAX_ZIP_FILES:
             return "", "zip-too-many-files"
         readable = {
             "txt", "md", "markdown", "log", "json", "csv", "tsv",
@@ -399,7 +434,8 @@ def _zip_text(blob: bytes) -> tuple:
         }
         parts: list[str] = []
         total = 0
-        for info in infos[:100]:
+        total_uncompressed = 0
+        for info in infos[:MAX_ZIP_LISTED]:
             raw_name = (info.filename or "").replace("\\", "/").strip()
             if not raw_name or raw_name.endswith("/"):
                 continue
@@ -409,14 +445,20 @@ def _zip_text(blob: bytes) -> tuple:
                 size = int(info.file_size or 0)
             except Exception:
                 size = 0
-            if size <= 0 or size > 5 * 1024 * 1024:
+            if size <= 0 or size > MAX_ZIP_FILE_BYTES:
                 continue
+            total_uncompressed += size
+            if total_uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES:
+                return "", "zip-uncompressed-too-large"
             ext = raw_name.rsplit(".", 1)[-1].lower() if "." in raw_name else ""
             if ext not in readable:
                 continue
             try:
-                member = zf.read(info.filename)[:5 * 1024 * 1024 + 1]
+                # Read with per-file cap from limits
+                member = zf.read(info.filename)[:MAX_ZIP_FILE_BYTES + 1]
             except Exception:
+                continue
+            if len(member) > MAX_ZIP_FILE_BYTES:
                 continue
             if b"\x00" in member[:8192]:
                 continue
@@ -506,11 +548,28 @@ def _odf_xml_text(blob: bytes, kind: str) -> tuple:
 
     try:
         with _zf.ZipFile(_io.BytesIO(blob)) as zf:
+            try:
+                info = zf.getinfo("content.xml")
+                if int(getattr(info, "file_size", 0) or 0) > KB_MAX_DOC_BYTES:
+                    return "", f"{kind}-extract-failed"
+            except KeyError:
+                return "", f"{kind}-extract-failed"
             content = zf.read("content.xml")
     except Exception:
         return "", f"{kind}-extract-failed"
+    if len(content) > KB_MAX_DOC_BYTES:
+        return "", f"{kind}-extract-failed"
+    # XXE / billion-laughs: reject entity declarations before parsing
+    low = content.lower()
+    if b"<!doctype" in low or b"<!entity" in low:
+        return "", f"{kind}-extract-failed"
     try:
-        root = _ET.fromstring(content)
+        try:
+            import defusedxml.ElementTree as _DET  # type: ignore
+
+            root = _DET.fromstring(content, forbid_dtd=True, forbid_entities=True)
+        except ImportError:
+            root = _ET.fromstring(content)
     except Exception:
         return "", f"{kind}-extract-failed"
     ns = {
@@ -637,38 +696,45 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
     text, reason = extract_text(data, display_name)
     if reason or not text:
         return {"ingested": False, "chunks": 0, "reason": reason or "empty"}
-    chunks = chunk_text(text)[:KB_MAX_CHUNKS_PER_DOC]
+    chunks = chunk_text(text)
     if not chunks:
         return {"ingested": False, "chunks": 0, "reason": "empty"}
+    if len(chunks) > KB_MAX_CHUNKS_PER_DOC:
+        obs_event("kb.ingest_error", reason="doc-chunks-exceed", detail=f"chunks={len(chunks)} cap={KB_MAX_CHUNKS_PER_DOC}")
+        chunks = chunks[:KB_MAX_CHUNKS_PER_DOC]
     # Growth + embedding-model guard (checked BEFORE spending embedding
     # quota): fail open to no cap when the vault is unreadable — the
     # store step below still reports store-failed honestly. Mixing
     # chunks from two embedding models would silently orphan the old
     # ones (dim mismatch score 0), so refuse clearly instead.
-    try:
-        kb_now = load_kb(user_id)
-        existing = kb_now.get("docs") or {}
-        if not isinstance(existing, dict):
-            existing = {}
-        cur_model = kb_embeddings.default_model()
-        vault_model = str(kb_now.get("model") or "")
-        if vault_model and vault_model != cur_model:
-            obs_event("kb.ingest_error", reason="embed-model-changed")
-            return {"ingested": False, "chunks": 0, "reason": "embed-model-changed"}
-        if uid not in existing and len(existing) >= KB_MAX_DOCS_PER_USER:
-            obs_event("kb.ingest_error", reason="kb-full")
-            return {"ingested": False, "chunks": 0, "reason": "kb-full"}
-        total = sum(
-            len(d.get("chunks") or [])
-            for d in existing.values() if isinstance(d, dict)
-        )
-        old = existing.get(uid)
-        old_count = len(old.get("chunks") or []) if isinstance(old, dict) else 0
-        if total - old_count + len(chunks) > KB_MAX_TOTAL_CHUNKS_PER_USER:
-            obs_event("kb.ingest_error", reason="kb-full")
-            return {"ingested": False, "chunks": 0, "reason": "kb-full"}
-    except Exception:
-        pass
+    from services.storage import path_lock
+    lock_path = _kb_path(user_id)
+    with path_lock(lock_path):
+        try:
+            kb_now = load_kb(user_id)
+            existing = kb_now.get("docs") or {}
+            if not isinstance(existing, dict):
+                existing = {}
+            cur_model = kb_embeddings.default_model()
+            vault_model = str(kb_now.get("model") or "")
+            if vault_model and vault_model != cur_model:
+                obs_event("kb.ingest_error", reason="embed-model-changed")
+                return {"ingested": False, "chunks": 0, "reason": "embed-model-changed"}
+            if uid not in existing and len(existing) >= KB_MAX_DOCS_PER_USER:
+                obs_event("kb.ingest_error", reason="kb-full")
+                return {"ingested": False, "chunks": 0, "reason": "kb-full"}
+            total = sum(
+                len(d.get("chunks") or [])
+                for d in existing.values() if isinstance(d, dict)
+            )
+            old = existing.get(uid)
+            old_count = len(old.get("chunks") or []) if isinstance(old, dict) else 0
+            if total - old_count + len(chunks) > KB_MAX_TOTAL_CHUNKS_PER_USER:
+                obs_event("kb.ingest_error", reason="kb-full")
+                return {"ingested": False, "chunks": 0, "reason": "kb-full"}
+        except Exception:
+            # If vault unreadable, skip cap checks but still attempt store (will fail there)
+            pass
     try:
         vectors = kb_embeddings.embed_texts(chunks)
     except Exception as e:
@@ -683,24 +749,45 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
         return {"ingested": False, "chunks": 0, "reason": "embed-dim-mismatch"}
     # Store L2-normalized vectors so search becomes a plain dot product
     # (old vaults without "normalized" still fall back to cosine()).
-    stored_vectors: List[List[float]] = [_l2_normalize(v) for v in vectors]
+    stored_vectors: List[List[float]] = []
+    for v in vectors:
+        nv = _l2_normalize(v)
+        # Validate: no NaN/inf in normalized vectors
+        if any(not isinstance(x, (int, float)) or x != x or x == float('inf') or x == float('-inf') for x in nv):
+            obs_event("kb.ingest_error", reason="embed-nan-inf")
+            return {"ingested": False, "chunks": 0, "reason": "embed-nan-inf"}
+        stored_vectors.append(nv)
     try:
-        kb = load_kb(user_id)
-        docs = kb.get("docs")
-        if not isinstance(docs, dict):
-            kb["docs"] = docs = {}
-        docs[uid] = {
-            "name": str(display_name or "file"),
-            "model": kb_embeddings.default_model(),
-            "dim": dim,
-            "normalized": True,
-            "ingested_at": time.time(),
-            "chunks": [{"text": c, "vector": v} for c, v in zip(chunks, stored_vectors)],
-        }
-        kb["model"] = kb_embeddings.default_model()
-        _save_kb(user_id, kb)
-    except Exception as e:
-        obs_event("kb.ingest_error", reason="store-failed", detail=str(e)[:120])
+        from services.storage import path_lock
+        lock_path = _kb_path(user_id)
+        with path_lock(lock_path):
+            kb = load_kb(user_id)
+            docs = kb.get("docs")
+            if not isinstance(docs, dict):
+                kb["docs"] = docs = {}
+            docs[uid] = {
+                "name": str(display_name or "file"),
+                "model": kb_embeddings.default_model(),
+                "dim": dim,
+                "normalized": True,
+                "ingested_at": time.time(),
+                "chunks": [{"text": c, "vector": v} for c, v in zip(chunks, stored_vectors)],
+            }
+            kb["model"] = kb_embeddings.default_model()
+            _save_kb(user_id, kb)
+            invalidate_kb_cache(user_id)
+            # Update FAISS index
+            try:
+                from services.kb_index import get_index
+                index = get_index(str(user_id), dim=dim)
+                # Prepare chunks for index (just need upload_id and chunk index)
+                index_chunks = [{"text": c} for c in chunks]
+                index.add_chunks(uid, index_chunks, stored_vectors)
+            except Exception as e:
+                obs_event("kb.ingest_warn", reason="faiss_index_failed", detail=str(e)[:120])
+    except Exception:
+        # Avoid leaking exception detail that may contain secrets
+        obs_event("kb.ingest_error", reason="store-failed")
         return {"ingested": False, "chunks": 0, "reason": "store-failed"}
     return {"ingested": True, "chunks": len(chunks), "reason": ""}
 
@@ -750,6 +837,8 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
     Returns [{upload_id, name, chunk, text, score}] sorted by score desc.
     Re-scoring embeddings hitting a rate limit degrades to lexical
     term-overlap search (emits obs metadata), never an empty failure.
+
+    Uses FAISS HNSW index for sub-millisecond ANN search when available.
     """
     q = str(query or "").strip()
     if not q:
@@ -767,8 +856,49 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
         qvecs = kb_embeddings.embed_texts([q])
         if qvecs:
             qv = _l2_normalize(qvecs[0])
-    except Exception as e:
-        obs_event("kb.search_error", reason="embed", detail=str(e)[:120])
+    except Exception:
+        # Avoid leaking exception detail that may contain secrets
+        obs_event("kb.search_error", reason="embed")
+    # Validate top_k to prevent DoS/unbounded slice
+    try:
+        k = int(top_k or KB_TOP_K)
+    except (TypeError, ValueError):
+        k = KB_TOP_K
+    k = max(1, min(k, KB_TOP_K))
+
+    # Try FAISS index first for fast ANN search
+    if qv:
+        try:
+            from services.kb_index import get_index
+            index = get_index(str(user_id))
+            if index.index is not None and index.index.ntotal > 0:
+                # Fast ANN search
+                ann_results = index.search(qv, k=k, valid_ids=valid_ids)
+                if ann_results:
+                    # Enrich with document name and text from kb
+                    enriched = []
+                    for r in ann_results:
+                        uid = r["upload_id"]
+                        chunk_idx = r["chunk"]
+                        doc = docs.get(uid)
+                        if not isinstance(doc, dict):
+                            continue
+                        ch = (doc.get("chunks") or [])[chunk_idx] if chunk_idx < len(doc.get("chunks") or []) else None
+                        if not isinstance(ch, dict):
+                            continue
+                        enriched.append({
+                            "upload_id": uid,
+                            "name": str(doc.get("name") or "document"),
+                            "chunk": chunk_idx,
+                            "text": str(ch.get("text") or ""),
+                            "score": round(r["score"], 4),
+                        })
+                    return enriched
+        except Exception as e:
+            obs_event("kb.search_warn", reason="faiss_fallback", detail=str(e)[:120])
+            # Fall through to brute force
+
+    # Fallback: brute-force search (original behavior)
     if qv:
         scored: List[Dict[str, Any]] = []
         for uid, doc in docs.items():
@@ -783,7 +913,7 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
                     continue
                 vec = ch.get("vector") or []
                 s = _dot(qv, vec) if normalized else cosine(qv, vec)
-                if s <= 0:
+                if s <= 0 or s != s:
                     continue
                 scored.append({
                     "upload_id": uid,
@@ -795,7 +925,7 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
     else:
         scored = _lexical_search(docs, q, valid_ids)
     scored.sort(key=lambda r: r["score"], reverse=True)
-    return scored[:max(1, int(top_k or KB_TOP_K))]
+    return scored[:k]
 
 
 def drop_document(user_id: Any, upload_id: Any) -> bool:
@@ -807,6 +937,14 @@ def drop_document(user_id: Any, upload_id: Any) -> bool:
             return False
         del docs[str(upload_id)]
         _save_kb(user_id, kb)
+        invalidate_kb_cache(user_id)
+        # Remove from FAISS index
+        try:
+            from services.kb_index import get_index
+            index = get_index(str(user_id))
+            index.remove_document(str(upload_id))
+        except Exception:
+            pass
         return True
     except Exception:
         return False

@@ -55,6 +55,62 @@ _VISITOR_PREFIX = "visitor-"
 _hygiene_lock = threading.Lock()
 _last_hygiene: Dict[str, float] = {}
 
+# Store caching: reuse UserStore/FileStore instances per user within a
+# process. Invalidated on explicit write operations (not on reads).
+# TTL fallback (5 min) handles external mutations (manual vault edits).
+# Cache key includes data root path to support tests with tmp dirs.
+_user_store_cache: Dict[str, tuple[float, UserStore]] = {}
+_file_store_cache: Dict[str, tuple[float, FileStore]] = {}
+_STORE_CACHE_TTL = 300.0  # 5 minutes
+
+
+def _cache_key(user_id: str, run_migration: bool = False) -> str:
+    """Generate cache key including data root path."""
+    from services.storage import data_root
+    root = str(data_root())
+    return f"{user_id}:{root}:{run_migration}"
+
+
+def _get_user_store(user_id: str, run_migration: bool) -> UserStore:
+    """Get cached UserStore or create new one with migration flag."""
+    now = time.time()
+    key = _cache_key(user_id, run_migration)
+    cached = _user_store_cache.get(key)
+    if cached and now - cached[0] < _STORE_CACHE_TTL:
+        return cached[1]
+    store = UserStore(user_id, run_migration=run_migration)
+    _user_store_cache[key] = (now, store)
+    return store
+
+
+def _get_file_store(user_id: str) -> FileStore:
+    """Get cached FileStore or create new one."""
+    now = time.time()
+    key = _cache_key(user_id)
+    cached = _file_store_cache.get(key)
+    if cached and now - cached[0] < _STORE_CACHE_TTL:
+        return cached[1]
+    store = FileStore(user_id)
+    _file_store_cache[key] = (now, store)
+    return store
+
+
+def invalidate_store_caches(user_id: str) -> None:
+    """Invalidate cached stores for a user (call after write operations)."""
+    # Remove all cache entries for this user_id (across all data roots)
+    for key in list(_user_store_cache.keys()):
+        if key.startswith(f"{user_id}:"):
+            _user_store_cache.pop(key, None)
+    for key in list(_file_store_cache.keys()):
+        if key.startswith(f"{user_id}:"):
+            _file_store_cache.pop(key, None)
+
+
+def clear_all_store_caches() -> None:
+    """Clear all store caches (for testing)."""
+    _user_store_cache.clear()
+    _file_store_cache.clear()
+
 
 def _referenced_upload_ids(user_store: UserStore) -> Set[str]:
     """Upload IDs still cited by the user's chats (never raises)."""
@@ -195,10 +251,11 @@ async def current_user(
     limit_key = limit_key_for(
         source, user_id, extract_client_ip(request.headers.get("x-forwarded-for", ""), peer)
     )
-    bind_request_user(user_id, limit_key, source)
-    user_store = UserStore(user_id, run_migration=source in ("env", "token", "account"))
-    file_store = FileStore(user_id)
-    _run_storage_hygiene(user_store, file_store)
+    run_migration = source in ("env", "token", "account")
+    user_store = _get_user_store(user_id, run_migration)
+    file_store = _get_file_store(user_id)
+    bind_request_user(user_id, limit_key, source, root=user_store.root)
+    # Hygiene moved to background scheduler (services/scheduler.py)
     return UserContext(
         user_id=user_id,
         user_store=user_store,
@@ -208,17 +265,22 @@ async def current_user(
     )
 
 
-def bind_request_user(user_id: str, limit_key: Optional[str] = None, source: str = "") -> None:
+def bind_request_user(user_id: str, limit_key: Optional[str] = None, source: str = "", root: Optional[object] = None) -> None:
     """Bind an already-authenticated user on the calling thread.
 
     Streaming generators run on a different worker thread than the
     endpoint, so they must re-bind explicitly before touching stores,
     memory, or the agent. Ephemeral visitors skip the legacy migration
     (their vaults are throwaway; migrating would litter the disk).
+    Reuses the caller's UserStore.root when provided to avoid a second
+    UserStore construction per request.
     """
     set_current_user_id(user_id)
     set_limit_key(limit_key if limit_key else user_id)
     try:
-        set_memory_dir(str(UserStore(user_id, run_migration=source in ("env", "token", "account")).root))
+        if root is not None:
+            set_memory_dir(str(root))
+        else:
+            set_memory_dir(str(_get_user_store(user_id, source in ("env", "token", "account")).root))
     except Exception:
         pass

@@ -405,17 +405,36 @@ class FileStore:
             raise FileValidationError("That file is not a valid RTF document.")
         if ext in ("zip", "odt", "ods", "odp"):
             # Validity + bomb pre-check BEFORE storage: malformed
-            # archives fail here, oversized ones fail at read time
-            # with the same user-safe message family.
+            # archives fail here, oversized ones also fail early.
             try:
                 import io
                 import zipfile
 
+                from services.limits import (
+                    MAX_ZIP_FILE_BYTES,
+                    MAX_ZIP_FILES,
+                    MAX_ZIP_UNCOMPRESSED_BYTES,
+                )
+
                 with zipfile.ZipFile(io.BytesIO(bytes(data))) as _z:
                     _infos = _z.infolist()
-                    if len(_infos) > 2000:
+                    if len(_infos) > MAX_ZIP_FILES:
                         raise FileValidationError(
-                            "That archive lists too many files to read safely.")
+                            "That archive lists too many files to read safely "
+                            f"(max {MAX_ZIP_FILES}).")
+                    total = 0
+                    for _info in _infos:
+                        try:
+                            sz = int(getattr(_info, "file_size", 0) or 0)
+                        except Exception:
+                            sz = 0
+                        if sz > MAX_ZIP_FILE_BYTES:
+                            raise FileValidationError(
+                                "That archive contains a file too large to read safely.")
+                        total += max(0, sz)
+                        if total > MAX_ZIP_UNCOMPRESSED_BYTES:
+                            raise FileValidationError(
+                                "That archive is too large to read safely.")
             except FileValidationError:
                 raise
             except Exception:
@@ -465,6 +484,9 @@ class FileStore:
             registry[upload_id] = asdict(meta)
 
         self._update_registry(self.uploads_registry, _add_upload)
+        # Invalidate store caches for this user
+        from backend.deps import invalidate_store_caches
+        invalidate_store_caches(self.user_id)
         return meta
 
     def get_upload(self, upload_id: Any) -> Optional[UploadMeta]:
@@ -550,6 +572,9 @@ class FileStore:
             registry[file_id] = asdict(meta)
 
         self._update_registry(self.outputs_registry, _add_output)
+        # Invalidate store caches for this user
+        from backend.deps import invalidate_store_caches
+        invalidate_store_caches(self.user_id)
         return meta
 
     def _drop_output_record(self, file_id: str) -> None:
@@ -586,6 +611,9 @@ class FileStore:
             self._drop_upload_record(meta.id)
         except StorageError:
             return False
+        # Invalidate store caches for this user
+        from backend.deps import invalidate_store_caches
+        invalidate_store_caches(self.user_id)
         return True
 
     def list_outputs(self) -> List[OutputMeta]:
@@ -652,6 +680,9 @@ class FileStore:
             self._drop_output_record(meta.id)
         except StorageError:
             return False
+        # Invalidate store caches for this user
+        from backend.deps import invalidate_store_caches
+        invalidate_store_caches(self.user_id)
         return True
 
     def list_uploads(self) -> List[UploadMeta]:

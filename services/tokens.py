@@ -20,6 +20,7 @@ def _encoder() -> Optional[object]:
         return None
 
 
+@functools.lru_cache(maxsize=1024)
 def count_tokens(text: str) -> int:
     """Approximate token count for budgeting (never exact billing)."""
     if not text:
@@ -31,6 +32,15 @@ def count_tokens(text: str) -> int:
         except Exception:
             pass
     return max(1, len(text) // 4)
+
+
+def prewarm_tokenizer() -> None:
+    """Pre-warm tiktoken encoder and token counting cache."""
+    _encoder()
+    # Prime the cache with common strings
+    count_tokens("Hello, world!")
+    count_tokens("")  # empty string
+    count_tokens("a" * 1000)  # long text
 
 
 def truncate_tokens(text: str, max_tokens: int, marker: str = "\n[Note: truncated to fit context.]") -> str:

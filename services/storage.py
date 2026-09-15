@@ -703,6 +703,9 @@ class UserStore:
                 if record is not None:
                     stored.append(record)
         _write_json(self.chats_path, {"chats": stored, "current": clean_messages(current)})
+        # Invalidate store caches for this user
+        from backend.deps import invalidate_store_caches
+        invalidate_store_caches(self.user_id)
 
     # -- projects --------------------------------------------------
     # Per-user registry; absence of project_id on a chat means Personal
