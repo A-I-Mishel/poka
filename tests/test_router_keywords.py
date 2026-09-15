@@ -57,6 +57,26 @@ def test_multi_bucket_routes():
     assert rule_route("analyze this csv and make slides") == "multi_step"
 
 
+def test_entertainment_factual_routes_research():
+    assert rule_route("tere liye song") == "research"
+    assert rule_route("who sang tere liye") == "research"
+    assert rule_route("lyrics of tere liye prince") == "research"
+    assert rule_route("cast of veer-zaara") == "research"
+    assert rule_route("which movie is this song from") == "research"
+
+
+def test_songwriting_stays_creative():
+    assert rule_route("write a song about Dhaka") == "creative"
+    assert rule_route("compose lyrics for my friend") == "creative"
+
+
+def test_entity_claims_need_verification_prompt():
+    from agent.prompts import SYSTEM_PROMPT
+
+    assert "never state credits from memory" in SYSTEM_PROMPT
+    assert "[title](url)" in SYSTEM_PROMPT
+
+
 def test_trivial_routes_unchanged():
     assert rule_route("") == "simple"
     assert rule_route("hello") == "simple"

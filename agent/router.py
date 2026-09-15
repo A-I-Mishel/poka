@@ -77,7 +77,7 @@ def rule_route(user_input: str) -> Optional[str]:
     if _signals(
         text,
         ["presentation", "slides", "pptx", "powerpoint", "essay", "report",
-         "resume", "write", "draft", "letter", "docx", "word document",
+         "resume", "write", "draft", "compose", "letter", "docx", "word document",
          ".pdf", "pdf file", "as pdf", "to pdf", "into pdf", "export",
          ".md", "markdown file", "revise", "revis*", "edit the",
          "update the"],
@@ -95,6 +95,21 @@ def rule_route(user_input: str) -> Optional[str]:
          "contradiction", "satisfiab*"],
     ):
         hits.add("data")
+    # Entertainment factual: song/movie/people questions need web verification
+    # (free-tier memory hallucinates credits) — but the verb decides:
+    # write/compose/make a song is creative, who-sang/lyrics-of is research.
+    # ponytail: keyword list covers the misfire class from the tere-liye
+    # screenshot; extend only when a new factual class hallucinates.
+    if _signals(text, ["who sang", "who wrote", "lyrics of", "lyric of",
+                       "song from", "songs from", "movie of", "film of",
+                       "cast of", "singer of", "music by", "sung by",
+                       "released", "starring", "starred", "directed by"]):
+        hits.add("research")
+    elif _signals(text, ["song", "songs", "singer", "lyrics", "lyric",
+                         "movie", "film", "actor", "actress", "album",
+                         "cast", "soundtrack"]) and not _signals(
+            text, ["write", "compose", "draft", "create", "make me", "generate"]):
+        hits.add("research")
     if len(hits) == 1:
         return next(iter(hits))
     if len(hits) > 1:
@@ -111,7 +126,7 @@ def classify_task(
     prompt = (
         "Classify this request into exactly one category:\n"
         "- simple: Direct question, no tools needed\n"
-        "- research: Needs web search or document reading\n"
+        "- research: Needs web search, document reading, or entertainment facts (songs/movies/people credits)\n"
         "- creative: Needs file generation (presentation, essay)\n"
         "- data: Needs CSV/data analysis OR coding (write/run/debug code) OR logic check (validity/truth table)\n"
         "- multi_step: Combines multiple tools\n\n"
