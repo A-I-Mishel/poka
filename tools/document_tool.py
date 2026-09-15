@@ -373,7 +373,27 @@ def _read_doc_file(path) -> str:
 
 
 def _read_ppt_file(path) -> str:
-    return _ole_strings_text(path.read_bytes(), ".ppt")
+    blob = path.read_bytes()
+    # .ppt is OLE; many .ppt uploads are actually renamed .pptx (ZIP).
+    # If ZIP, try the high-fidelity pptx parser first.
+    if blob[:4] == b"PK\x03\x04":
+        try:
+            text = _read_pptx_file(path)
+            if text and text.strip():
+                return text
+        except Exception:
+            pass
+        # Fall through to OLE strings for any remaining text.
+    try:
+        return _ole_strings_text(blob, ".ppt")
+    except Exception as e:
+        msg = str(e).lower()
+        if "no extractable text" in msg:
+            raise ValueError(
+                "no extractable text in .ppt — likely scanned/image-only slides. "
+                "Try Save As .pptx or Export to PDF with OCR, then re-upload."
+            ) from e
+        raise
 
 
 def _read_xls_file(path) -> str:
