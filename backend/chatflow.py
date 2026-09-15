@@ -256,6 +256,62 @@ def _recent_image_ids(ctx: UserContext,
     return list(reversed(found))
 
 
+def _recent_document_attachments(ctx: UserContext,
+                                   messages: List[Any],
+                                   exclude: List[str],
+                                   limit: int = MAX_ATTACHMENTS_PER_MESSAGE) -> List[Dict[str, str]]:
+    """Recent owned document/pdf/csv attachments from history (chronological).
+
+    Follow-up questions ("can you read it?") often arrive as a separate
+    text-only turn after the upload turn. Document readers only see the
+    current turn's IDs, so without this the model has no upload ID to
+    call read_document/read_pdf/analyze_csv with and fails (or guesses).
+    Mirrors _recent_image_ids for non-image files. Scans the last 10
+    messages, validates ownership + file presence, returns up to `limit`
+    attachment dicts (never raises).
+    """
+    excluded = set(str(i) for i in (exclude or []))
+    found: List[Dict[str, str]] = []
+    try:
+        recent = [m for m in (messages or []) if isinstance(m, dict)][-10:]
+        for msg in reversed(recent):
+            atts = msg.get("attachments")
+            if not isinstance(atts, list):
+                continue
+            for entry in atts:
+                if not isinstance(entry, dict):
+                    continue
+                uid = str(entry.get("id", "") or "")
+                if not uid or uid in excluded:
+                    continue
+                if any(d.get("id") == uid for d in found):
+                    continue
+                kind = str(entry.get("kind", "") or "")
+                if kind not in ("document", "pdf", "csv"):
+                    continue
+                try:
+                    meta = ctx.file_store.get_upload(uid)
+                except (StorageError, FileValidationError):
+                    meta = None
+                if meta is None:
+                    continue
+                try:
+                    if ctx.file_store.resolve_upload(uid) is None:
+                        continue
+                except (StorageError, FileValidationError):
+                    continue
+                found.append({
+                    "id": uid,
+                    "kind": str(getattr(meta, "kind", kind) or kind),
+                    "name": str(getattr(meta, "display_name", entry.get("name", "file")) or "file"),
+                })
+                if len(found) >= limit:
+                    return list(reversed(found))
+    except Exception:
+        return list(reversed(found))[:limit]
+    return list(reversed(found))
+
+
 def _check_limits(limit_key: str, deep_mode: bool) -> None:
     """Enforce chat (+deep) rate limits; raises HTTPException(429)."""
     from fastapi import HTTPException
@@ -310,6 +366,17 @@ def _complete_turn(ctx: UserContext, send_text: str,
                     on_progress: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
     """Run the agent and build the assistant message (no persistence)."""
     from agent.prompts import strip_internal_reasoning
+
+    # Re-bind the user on this thread: stream workers, cascade executors
+    # and pool threads do not inherit contextvars, and a lost binding
+    # surfaces in tools as "no user context" (the exact failure in the
+    # lecture_6.ppt screenshot). Re-binding here is idempotent and cheap.
+    try:
+        from backend.deps import bind_request_user as _bind
+
+        _bind(ctx.user_id, ctx.limit_key or ctx.user_id, ctx.source or "")
+    except Exception:
+        pass
 
     try:
         before_ids = {m.id for m in ctx.file_store.list_outputs()}
@@ -440,6 +507,24 @@ def run_chat(ctx: UserContext, content: str,
                 "this request when answered by a vision-capable model.]"
             )
 
+    # Same follow-up problem for documents: "can you read it?" often
+    # arrives text-only after the upload turn. Without this the model
+    # gets no upload ID and cannot call read_document/read_pdf.
+    # Re-inject recent document hints (stored message stays truthful).
+    if not any(a.get("kind") in ("document", "pdf", "csv") for a in attachments):
+        reused = _recent_document_attachments(ctx, current, [])
+        if reused:
+            total_r = len(reused)
+            if total_r > 1:
+                send_text += attachments_overview(reused)
+            for position, attach in enumerate(reused, start=1):
+                send_text += attachment_hint(
+                    attach["kind"], attach["id"], attach["name"], position, total_r)
+            send_text += (
+                "\n\n[Note: the user refers to file(s) sent earlier in "
+                "this conversation; use the upload ID(s) above.]"
+            )
+
     assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, vision_ids,
         memory_notes, project_context, bool(deep_mode),
@@ -539,6 +624,20 @@ def regenerate_chat(ctx: UserContext, index: int,
                 "\n\n[Note: the user refers to image(s) sent earlier in "
                 "this conversation; their content is provided alongside "
                 "this request when answered by a vision-capable model.]"
+            )
+
+    if not any(isinstance(a, dict) and a.get("kind") in ("document", "pdf", "csv") for a in attachments):
+        reused = _recent_document_attachments(ctx, prior, [])
+        if reused:
+            total_r = len(reused)
+            if total_r > 1:
+                send_text += attachments_overview(reused)
+            for position, attach in enumerate(reused, start=1):
+                send_text += attachment_hint(
+                    attach["kind"], attach["id"], attach["name"], position, total_r)
+            send_text += (
+                "\n\n[Note: the user refers to file(s) sent earlier in "
+                "this conversation; use the upload ID(s) above.]"
             )
 
     fresh_msg, tier, task_type, fallback = _complete_turn_guarded(
