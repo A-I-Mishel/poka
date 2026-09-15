@@ -237,7 +237,16 @@ def answer_with_fallback(
         try:
             from agent.cascade import _friendly_reason, last_tier_error
             hit = last_tier_error("Gemini 3.6 Flash") or last_tier_error("Gemini 3.5 Flash")
-            why = _friendly_reason(hit[0]) if hit else "unavailable"
+            if hit:
+                why = _friendly_reason(hit[0])
+            else:
+                # ponytail: distinguish not-configured from rate-limited; full
+                # error taxonomy when Gemini adds new vision models.
+                from config import get_tier2_llm, get_tier3_llm
+                if get_tier2_llm() is None and get_tier3_llm() is None:
+                    why = "not configured (GEMINI_API_KEY missing on server)"
+                else:
+                    why = "unavailable"
         except Exception:
             why = "unavailable"
         return {
