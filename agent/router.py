@@ -88,6 +88,13 @@ def rule_route(user_input: str) -> Optional[str]:
         ["latest", "recent", "current", "today", "news", "search", "look up", "find out"],
     ):
         hits.add("research")
+    if _signals(
+        text,
+        ["logic", "premise*", "conclusion", "valid*", "truth table", "syllogism",
+         "entail*", "proposition*", "modus", "affirming", "check_logic", "tautology",
+         "contradiction", "satisfiab*"],
+    ):
+        hits.add("data")
     if len(hits) == 1:
         return next(iter(hits))
     if len(hits) > 1:
@@ -106,7 +113,7 @@ def classify_task(
         "- simple: Direct question, no tools needed\n"
         "- research: Needs web search or document reading\n"
         "- creative: Needs file generation (presentation, essay)\n"
-        "- data: Needs CSV/data analysis OR coding (write/run/debug code)\n"
+        "- data: Needs CSV/data analysis OR coding (write/run/debug code) OR logic check (validity/truth table)\n"
         "- multi_step: Combines multiple tools\n\n"
         f"Request: {user_input}\nCategory:"
     )

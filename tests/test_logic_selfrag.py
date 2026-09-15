@@ -176,3 +176,11 @@ def test_tool_registered():
 
     assert "check_logic" in TOOL_MAP
     assert is_read_only_tool("check_logic") is True
+
+
+def test_logic_routes_to_data_tool_loop():
+    from agent.router import rule_route
+
+    assert rule_route("If p implies q, and q is true, does p follow? Check with logic.") == "data"
+    assert rule_route("truth table for p -> q") == "data"
+    assert rule_route("is this syllogism valid?") == "data"
