@@ -6,6 +6,7 @@ never selected here. BudgetExhausted is never swallowed and never cools
 a tier (it is our limit, not theirs).
 """
 
+import re
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -145,9 +146,11 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
         or ("reasoning" in lowered and "signature" in lowered)
     ):
         return ("unknown", True)
+    # Prefer parsed int status; use \b-bounded regex for text fallbacks so
+    # "1400"/"4000" don't misclassify as 400 (1h invalid cooldown).
     if (
         status == 429
-        or "429" in text
+        or re.search(r"\b429\b", text) is not None
         or "quota" in lowered
         or "rate limit" in lowered
         or "freeusagelimit" in lowered
@@ -155,13 +158,13 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
         or "overloaded" in lowered
         or "usage limit" in lowered
         or "usagelimit" in lowered
-        or "529" in text
+        or re.search(r"\b529\b", text) is not None
     ):
         return ("rate_limit", True)
     if (
         status in (401, 403)
-        or "401" in text
-        or "403" in text
+        or re.search(r"\b401\b", text) is not None
+        or re.search(r"\b403\b", text) is not None
         or "unauthorized" in lowered
         or "invalid api key" in lowered
         or "invalid_api_key" in lowered
@@ -171,15 +174,22 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
         return ("auth", False)
     if (
         status in (500, 502, 503, 504)
-        or "500" in text
-        or "502" in text
-        or "503" in text
-        or "504" in text
+        or re.search(r"\b500\b", text) is not None
+        or re.search(r"\b502\b", text) is not None
+        or re.search(r"\b503\b", text) is not None
+        or re.search(r"\b504\b", text) is not None
         or "internal" in lowered
         or "unavailable" in lowered
     ):
         return ("server", True)
-    if status in (400, 404, 422) or "400" in text or "invalid" in lowered or "bad request" in lowered:
+    if (
+        status in (400, 404, 422)
+        or re.search(r"\b400\b", text) is not None
+        or re.search(r"\b404\b", text) is not None
+        or re.search(r"\b422\b", text) is not None
+        or "invalid" in lowered
+        or "bad request" in lowered
+    ):
         return ("invalid", False)
     if isinstance(error, ConnectionError) or "connection" in lowered or "network" in lowered or "dns" in lowered:
         return ("network", True)
@@ -280,9 +290,18 @@ def _usable_tiers(
     first: Optional[str] = None,
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
 ) -> List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]:
-    """Central tier policy: preferred order minus cooled-down providers."""
+    """Central tier policy: preferred order minus cooled-down providers.
+
+    Intentional hammer fallback: when every tier is cooled, `usable` is
+    empty and we return the full `ordered` list instead of stalling.
+    Cooldowns are advisory best-effort (transient/rate-limit windows);
+    returning [] would deadlock the request until a window expires, while
+    hammering lets a recovered provider answer immediately. Callers still
+    record failures and re-cool.
+    """
     ordered = _ordered_tiers(first, tiers)
     usable = [item for item in ordered if not _tier_skipped(item[0])]
+    # Intentional: if all cooled, try ordered anyway rather than returning empty.
     return usable or ordered
 
 
@@ -324,4 +343,115 @@ def _run_cascade_step(
             last_error = e
             _record_tier_failure(name, classify_provider_error(e)[0], e)
             continue
+    raise RuntimeError(_friendly_cascade_error(last_error))
+
+
+async def _run_cascade_step_async(
+    fn: Callable[[str, BaseLanguageModel], Any],
+    first: Optional[str] = None,
+    tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
+    attempts: Optional[List[str]] = None,
+    max_concurrent: int = 3,
+) -> Tuple[str, Any]:
+    """Run fn(name, llm) on tiers CONcurrently, returning first success.
+
+    Tries all usable tiers in parallel (up to max_concurrent at a time),
+    cancels remaining on first success. Preserves attempt order for metrics.
+    Falls back to serial on BudgetExhausted or when no tiers usable.
+    """
+    import asyncio
+
+    usable = _usable_tiers(first, tiers)
+    if not usable:
+        raise RuntimeError("No usable tiers available")
+
+    last_error: Exception | None = None
+
+    # If only one tier, run directly (avoid executor overhead)
+    if len(usable) == 1:
+        name, getter = usable[0]
+        if attempts is not None:
+            attempts.append(name)
+        try:
+            llm_instance = getter()
+        except BudgetExhausted:
+            raise
+        except Exception as e:
+            last_error = e
+            _record_tier_failure(name, classify_provider_error(e)[0], e)
+            raise RuntimeError(_friendly_cascade_error(last_error))
+        if llm_instance is None:
+            raise RuntimeError("Tier returned None LLM")
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(None, lambda: fn(name, llm_instance))
+            _record_tier_success(name)
+            return name, result
+        except BudgetExhausted:
+            raise
+        except Exception as e:
+            _record_tier_failure(name, classify_provider_error(e)[0], e)
+            raise RuntimeError(_friendly_cascade_error(e))
+
+    # Multiple tiers: race them with limited concurrency
+    semaphore = asyncio.Semaphore(max_concurrent)
+    tasks = {}
+
+    async def _try_tier(name: str, getter: Callable[[], Optional[BaseLanguageModel]]) -> Tuple[str, Any]:
+        nonlocal last_error
+        async with semaphore:
+            if attempts is not None:
+                attempts.append(name)
+            try:
+                # Get LLM instance (may block on I/O)
+                llm_instance = await asyncio.get_event_loop().run_in_executor(None, getter)
+            except BudgetExhausted:
+                raise
+            except Exception as e:
+                last_error = e
+                _record_tier_failure(name, classify_provider_error(e)[0], e)
+                raise
+            if llm_instance is None:
+                raise RuntimeError(f"Tier {name} returned None LLM")
+            try:
+                result = await asyncio.get_event_loop().run_in_executor(None, lambda: fn(name, llm_instance))
+                _record_tier_success(name)
+                return name, result
+            except BudgetExhausted:
+                raise
+            except Exception as e:
+                _record_tier_failure(name, classify_provider_error(e)[0], e)
+                raise
+
+    # Create tasks for all usable tiers
+    for name, getter in usable:
+        tasks[name] = asyncio.create_task(_try_tier(name, getter))
+
+    # Wait for first completion
+    while tasks:
+        done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            try:
+                result = task.result()
+                # Cancel remaining tasks
+                for p in pending:
+                    p.cancel()
+                # Wait for cancellation to complete
+                if pending:
+                    await asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED)
+                return result
+            except BudgetExhausted:
+                # Cancel all and re-raise
+                for p in pending:
+                    p.cancel()
+                raise
+            except Exception as e:
+                last_error = e
+                # This tier failed, continue with remaining
+                pass
+        # Remove completed task
+        for name, task in list(tasks.items()):
+            if task in done:
+                del tasks[name]
+
+    # All tiers failed
     raise RuntimeError(_friendly_cascade_error(last_error))
