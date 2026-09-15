@@ -27,7 +27,6 @@ Test seam: configure_connector() installs a fake
 import asyncio
 import fnmatch
 import json
-import os
 from contextlib import asynccontextmanager
 from typing import Any, Callable, Dict, List, Optional
 
@@ -134,50 +133,11 @@ def _resolve_env(mapping: Any) -> Dict[str, str]:
     return resolved
 
 
-# Minimal, non-secret vars a stdio child needs to spawn (PATH, HOME, LANG,
-# plus OS-required entries). Everything else — provider API keys,
-# PLUTO_ACCESS_TOKENS, GOOGLE_REFRESH_TOKEN, etc. — must NOT leak.
-_SAFE_ENV_KEYS = (
-    "PATH",
-    "PATHEXT",
-    "SYSTEMROOT",
-    "SYSTEMDRIVE",
-    "WINDIR",
-    "TEMP",
-    "TMP",
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "PROCESSOR_ARCHITECTURE",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "LANGUAGE",
-    "TZ",
-    "TERM",
-    "LOGNAME",
-    "USER",
-    "USERNAME",
-    "SHELL",
-    "COMSPEC",
-)
-
-
 def _base_env() -> Dict[str, str]:
-    """Small safe base env for stdio children (never the full os.environ)."""
-    base: Dict[str, str] = {}
-    for key in _SAFE_ENV_KEYS:
-        value = os.environ.get(key)
-        if value is None:
-            continue
-        if value.startswith("()"):
-            # Skip exported shell functions (security risk).
-            continue
-        base[key] = value
-    return base
+    """Small safe base env for stdio children (delegates to services.env)."""
+    from services.env import base_env as _shared_base_env
+
+    return _shared_base_env()
 
 
 def _stdio_env(cfg: Dict[str, Any]) -> Dict[str, str]:

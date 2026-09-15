@@ -54,26 +54,11 @@ _RUNNABLE_EXTS = frozenset({
     "java", "go", "c", "cpp", "cc", "rs", "php", "rb",
 })
 
-_SECRET_HINTS = ("key", "token", "secret", "password", "passwd",
-                 "authorization", "credential")
-
-
 def _safe_env() -> Dict[str, str]:
-    """Minimal env for child processes (no secrets, no proxy surprises)."""
-    keep = ("PATH", "SYSTEMROOT", "WINDIR", "TMP", "TEMP", "HOME",
-            "LANG", "LC_ALL", "PYTHONIOENCODING", "NODE_ENV", "NO_COLOR")
-    env: Dict[str, str] = {}
-    for k in keep:
-        v = os.getenv(k)
-        if v:
-            env[k] = v
-    env.setdefault("PYTHONIOENCODING", "utf-8")
-    env.setdefault("NO_COLOR", "1")
-    # Defense in depth: drop anything secret-like even from the keep list.
-    for k in list(env.keys()):
-        if any(h in k.lower() for h in _SECRET_HINTS):
-            env.pop(k, None)
-    return env
+    """Minimal env for child processes (delegates to services.env)."""
+    from services.env import safe_env as _shared_safe_env
+
+    return _shared_safe_env()
 
 
 def _which(cmd: str) -> Optional[str]:
