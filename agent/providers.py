@@ -23,7 +23,6 @@ from config import (
     get_tier_openrouter_free_router_llm,
     get_tier_openrouter_gemma26_llm,
     get_tier_openrouter_gemma_llm,
-    get_tier_openrouter_inkling_llm,
     get_tier_openrouter_laguna_llm,
     get_tier_openrouter_ling_fin_llm,
     get_tier_openrouter_nemotron35_llm,
@@ -47,7 +46,6 @@ TIER_AGENT_GETTERS: List[
     ("OpenRouter Nemotron 3.5", get_tier_openrouter_nemotron35_llm),  # type: ignore[arg-type]
     ("OpenRouter Gemma 26B", get_tier_openrouter_gemma26_llm),  # type: ignore[arg-type]
     ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),  # type: ignore[arg-type]
-    ("OpenRouter Inkling Small", get_tier_openrouter_inkling_llm),  # type: ignore[arg-type]
     ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),  # type: ignore[arg-type]
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),  # type: ignore[arg-type]
 ]

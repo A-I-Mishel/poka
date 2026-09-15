@@ -68,7 +68,8 @@ OPENROUTER_NEMOTRON_SUPER_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
 OPENROUTER_NEMOTRON35_MODEL: str = "nvidia/nemotron-3.5-lightning:free"
 OPENROUTER_GEMMA26_MODEL: str = "google/gemma-4-26b-a4b-it:free"
 OPENROUTER_LING_FIN_MODEL: str = "inclusionai/ling-3.0-flash-fin:free"
-OPENROUTER_INKLING_MODEL: str = "thinkingmachines/inkling-small:free"
+# OPENROUTER_INKLING_MODEL retired Sep 2026: 403 Forbidden on free tier
+# (thinkingmachines/inkling-small:free) — removed from cascade.
 OPENROUTER_LAGUNA_MODEL: str = "poolside/laguna-s-2.1:free"
 # OpenRouter Free Model Router (released Feb 2026): selects a free model
 # at random from the live catalog, smartly filtering for features the
@@ -408,11 +409,6 @@ def get_tier_openrouter_ling_fin_llm(temperature: float = TEMPERATURE) -> Option
     return _get_openrouter_llm("OpenRouter Ling Fin", OPENROUTER_LING_FIN_MODEL, temperature)
 
 
-def get_tier_openrouter_inkling_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Inkling Small 1M ctx (free tier)."""
-    return _get_openrouter_llm("OpenRouter Inkling Small", OPENROUTER_INKLING_MODEL, temperature)
-
-
 def get_tier_openrouter_laguna_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """OpenRouter fallback: Laguna code model (free tier)."""
     return _get_openrouter_llm("OpenRouter Laguna", OPENROUTER_LAGUNA_MODEL, temperature)
@@ -443,7 +439,6 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "OpenRouter Nemotron 3.5": get_tier_openrouter_nemotron35_llm,
     "OpenRouter Gemma 26B": get_tier_openrouter_gemma26_llm,
     "OpenRouter Ling Fin": get_tier_openrouter_ling_fin_llm,
-    "OpenRouter Inkling Small": get_tier_openrouter_inkling_llm,
     "OpenRouter Laguna": get_tier_openrouter_laguna_llm,
     "OpenRouter Free Router": get_tier_openrouter_free_router_llm,
 }
@@ -479,7 +474,6 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("OpenRouter Nemotron 3.5", get_tier_openrouter_nemotron35_llm),
     ("OpenRouter Gemma 26B", get_tier_openrouter_gemma26_llm),
     ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),
-    ("OpenRouter Inkling Small", get_tier_openrouter_inkling_llm),
     ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
 ]

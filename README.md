@@ -133,7 +133,8 @@ Cascade (first live tier wins, failed tiers cool down):
 6. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL`)
 7. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
 8. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
-   + Gemma 26B + Ling Fin + Inkling Small + Laguna (free fallbacks)
+   + Gemma 26B + Ling Fin + Laguna (free fallbacks; Inkling Small
+   retired Sep 2026 — 403 Forbidden)
 9. OpenRouter Free Router (`openrouter/free`; smart auto-selection
    of a free model filtered by request features)
 
