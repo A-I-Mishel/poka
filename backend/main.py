@@ -28,7 +28,8 @@ from contextlib import asynccontextmanager
 async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     from services.identity import auth_mode as _auth_mode
 
-    if _auth_mode() == "open":
+    _mode = _auth_mode()
+    if _mode == "open":
         logger.warning(
             "PLUTO_AUTH_MODE=open — unauthenticated access enabled. "
             "Public deployments must set PLUTO_AUTH_MODE=private and "
@@ -45,19 +46,46 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
                 )
         except Exception:
             pass
-        try:
-            import os as _os
+    try:
+        import os as _os
 
-            _workers = int(_os.getenv("UVICORN_WORKERS", "1") or "1")
-        except (TypeError, ValueError):
-            _workers = 1
-        if _workers > 1:
-            logger.warning(
-                "UVICORN_WORKERS=%d — rate limits and locks are per-process "
-                "best-effort; use a single worker or external Redis limiter "
-                "for hard abuse/billing enforcement.",
-                _workers,
+        _workers = int(_os.getenv("UVICORN_WORKERS", "1") or "1")
+    except (TypeError, ValueError):
+        _workers = 1
+    if _workers > 1:
+        logger.warning(
+            "UVICORN_WORKERS=%d — rate limits and locks are per-process "
+            "best-effort; use a single worker or external Redis limiter "
+            "for hard abuse/billing enforcement.",
+            _workers,
+        )
+        if _mode == "private" and not (os.getenv("REDIS_URL", "") or "").strip():
+            raise RuntimeError(
+                "PLUTO_AUTH_MODE=private with UVICORN_WORKERS>1 requires REDIS_URL "
+                "for distributed rate limiting (abuse/billing enforcement)."
             )
+    # Behind Render/Vercel the client IP arrives via X-Forwarded-For.
+    # Without PLUTO_TRUST_PROXY=true limits key on the proxy peer IP,
+    # collapsing all visitors into one bucket (over-blocking).
+    try:
+        _trust = (os.getenv("PLUTO_TRUST_PROXY", "false") or "false").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if not _trust and (os.getenv("PORT", "") or os.getenv("RENDER", "")):
+            logger.warning(
+                "PLUTO_TRUST_PROXY is false behind a proxy (PORT/RENDER set) — "
+                "rate limits will key on proxy IP. Set PLUTO_TRUST_PROXY=true "
+                "when behind a trusted proxy."
+            )
+    except Exception:
+        pass
+    # Tracing: best-effort, never blocks startup (NoOp when unconfigured).
+    try:
+        from services.tracing import init_tracing as _init_tracing
+
+        _init_tracing()
+    except Exception:
+        logger.warning("tracing init skipped", exc_info=True)
     # validate secrets placeholders (never logs values)
     try:
         from services.secrets import validate_secrets
@@ -75,6 +103,47 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         _maybe_restore()
     except Exception:
         logger.warning("snapshot restore skipped", exc_info=True)
+    # Start background scheduler for storage hygiene
+    try:
+        from services.scheduler import start_scheduler as _start_scheduler
+
+        _start_scheduler()
+    except Exception:
+        logger.warning("background scheduler failed to start", exc_info=True)
+    # Pre-warm tokenizer for faster first request
+    try:
+        from services.tokens import prewarm_tokenizer as _prewarm_tokenizer
+
+        _prewarm_tokenizer()
+    except Exception:
+        logger.warning("tokenizer prewarm failed", exc_info=True)
+    # Auto-configure Redis rate limiter if REDIS_URL is set.
+    # In private mode a configured-but-unreachable Redis fails fast
+    # (fail-closed for abuse/billing); in open mode we fall back to
+    # in-memory with a warning (local dev convenience).
+    try:
+        from services.ratelimit_redis import create_redis_limiter as _create_redis_limiter
+        from services.ratelimit import configure_rate_limiter as _configure_rate_limiter
+
+        _redis_url = (os.getenv("REDIS_URL", "") or "").strip()
+        redis_limiter = _create_redis_limiter()
+        if redis_limiter is not None:
+            # Smoke-test the connection so a dead Redis never silently
+            # degrades to per-process limits in private mode.
+            try:
+                redis_limiter.check("__startup__", "chat")
+            except Exception as _e:
+                if _mode == "private":
+                    raise RuntimeError(f"REDIS_URL unreachable in private mode: {_e}") from _e
+                raise
+            _configure_rate_limiter(redis_limiter)
+            logger.info("Redis rate limiter enabled")
+        elif _redis_url and _mode == "private":
+            raise RuntimeError("REDIS_URL is set but Redis limiter init returned None in private mode.")
+    except RuntimeError:
+        raise
+    except Exception:
+        logger.warning("Redis rate limiter init failed, using in-memory limiter", exc_info=True)
     yield
     # Flush any pending backup before shutdown.
     try:
@@ -83,18 +152,38 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         _snapshots_flush()
     except Exception:
         logger.warning("snapshot flush on shutdown failed", exc_info=True)
+    # Stop background scheduler
+    try:
+        from services.scheduler import stop_scheduler as _stop_scheduler
+
+        _stop_scheduler()
+    except Exception:
+        logger.warning("background scheduler stop failed", exc_info=True)
 
 
-app = FastAPI(title="Pluto API", version="0.1.0", lifespan=_lifespan)
+# Hide interactive docs + schema in private mode (prevents unauthenticated schema leakage).
+_is_private = os.getenv("PLUTO_AUTH_MODE", "open").strip().lower() == "private"
+app = FastAPI(
+    title="Pluto API",
+    version="0.1.0",
+    lifespan=_lifespan,
+    docs_url=None if _is_private else "/docs",
+    redoc_url=None if _is_private else "/redoc",
+    openapi_url=None if _is_private else "/openapi.json",
+)
 
 # --- CORS hardening -------------------------------------------------
 # Explicit allow-list, validated origins — never "*" with credentials.
-# Empty or invalid list falls back to localhost:5173 with a warning.
+# Private mode is fail-closed: PLUTO_FRONTEND_ORIGIN must be set
+# explicitly (no localhost fallback on public hosts). Open mode keeps
+# the localhost fallback for local dev convenience.
 import re as _cors_re
 
 _VALID_ORIGIN_RE = _cors_re.compile(r"^https?://[^/\s]+$")
 
-_raw_origins = os.getenv("PLUTO_FRONTEND_ORIGIN", "http://localhost:5173")
+_raw_origins = os.getenv("PLUTO_FRONTEND_ORIGIN", "")
+if not _raw_origins.strip() and not _is_private:
+    _raw_origins = "http://localhost:5173"
 _frontend_origins: list[str] = []
 for _o in _raw_origins.split(","):
     _o = _o.strip().rstrip("/")
@@ -108,6 +197,11 @@ for _o in _raw_origins.split(","):
         continue
     _frontend_origins.append(_o)
 if not _frontend_origins:
+    if _is_private:
+        raise RuntimeError(
+            "PLUTO_AUTH_MODE=private requires PLUTO_FRONTEND_ORIGIN "
+            "(e.g. https://app.example.com). Refusing to start with an open/localhost fallback."
+        )
     logger.warning("No valid PLUTO_FRONTEND_ORIGIN — falling back to http://localhost:5173")
     _frontend_origins = ["http://localhost:5173"]
 
@@ -170,7 +264,7 @@ for _router in (
 @app.get("/api")
 def root():
     """API index (the UI is served separately in development)."""
-    return {"ok": True, "name": "Pluto API", "docs": "/docs"}
+    return {"ok": True, "name": "Pluto API", "docs": None if _is_private else "/docs"}
 
 
 # Single-server demo mode: when frontend/dist exists, serve it.

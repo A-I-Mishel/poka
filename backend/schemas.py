@@ -113,6 +113,9 @@ class HealthResponse(BaseModel):
     ok: bool = True
     tiers: List[str] = Field(default_factory=list)
     auth_mode: str = "open"
+    live_tier: Optional[str] = None
+    limiter: str = "memory"
+    snapshots_configured: bool = False
 
 
 class AccountRequest(BaseModel):

@@ -3,7 +3,20 @@
 Canonical import for new code: `from services.memory import ...`.
 This module re-exports the same objects so existing `import
 memory_engine` sites keep working unchanged.
+
+.. deprecated::
+    Import from `services.memory` directly. This alias emits a
+    DeprecationWarning on first import and will be removed in a future
+    release.
 """
+
+import warnings as _warnings
+
+_warnings.warn(
+    "import memory_engine is deprecated; use services.memory instead",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from services.memory import (
     MAX_FACTS,

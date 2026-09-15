@@ -29,10 +29,18 @@ services:
       - key: GOOGLE_REFRESH_TOKEN
         sync: false
       - key: PLUTO_FRONTEND_ORIGIN
-        value: https://poka-nine.vercel.app
+        sync: false
       - key: PLUTO_AUTH_MODE
         value: private
       - key: PLUTO_ACCESS_TOKENS
+        sync: false
+      - key: PLUTO_TRUST_PROXY
+        value: true
+      - key: REDIS_URL
+        sync: false
+      - key: PLUTO_HEALTH_PROBE
+        value: 1
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
         sync: false
       # Persistent storage for accounts + chats + uploads + memory.
       # Without this, data/accounts.json lives on the ephemeral filesystem

@@ -28,10 +28,10 @@ from services.memory import (
     load_structured_memory,
     update_memory_incremental,
 )
-from services.obs import event as obs_event
+from services.obs import event as obs_event, trace_llm_call
 
 from agent.budget import BudgetExhausted, RequestBudget
-from agent.cascade import ROUTER_STATS, _run_cascade_step, _usable_tiers
+from agent.cascade import ROUTER_STATS, _run_cascade_step, _run_cascade_step_async, _usable_tiers
 from agent.executor import TokenStream
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.planning import plan_then_execute
@@ -42,6 +42,29 @@ from agent.toolrun import MAX_TOOL_ROUNDS, run_tool_loop
 from agent.vision import _try_vision_answer
 
 logger = logging.getLogger(__name__)
+
+# Helper to run async cascade step from synchronous context
+def _run_cascade_step_sync(
+    fn: Callable[[str, BaseLanguageModel], Any],
+    first: Optional[str] = None,
+    tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
+    attempts: Optional[List[str]] = None,
+) -> Tuple[str, Any]:
+    """Run the async cascade step from synchronous context."""
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If we're in a running loop, create a new task and wait
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, _run_cascade_step_async(fn, first, None, attempts))
+                return future.result(timeout=120)
+        else:
+            return asyncio.run(_run_cascade_step_async(fn, first, None, attempts))
+    except RuntimeError:
+        # No event loop, create new one
+        return asyncio.run(_run_cascade_step_async(fn, first, None, attempts))
 
 MAX_HISTORY_MESSAGES: int = 6
 
@@ -249,7 +272,7 @@ def answer_with_fallback(
             # Classifier is down: fall back to the cheapest path (a
             # direct answer, no tools), never the expensive research path.
             task_type = "simple"
-    logger.info("req=%s task=%s", request_id, task_type)
+        logger.info("req=%s task=%s", request_id, task_type)
 
     langchain_history: List[BaseMessage] = history
     try:
@@ -262,7 +285,8 @@ def answer_with_fallback(
                 def _summarize(_name: str, llm: BaseLanguageModel) -> List[BaseMessage]:
                     return summarize_history(history_list, llm, budget=budget)
 
-                _, langchain_history = _run_cascade_step(_summarize, first, tiers)
+                with trace_llm_call(request_id, "summarize", "summarize") as _:
+                    _, langchain_history = _run_cascade_step(_summarize, first, tiers)
                 _SUMMARY_CACHE[cache_key] = langchain_history
                 while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
                     _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
@@ -275,16 +299,17 @@ def answer_with_fallback(
         def _answer_direct(_name: str, llm: BaseLanguageModel) -> str:
             system_text = _build_system_prompt(
                 combined_notes, relevant_context, project_context)
-            response = agent._invoke_bounded(
-                llm,
-                [
-                    SystemMessage(content=system_text),
-                    *langchain_history,
-                    HumanMessage(content=user_input),
-                ],
-                budget=budget,
-                on_token=live,
-            )
+            with trace_llm_call(request_id, "simple", "simple") as _:
+                response = agent._invoke_bounded(
+                    llm,
+                    [
+                        SystemMessage(content=system_text),
+                        *langchain_history,
+                        HumanMessage(content=user_input),
+                    ],
+                    budget=budget,
+                    on_token=live,
+                )
             return _as_text(response.content)
 
         try:
@@ -428,7 +453,7 @@ def answer_with_fallback(
                     relevant_context, budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
                     final_tier, MAX_DEEP_TOOL_ROUNDS, on_progress,
-                    tier_name, prefailed,
+                    tier_name, prefailed, request_id,
                 )
             else:
                 draft = run_tool_loop(
@@ -437,7 +462,7 @@ def answer_with_fallback(
                     MAX_DEEP_TOOL_ROUNDS if deep_mode else MAX_TOOL_ROUNDS,
                     budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
-                    final_tier, on_progress,
+                    final_tier, on_progress, request_id,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
                 improved = reflect_and_improve(llm, user_input, draft, langchain_history, budget)

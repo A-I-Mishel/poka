@@ -124,8 +124,20 @@ def configured() -> bool:
         return False
 
 
+# Module-level boto3 client singleton (thread-safe for read-only use)
+_boto3_client: Any = None
+
+
 def _get_client() -> Any:
-    """Build an S3-compatible client (boto3 imported lazily)."""
+    """Build an S3-compatible client (boto3 imported lazily).
+
+    Returns a cached singleton client to avoid connection overhead on
+    repeated snapshot operations.
+    """
+    global _boto3_client
+    if _boto3_client is not None:
+        return _boto3_client
+
     import boto3
     from botocore.config import Config
 
@@ -142,7 +154,7 @@ def _get_client() -> Any:
         retries={"max_attempts": 2},
         **extra,
     )
-    return boto3.client(
+    _boto3_client = boto3.client(
         "s3",
         endpoint_url=cfg["endpoint"],
         aws_access_key_id=cfg["key_id"],
@@ -150,6 +162,13 @@ def _get_client() -> Any:
         config=boto_cfg,
         region_name=cfg["region"],
     )
+    return _boto3_client
+
+
+def reset_boto3_client() -> None:
+    """Reset the cached boto3 client (for config changes or tests)."""
+    global _boto3_client
+    _boto3_client = None
 
 
 def _data_root() -> Path:
@@ -245,14 +264,33 @@ def _safe_extract(payload: bytes, root: Optional[Path] = None) -> int:
     """Extract an archive into the data root, refusing path escapes.
 
     Returns the number of members applied. Raises on corrupt archives.
+    Caps member count and total uncompressed size to bound zip/tar bombs.
     """
+    MAX_SNAPSHOT_FILES = 5000
+    MAX_SNAPSHOT_TOTAL_BYTES = 500 * 1024 * 1024
+    MAX_SNAPSHOT_FILE_BYTES = 100 * 1024 * 1024
     base = (root or _data_root()).resolve()
     base.mkdir(parents=True, exist_ok=True)
     applied = 0
+    total = 0
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        if len(members) > MAX_SNAPSHOT_FILES:
+            raise ValueError(f"snapshot archive too many members ({len(members)} > {MAX_SNAPSHOT_FILES})")
+        for member in members:
             if not member.isfile():
                 continue
+            # per-file and total size caps before extraction
+            try:
+                sz = int(getattr(member, "size", 0) or 0)
+            except Exception:
+                sz = 0
+            if sz > MAX_SNAPSHOT_FILE_BYTES:
+                logger.warning("snapshot member too large; skipping %s", member.name)
+                continue
+            total += max(0, sz)
+            if total > MAX_SNAPSHOT_TOTAL_BYTES:
+                raise ValueError("snapshot archive too large to extract safely")
             target = (base / member.name).resolve()
             if target != base and base not in target.parents:
                 logger.warning("snapshot member escapes data root; skipping")
@@ -261,8 +299,17 @@ def _safe_extract(payload: bytes, root: Optional[Path] = None) -> int:
             extracted = tar.extractfile(member)
             if extracted is None:
                 continue
+            # stream with cap to avoid decompression bomb beyond header size
             with open(target, "wb") as f:
-                f.write(extracted.read())
+                remaining = MAX_SNAPSHOT_FILE_BYTES
+                while True:
+                    chunk = extracted.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    if len(chunk) > remaining:
+                        raise ValueError(f"snapshot member exceeds size limit: {member.name}")
+                    f.write(chunk)
+                    remaining -= len(chunk)
             applied += 1
     return applied
 

@@ -1,6 +1,9 @@
 """Meta endpoints: health and configured model tiers."""
 
 import logging
+import os
+import threading
+import time
 
 from fastapi import APIRouter, Depends
 
@@ -12,6 +15,42 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["meta"])
 
+# Cached live-tier probe: probing every /health would burn quota and
+# add up to PROBE_TIMEOUT_SECONDS latency to orchestrator checks.
+# Cache for 60s; failures cache as None (still report configured tiers).
+_live_cache_lock = threading.Lock()
+_live_cache: dict = {"at": 0.0, "tier": None}
+
+
+def _cached_live_tier(configured: list) -> object:
+    if not configured:
+        return None
+    # Opt-out for cold-boot speed / quota: PLUTO_HEALTH_PROBE=0 disables
+    # the live network probe (liveness only, no readiness).
+    try:
+        if (os.getenv("PLUTO_HEALTH_PROBE", "1") or "1").strip().lower() in (
+            "0", "false", "no", "off",
+        ):
+            return None
+    except Exception:
+        pass
+    now = time.time()
+    with _live_cache_lock:
+        if now - float(_live_cache.get("at", 0.0)) < 60.0:
+            return _live_cache.get("tier")
+    tier = None
+    try:
+        from agent.runtime import probe_live_tier as _probe
+        from services.limits import PROBE_TIMEOUT_SECONDS as _timeout
+
+        tier = _probe(timeout=float(_timeout))
+    except Exception:
+        tier = None
+    with _live_cache_lock:
+        _live_cache["at"] = now
+        _live_cache["tier"] = tier
+    return tier
+
 
 @router.get("/health", response_model=schemas.HealthResponse)
 def health():
@@ -20,6 +59,9 @@ def health():
     Public — no authentication required so container orchestrators
     (Render, Kubernetes, Docker HEALTHCHECK) can probe it. Private
     mode is still reported via `auth_mode` so operators can verify.
+    Live-tier probe is cached 60s and never blocks liveness: orchestrators
+    get ok=True even when all tiers are down (readiness signal is
+    `live_tier is not None` + `tiers` non-empty).
     """
     from config import TIER_GETTERS
 
@@ -33,7 +75,30 @@ def health():
     mode = auth_mode()
     if mode == "open":
         logger.debug("health probed in open mode — not suitable for public deploys")
-    return {"ok": True, "tiers": configured, "auth_mode": mode}
+    try:
+        from services.ratelimit import get_rate_limiter as _get_limiter
+
+        limiter_name = type(_get_limiter()).__name__.replace("RateLimiter", "").lower() or "memory"
+        if "redis" in type(_get_limiter()).__name__.lower():
+            limiter_name = "redis"
+        elif "memory" in type(_get_limiter()).__name__.lower():
+            limiter_name = "memory"
+    except Exception:
+        limiter_name = "memory"
+    try:
+        from services.snapshots import configured as _snap_configured
+
+        snaps = bool(_snap_configured())
+    except Exception:
+        snaps = False
+    return {
+        "ok": True,
+        "tiers": configured,
+        "auth_mode": mode,
+        "live_tier": _cached_live_tier(configured),
+        "limiter": limiter_name,
+        "snapshots_configured": snaps,
+    }
 
 
 @router.get("/tiers")

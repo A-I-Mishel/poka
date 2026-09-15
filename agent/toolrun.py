@@ -11,6 +11,7 @@ blocks ever go back): tool results return inside fresh human messages.
 """
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -24,7 +25,11 @@ from services.limits import (
     MAX_TOOL_ROUNDS,
     TOOL_TIMEOUT_SECONDS,
 )
-from services.obs import timed as obs_timed
+from services.obs import (
+    record_tool_execution_mode,
+    timed as obs_timed,
+    trace_tool_call,
+)
 from services.storage import MAX_SOURCES, clean_source_record
 from services.tokens import count_tokens, truncate_tokens
 from tools import web_search, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool
@@ -44,7 +49,32 @@ from agent.prompts import _as_text, _build_system_prompt, strip_internal_reasoni
 tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
-MAX_TOOL_ROUNDS = MAX_TOOL_ROUNDS  # re-exported from services.limits
+# Tool classification: read-only tools can run in parallel; mutating tools must run serially.
+# Read-only: no vault writes, no external side effects, idempotent reads.
+_READ_ONLY_TOOLS = frozenset({
+    "web_search", "search_documents", "search_gmail", "read_gmail",
+    "list_calendar_events", "list_tables", "describe_table", "query_database",
+    "workspace_list", "workspace_read", "read_output", "read_pdf",
+    "read_pdf_page", "read_document", "analyze_csv", "csv_inspect",
+    "list_mcp_tools",
+})
+
+# Mutating tools: vault writes, external side effects, non-idempotent.
+_MUTATING_TOOLS = frozenset({
+    "create_gmail_draft", "send_gmail", "create_calendar_event", "delete_calendar_event",
+    "import_csv_table", "execute_sql", "run_python", "workspace_write",
+    "workspace_delete", "run_code", "call_mcp_tool",
+    "create_pptx", "build_presentation", "create_docx", "build_document",
+    "create_pdf", "create_markdown", "create_doc", "create_html",
+})
+
+def is_read_only_tool(name: str) -> bool:
+    """Check if a tool is read-only (can run in parallel)."""
+    return name in _READ_ONLY_TOOLS
+
+def is_mutating_tool(name: str) -> bool:
+    """Check if a tool is mutating (must run serially)."""
+    return name in _MUTATING_TOOLS
 
 def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_key: Any = None) -> Any:
     """Invoke a tool with the submitting request's user bound.
@@ -117,6 +147,70 @@ def _execute_tool_call(tool_call: Any, budget: Optional[RequestBudget] = None) -
         return f"STATUS=FAILED tool={name}: {str(e)[:300]}"
 
 
+def _has_read_only_tools(tool_calls: List[Any]) -> bool:
+    """Check if all tool calls are read-only (can run in parallel)."""
+    for tc in tool_calls:
+        if isinstance(tc, dict):
+            name = str(tc.get("name", ""))
+        else:
+            name = str(getattr(tc, "name", ""))
+        if not is_read_only_tool(name):
+            return False
+    return True
+
+
+def _execute_tool_calls_parallel(
+    tool_calls: List[Any],
+    budget: Optional[RequestBudget] = None,
+    max_workers: int = 4,
+) -> List[str]:
+    """Execute multiple read-only tool calls in parallel.
+
+    Only read-only tools are parallelized; mutating tools run serially.
+    Returns results in the same order as input tool_calls.
+    """
+    if not tool_calls:
+        return []
+
+    # Separate read-only and mutating tools
+    read_only = []
+    mutating = []
+    for i, tc in enumerate(tool_calls):
+        if isinstance(tc, dict):
+            name = str(tc.get("name", ""))
+        else:
+            name = str(getattr(tc, "name", ""))
+        if is_read_only_tool(name):
+            read_only.append((i, tc))
+        else:
+            mutating.append((i, tc))
+
+    results = [None] * len(tool_calls)
+
+    # Execute read-only tools in parallel
+    if read_only:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(read_only))) as executor:
+            future_to_idx = {
+                executor.submit(_execute_tool_call, tc, budget): idx
+                for idx, tc in read_only
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as e:
+                    results[idx] = f"STATUS=FAILED tool=parallel: {e}"
+
+    # Execute mutating tools serially (preserve order)
+    for idx, tc in mutating:
+        try:
+            results[idx] = _execute_tool_call(tc, budget)
+        except Exception as e:
+            results[idx] = f"STATUS=FAILED tool=serial: {e}"
+
+    return results
+
+
 def _note_tier_failure(tier_name: Any, error: Any) -> None:
     """Cool a tier down after it fails mid-task (never raises).
 
@@ -150,6 +244,7 @@ def run_tool_loop(
     on_reset: Optional[Callable[[], None]] = None,
     final_tier: Optional[List[str]] = None,
     on_progress: Optional[Callable[[str], None]] = None,
+    request_id: Optional[str] = None,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -201,6 +296,13 @@ def run_tool_loop(
     """
     if budget is None:
         budget = RequestBudget()
+    if not request_id:
+        try:
+            import uuid as _uuid
+
+            request_id = _uuid.uuid4().hex[:8]
+        except Exception:
+            request_id = "toolloop"
     mem_fit = fit_text(
         (memory_notes.strip() + "\n" + relevant_context.strip()).strip(),
         CTX_MEMORY_TOKENS,
@@ -385,16 +487,25 @@ def run_tool_loop(
             _note_final_tier(round_tier)
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")
         try:
-            last_results = []
-            for tc in tool_calls:
-                result_text = _execute_tool_call(tc, budget)
-                last_results.append(result_text)
+            # Parallel execution for read-only tools, serial for mutating
+            execution_mode = "parallel" if _has_read_only_tools(tool_calls) else "serial"
+            try:
+                record_tool_execution_mode("batch", execution_mode)
+            except Exception:
+                pass
+            last_results = _execute_tool_calls_parallel(tool_calls, budget)
+            for tc, result_text in zip(tool_calls, last_results):
                 if isinstance(tc, dict):
                     tc_name = tc.get("name", "")
                 else:
                     tc_name = getattr(tc, "name", "")
-                _record_tool(tc_name)
-                _record_search_sources(result_text, tc_name)
+                try:
+                    with trace_tool_call(request_id or "toolloop", tc_name, execution_mode):
+                        _record_tool(tc_name)
+                        _record_search_sources(result_text, tc_name)
+                except Exception:
+                    _record_tool(tc_name)
+                    _record_search_sources(result_text, tc_name)
         except BudgetExhausted:
             last_results.append(
                 "[budget] Tool budget exhausted; no further tool calls. "

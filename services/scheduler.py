@@ -1,0 +1,130 @@
+"""Background scheduler for storage hygiene and other periodic tasks.
+
+Runs storage hygiene (pruning stale outputs/uploads) on a configurable
+interval instead of on every request. This removes the per-request
+overhead of walking vault directories and running pruning operations.
+"""
+
+import logging
+import os
+import threading
+from typing import Optional
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+
+from services.limits import STORAGE_HYGIENE_INTERVAL_SECONDS
+from services.storage import data_root
+
+logger = logging.getLogger(__name__)
+
+_scheduler: Optional[BackgroundScheduler] = None
+_scheduler_lock = threading.Lock()
+_started = False
+
+
+def _run_all_users_hygiene() -> None:
+    """Run storage hygiene for all users with vaults."""
+    root = data_root()
+    users_dir = root / "users"
+    if not users_dir.exists():
+        return
+
+    for user_path in users_dir.iterdir():
+        if not user_path.is_dir():
+            continue
+        user_id = user_path.name
+        try:
+            # Import here to avoid circular imports
+            from services.files import FileStore
+            from services.storage import UserStore
+
+            user_store = UserStore(user_id, run_migration=False)
+            file_store = FileStore(user_id)
+
+            # Prune stale outputs (30 days by default)
+            file_store.prune_stale_outputs()
+
+            # Prune stale uploads (7 days, unreferenced)
+            from backend.deps import _referenced_upload_ids
+            referenced = _referenced_upload_ids(user_store)
+            file_store.prune_stale_uploads(referenced_ids=referenced)
+
+            # Prune orphan files (7 days)
+            file_store.prune_orphan_files()
+
+            logger.debug("storage hygiene completed for user=%s", user_id)
+        except Exception as e:
+            logger.warning("storage hygiene failed for user=%s: %s", user_id, e)
+
+
+def start_scheduler() -> None:
+    """Start the background scheduler (idempotent)."""
+    global _scheduler, _started
+
+    # Check if disabled via env
+    enabled = os.getenv("PLUTO_SCHEDULER_ENABLED", "true").lower()
+    if enabled in ("0", "false", "no", "off"):
+        logger.info("scheduler disabled via PLUTO_SCHEDULER_ENABLED")
+        return
+
+    with _scheduler_lock:
+        if _started:
+            return
+        _started = True
+
+        interval = max(60.0, float(os.getenv("PLUTO_HYGIENE_INTERVAL_SECONDS", str(STORAGE_HYGIENE_INTERVAL_SECONDS)) or str(STORAGE_HYGIENE_INTERVAL_SECONDS)))
+        # ±10% jitter avoids thundering herd when N workers/containers
+        # restart together (Render redeploy, UVICORN_WORKERS>1).
+        try:
+            import random as _random
+
+            jitter = float(os.getenv("PLUTO_HYGIENE_JITTER_RATIO", "0.10") or "0.10")
+            jitter = min(0.5, max(0.0, jitter))
+            if jitter:
+                interval = interval * (1.0 + _random.uniform(-jitter, jitter))
+        except Exception:
+            pass
+
+        _scheduler = BackgroundScheduler(daemon=True)
+        _scheduler.add_job(
+            _run_all_users_hygiene,
+            IntervalTrigger(seconds=interval, jitter=int(min(300, interval * 0.1))),
+            id="storage_hygiene",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+        _scheduler.start()
+        logger.info("background scheduler started (hygiene interval=%.0fs)", interval)
+
+
+def stop_scheduler() -> None:
+    """Stop the background scheduler (for tests/shutdown)."""
+    global _scheduler, _started
+    with _scheduler_lock:
+        if _scheduler:
+            _scheduler.shutdown(wait=False)
+            _scheduler = None
+        _started = False
+
+
+def is_running() -> bool:
+    return _started and _scheduler is not None and _scheduler.running
+
+
+def trigger_hygiene_now() -> None:
+    """Manually trigger hygiene run (for testing/admin)."""
+    _run_all_users_hygiene()
+
+
+if __name__ == "__main__":
+    # CLI for manual testing
+    logging.basicConfig(level=logging.INFO)
+    start_scheduler()
+    import time
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        stop_scheduler()

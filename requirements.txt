@@ -24,4 +24,19 @@ google-api-python-client>=2.150,<3
 google-auth-oauthlib>=1.2,<2
 boto3>=1.34,<2  # R2 data snapshots (services/snapshots.py); lazy import, optional at runtime
 mcp>=1.0,<2
+apscheduler>=3.10,<4  # background scheduler for storage hygiene
+redis>=5.0,<6  # Redis rate limiter for distributed deployments
+faiss-cpu>=1.15,<2  # ANN index for KB vector search
+# Observability (services/obs.py + services/tracing.py + services/metrics.py).
+# OTel SDK/API pinned together (1.44.0 tested); instrumentations 0.65b0 match
+# that core. OTLP exporter is grpc (collector); prometheus_client backs /metrics.
+opentelemetry-api>=1.44,<2
+opentelemetry-sdk>=1.44,<2
+opentelemetry-exporter-otlp>=1.44,<2
+opentelemetry-instrumentation-fastapi>=0.65b0,<1
+opentelemetry-instrumentation-httpx>=0.65b0,<1
+opentelemetry-instrumentation-redis>=0.65b0,<1
+opentelemetry-instrumentation-sqlite3>=0.65b0,<1
+prometheus-client>=0.26,<1
+python-json-logger>=3.0,<4  # structured JSON logs (services/structured_logging.py)
 # chromadb==0.5.5  # optional -- needs C++ build tools on Windows; app runs without it
