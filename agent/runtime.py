@@ -231,12 +231,27 @@ def answer_with_fallback(
         )
         if vision_hit is not None:
             return vision_hit
-        user_input = (
-            user_input
-            + "\n\n[Note: attached images could not be analyzed on any "
-            "configured vision-capable model. Tell the user plainly instead "
-            "of guessing at image contents.]"
-        )
+        # ponytail: vision requested but no vision tier answered — degraded
+        # directly instead of burning a text-tier call that just says
+        # "can't see". Upgrade to queued retry when Gemini quota recovers.
+        try:
+            from agent.cascade import _friendly_reason, last_tier_error
+            hit = last_tier_error("Gemini 3.6 Flash") or last_tier_error("Gemini 3.5 Flash")
+            why = _friendly_reason(hit[0]) if hit else "unavailable"
+        except Exception:
+            why = "unavailable"
+        return {
+            "output": (
+                "I couldn't view that image — no vision-capable model (Gemini) "
+                f"answered ({why}). Check that the image is <5MB/<25MP and "
+                "Gemini isn't rate-limited, then resend or pick Gemini 3.6 Flash explicitly."
+            ),
+            "active_tier": "vision-unavailable",
+            "task_type": "vision",
+            "request_id": request_id,
+            "tools_used": [],
+            "sources": [],
+        }
     history: List[BaseMessage] = list(chat_history) if chat_history else []
     history_list: List[Dict[str, Any]] = list(raw_messages) if raw_messages else []
     combined_notes: str = memory_notes
