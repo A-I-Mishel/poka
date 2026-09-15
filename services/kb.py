@@ -29,7 +29,10 @@ from services.limits import (
     KB_MAX_DOCS_PER_USER,
     KB_MAX_TOTAL_CHUNKS_PER_USER,
     KB_TOP_K,
+    KB_WEAK_LEXICAL_MIN,
+    KB_WEAK_VECTOR_SCORE,
     MAX_KB_IMAGE_BYTES,
+    MAX_QUERY_CHARS,
     MAX_ZIP_FILES,
     MAX_ZIP_UNCOMPRESSED_BYTES,
     MAX_ZIP_FILE_BYTES,
@@ -826,6 +829,68 @@ def _lexical_search(docs: Dict[str, Any], query: str, valid_ids: Optional[set] =
                 "score": round(float(overlap), 4),
             })
     return scored
+
+
+_SELF_RAG_STOPWORDS = frozenset({
+    "what", "do", "does", "did", "my", "our", "your", "the", "a", "an",
+    "about", "say", "says", "said", "in", "on", "of", "for", "to",
+    "is", "are", "was", "were", "be", "and", "or", "any", "find",
+    "search", "show", "tell", "me", "please", "documents", "files",
+    "file", "document",
+})
+
+
+def simplified_query(query: Any) -> str:
+    """Small keyword query for the one lite self-RAG retry (no LLM).
+
+    Drops stopwords so "what do my documents say about plato" becomes
+    "plato". Never raises; "" means "no useful simplification".
+    """
+    import re as _re
+
+    try:
+        tokens = _re.findall(r"[a-z0-9]+", str(query or "").lower())
+    except Exception:
+        return ""
+    kept = [t for t in tokens if t not in _SELF_RAG_STOPWORDS and len(t) > 1]
+    out = " ".join(kept).strip()
+    if not out or out == str(query or "").strip().lower():
+        return ""
+    return out[:MAX_QUERY_CHARS]
+
+
+def is_weak_result(hits: Any, query: Any) -> bool:
+    """True when a first-pass KB result deserves one retry (no LLM).
+
+    Weak = empty, or top hit below threshold: vector cosine scores live
+    0..1 (weak below KB_WEAK_VECTOR_SCORE); lexical scores are integer
+    term-overlap counts (weak below KB_WEAK_LEXICAL_MIN). Short queries
+    (<=2 tokens) never retry — there is nothing to simplify.
+    """
+    import re as _re
+
+    try:
+        items = list(hits or [])
+    except Exception:
+        return True
+    if not items:
+        return True
+    try:
+        qtokens = _re.findall(r"[a-z0-9]+", str(query or "").lower())
+    except Exception:
+        qtokens = []
+    if len(qtokens) <= 2:
+        return False
+    try:
+        top = float((items[0] or {}).get("score", 0.0))
+    except Exception:
+        return True
+    if top >= 1.0:
+        # Lexical overlap counts (1, 2, ...) and a perfect vector 1.0
+        # collide here; favor recall (one bounded retry) over saving one
+        # embed call — a spurious retry only merges, never hides.
+        return top < float(KB_WEAK_LEXICAL_MIN)
+    return top < float(KB_WEAK_VECTOR_SCORE)
 
 
 def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,

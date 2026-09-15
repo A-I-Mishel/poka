@@ -59,6 +59,33 @@ def search_documents(query: str) -> str:
     except Exception as e:
         logger.warning("Document search failed: %s", e)
         return "STATUS=DEGRADED tool=search_documents: document search failed."
+    retried = False
+    try:
+        # Lite self-RAG: one score-based retry with a simplified query.
+        # No extra LLM call (free-tier safe), at most two kb.search calls
+        # per tool call so Gemini embed quota is bounded. Merges by
+        # (upload_id, chunk) so the second pass can only add, never hide.
+        if kb_svc.is_weak_result(hits, query):
+            alt = kb_svc.simplified_query(query)
+            if alt:
+                second = kb_svc.search(user_id, alt, top_k=KB_TOP_K, valid_ids=existing)
+                if second:
+                    seen = {(h.get("upload_id"), h.get("chunk")) for h in (hits or [])}
+                    merged = list(hits or [])
+                    for h in second:
+                        key = (h.get("upload_id"), h.get("chunk"))
+                        if key not in seen:
+                            seen.add(key)
+                            merged.append(h)
+                    try:
+                        merged.sort(key=lambda r: float((r or {}).get("score", 0.0)), reverse=True)
+                    except Exception:
+                        pass
+                    if len(merged) > len(hits or []):
+                        hits = merged[:KB_TOP_K]
+                        retried = True
+    except Exception:
+        pass
     if not hits:
         return (
             "STATUS=EMPTY tool=search_documents: no matching document passages. "
@@ -74,6 +101,8 @@ def search_documents(query: str) -> str:
             f"(match {float(hit.get('score', 0.0)):.2f}):\n{text}"
         )
     formatted = "\n\n".join(lines)
+    if retried:
+        formatted += "\n[Note: re-searched with simplified query.]"
     if len(formatted) > KB_MAX_SNIPPET_CHARS:
         formatted = formatted[:KB_MAX_SNIPPET_CHARS] + "\n[Note: results truncated.]"
     return formatted

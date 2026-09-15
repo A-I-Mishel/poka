@@ -32,7 +32,7 @@ from services.obs import (
 )
 from services.storage import MAX_SOURCES, clean_source_record
 from services.tokens import count_tokens, truncate_tokens
-from tools import web_search, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool
+from tools import web_search, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool
 from tools.search_tool import extract_cited_sources
 
 from agent.budget import BudgetExhausted, RequestBudget
@@ -46,7 +46,7 @@ from agent.executor import TokenStream, _call_bounded
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text, _build_system_prompt, strip_internal_reasoning
 
-tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect]
+tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
 # Tool classification: read-only tools can run in parallel; mutating tools must run serially.
@@ -56,7 +56,7 @@ _READ_ONLY_TOOLS = frozenset({
     "list_calendar_events", "list_tables", "describe_table", "query_database",
     "workspace_list", "workspace_read", "read_output", "read_pdf",
     "read_pdf_page", "read_document", "analyze_csv", "csv_inspect",
-    "list_mcp_tools",
+    "list_mcp_tools", "check_logic",
 })
 
 # Mutating tools: vault writes, external side effects, non-idempotent.

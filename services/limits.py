@@ -282,3 +282,18 @@ PPTX_BUILD_MAX_SUBTITLE_CHARS: int = 120
 UI_IMAGE_PREVIEW_WIDTH: int = 320
 UI_TEXT_AREA_HEIGHT: int = 80
 UI_HTML_SHIM_HEIGHT: int = 0
+
+# Local logic checker (tools.logic_tool): pure stdlib, zero model calls.
+# 2**n rows explode, so 6 vars = 64 rows max; formulas and premise
+# counts stay small so output fits the tool transcript budget.
+MAX_LOGIC_VARS: int = 6
+MAX_LOGIC_FORMULA_CHARS: int = 500
+MAX_LOGIC_PREMISES: int = 10
+
+# Lite self-RAG (services.kb + tools.kb_search_tool): score-based,
+# zero-extra-LLM-call retry. Vector scores are cosine 0..1; lexical
+# scores are integer term-overlap counts. A top hit below these means
+# "weak" -> one simplified-query retry, then merge (never more than
+# two kb.search calls per tool call, protecting Gemini embed quota).
+KB_WEAK_VECTOR_SCORE: float = 0.25
+KB_WEAK_LEXICAL_MIN: int = 2
