@@ -164,6 +164,31 @@ def _ddg_lite_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[
         return []
 
 
+def _wiki_extracts(titles: List[str]) -> Dict[str, str]:
+    """Batch-fetch plain-text extracts for titles (never raises)."""
+    if not titles:
+        return {}
+    try:
+        data = _wiki_api({
+            "_endpoint": _WIKI_API, "action": "query", "prop": "extracts",
+            "explaintext": "1", "exintro": "1", "titles": "|".join(titles[:10]),
+            "format": "json",
+        })
+        pages = ((data.get("query") or {}).get("pages") or {})
+        out: Dict[str, str] = {}
+        for page in pages.values():
+            if not isinstance(page, dict):
+                continue
+            t = str(page.get("title", "") or "").strip()
+            ex = str(page.get("extract", "") or "").strip()
+            if t and ex:
+                # Keep first ~600 chars of intro — enough for disambiguation lists.
+                out[t] = re.sub(r"\s+", " ", ex)[:700]
+        return out
+    except Exception:
+        return {}
+
+
 def _wikipedia_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[Dict[str, str]]:
     """Keyless stdlib Wikipedia full-text fallback (no new deps). Never raises."""
     try:
@@ -192,6 +217,19 @@ def _wikipedia_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List
             snippet = re.sub(r"<[^>]+>", "", str(hit.get("snippet", "") or "")).strip()
             out.append({"title": title, "url": url, "snippet": snippet,
                         "date": "", "domain": "en.wikipedia.org"})
+        # Enrich snippets with full intro extracts so truncated search
+        # snippets (e.g., "Tere Liye may refer to: ...") don't hide the
+        # Prince (2010) / Atif Aslam line the query is about.
+        # ponytail: one batched extracts call only on the fallback path;
+        # fail-open to snippets when offline.
+        if out:
+            extracts = _wiki_extracts([r["title"] for r in out])
+            for r in out:
+                ex = extracts.get(r["title"], "")
+                # Prefer extract when it is strictly richer (contains a film/song
+                # year or credit the snippet cut off). Never shorten a good snippet.
+                if ex and len(ex) > len(r["snippet"]) + 20:
+                    r["snippet"] = ex
         return out
     except Exception:
         return []
