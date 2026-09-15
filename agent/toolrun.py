@@ -608,6 +608,19 @@ def run_tool_loop(
             + "\n\n[Note: I could only produce a partial answer — "
             "a model failed midway, so some steps may be missing.]"
         )
+    if last_results:
+        # Synthesis died on every tier (free-tier 429/down mid-turn) but a
+        # tool already answered (e.g. Groq ran check_logic): show those
+        # collected results instead of an error-only message. Capped so one
+        # transcript cannot flood context; STATUS markers already tell the
+        # model/user what succeeded.
+        salvage = "\n".join(last_results).strip()[:4000]
+        _note_final_tier(last_text_tier or round_tier)
+        return _with_sources(
+            "All models failed while composing the final summary, "
+            "but here are the tool results that did come back:\n\n"
+            + salvage
+        )
     return _with_sources(
         "I gathered partial results but couldn't finish composing the answer. "
         "Please try again or simplify the request."

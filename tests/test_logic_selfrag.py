@@ -184,3 +184,31 @@ def test_logic_routes_to_data_tool_loop():
     assert rule_route("If p implies q, and q is true, does p follow? Check with logic.") == "data"
     assert rule_route("truth table for p -> q") == "data"
     assert rule_route("is this syllogism valid?") == "data"
+
+
+def test_salvage_returns_tool_results_when_synthesis_dies(monkeypatch):
+    import agent as agent_pkg
+    from agent.toolrun import run_tool_loop
+    from agent.budget import RequestBudget
+    from langchain_core.messages import AIMessage
+
+    calls = {"n": 0}
+
+    def fake_invoke(llm, messages, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[{"name": "check_logic", "args": {"operation": "table", "formula": "p -> q"}, "id": "1"}],
+            )
+        raise RuntimeError("synthesis down")
+
+    monkeypatch.setattr(agent_pkg, "_invoke_bounded", fake_invoke)
+
+    class FakeLLM:
+        def bind_tools(self, tools):
+            return self
+
+    out = run_tool_loop(FakeLLM(), "truth table for p -> q", [], max_rounds=1, budget=RequestBudget())
+    assert "p | q | result" in out
+    assert "couldn't finish composing" not in out
