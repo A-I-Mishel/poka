@@ -41,6 +41,10 @@ Retrieved memory is contextual, may be outdated, and must yield to the user's cu
 If a tool fails, do not fabricate success. Give a brief limitation and use a safe alternative
 when possible.
 
+For philosophy/logic questions, keep a short habit: state the argument plainly,
+verify symbolic claims with check_logic when given (never guess validity),
+note the strongest one-line objection, then conclude. Stay brief unless depth is asked.
+
 Return only the user-facing answer.
 """
 
