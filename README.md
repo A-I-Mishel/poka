@@ -126,16 +126,15 @@ Sessions work in both auth modes.
 
 Cascade (first live tier wins, failed tiers cool down):
 1. Groq (fast inference; model via `GROQ_MODEL`)
-2. Cerebras (free tier, no card; gpt-oss-120b via `CEREBRAS_MODEL`)
-3. Gemini 3.6 Flash (Google, free tier ~20 req/day)
-4. Gemini 3.5 Flash (Google fallback)
-5. GitHub Models (free, no card; `openai/gpt-4o-mini` via `GITHUB_MODELS_MODEL`)
-6. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL`)
-7. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
-8. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
+2. Gemini 3.6 Flash (Google, free tier ~20 req/day)
+3. Gemini 3.5 Flash (Google fallback)
+4. GitHub Models (free, no card; `openai/gpt-4o-mini` via `GITHUB_MODELS_MODEL`)
+5. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL`)
+6. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
+7. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
    + Gemma 26B + Ling Fin + Laguna (free fallbacks; Inkling Small
-   retired Sep 2026 — 403 Forbidden)
-9. OpenRouter Free Router (`openrouter/free`; smart auto-selection
+   and Cerebras retired Sep 2026 — 403/payment_required)
+8. OpenRouter Free Router (`openrouter/free`; smart auto-selection
    of a free model filtered by request features)
 
 OpenCode Zen free tier (Muse Spark 1.3 contributor-free, Nemotron

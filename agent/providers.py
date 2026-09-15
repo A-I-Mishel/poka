@@ -15,7 +15,6 @@ from langchain_openai import ChatOpenAI
 from config import (
     get_tier2_llm,
     get_tier3_llm,
-    get_tier_cerebras_llm,
     get_tier_github_models_llm,
     get_tier_groq_llm,
     get_tier_mistral_llm,
@@ -34,7 +33,6 @@ TIER_AGENT_GETTERS: List[
     Tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogleGenerativeAI]]]]
 ] = [
     ("Groq", get_tier_groq_llm),  # type: ignore[arg-type]
-    ("Cerebras", get_tier_cerebras_llm),  # type: ignore[arg-type]
     ("Gemini 3.6 Flash", get_tier2_llm),  # type: ignore[arg-type]
     ("Gemini 3.5 Flash", get_tier3_llm),  # type: ignore[arg-type]
     ("GitHub Models", get_tier_github_models_llm),  # type: ignore[arg-type]

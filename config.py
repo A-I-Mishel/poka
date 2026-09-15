@@ -30,15 +30,9 @@ GEMINI_35_MODEL: str = "gemini-3.5-flash"
 # current production flagship. Override with GROQ_MODEL if needed.
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 GROQ_MODEL: str = "openai/gpt-oss-120b"
-# Cerebras via its OpenAI-compatible endpoint (same ChatOpenAI client).
-# Free tier, no card: ~1M tokens/day, 30 rpm / 60k input TPM, 65k ctx.
-# The free catalog churns (2026 roster has included gpt-oss-120b, gemma
-# 4 31B, qwen-3.8-27b, zai-glm-4.7, kimi-k2*), so CEREBRAS_MODEL is
-# overridable. gpt-oss-120b mirrors the Groq flagship on an independent
-# backend (dual-homing resilience) but note: it rejects requests that
-# combine tools with response_format and may hallucinate tool calls.
-CEREBRAS_BASE_URL: str = "https://api.cerebras.ai/v1"
-CEREBRAS_MODEL: str = "gpt-oss-120b"
+# Cerebras retired Sep 2026: free tier now returns payment_required
+# (quota/billing gate) for gpt-oss-120b — removed from cascade.
+# Re-add via https://api.cerebras.ai/v1 if billing is added.
 # GitHub Models via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Free for every GitHub account, no card: PAT with `models:read` scope.
 # Low-tier free allowance is ~150 small-model req/day at 8k in / 4k out
@@ -231,40 +225,8 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
         return None
 
 
-def _cerebras_model() -> str:
-    """Cerebras model ID, overridable via CEREBRAS_MODEL env/secret."""
-    try:
-        override = _get_secret("CEREBRAS_MODEL")
-    except Exception:
-        override = None
-    if override and override.strip():
-        return override.strip()
-    return CEREBRAS_MODEL
-
-
-def get_tier_cerebras_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Cerebras tier: free waferscale inference via OpenAI-compatible endpoint."""
-    key: Optional[str] = _get_secret("CEREBRAS_API_KEY")
-    if key is None:
-        return None
-    assert key is not None
-    try:
-        model = _cerebras_model()
-        return _cached_client(
-            "Cerebras",
-            temperature,
-            key,
-            model,
-            lambda: ChatOpenAI(
-                model=model,
-                api_key=key,
-                base_url=CEREBRAS_BASE_URL,
-                temperature=temperature,
-                request_timeout=MODEL_TIMEOUT_SECONDS,
-            ),
-        )
-    except Exception:
-        return None
+# Cerebras helpers removed — see retired note above.
+# Re-add _cerebras_model/get_tier_cerebras_llm if billing is added.
 
 
 def _model_override(env_name: str, default: str) -> str:
@@ -427,7 +389,6 @@ def get_tier_openrouter_free_router_llm(temperature: float = TEMPERATURE) -> Opt
 
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Groq": get_tier_groq_llm,
-    "Cerebras": get_tier_cerebras_llm,
     "Gemini 3.6 Flash": get_tier2_llm,
     "Gemini 3.5 Flash": get_tier3_llm,
     "GitHub Models": get_tier_github_models_llm,
@@ -462,7 +423,6 @@ def get_tier_llm(name: str, temperature: float = TEMPERATURE) -> Optional[Any]:
 
 TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogleGenerativeAI]]]]] = [
     ("Groq", get_tier_groq_llm),
-    ("Cerebras", get_tier_cerebras_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
     ("GitHub Models", get_tier_github_models_llm),
