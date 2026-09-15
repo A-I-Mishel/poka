@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from backend.routers import artifacts, auth, briefs, chat, chats, memory, meta, projects, uploads, workflows  # noqa: E402
+from backend.routers import artifacts, auth, briefs, chat, chats, memory, meta, observability, projects, uploads, workflows  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +246,13 @@ if _trusted_hosts_raw:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=_trusted_hosts)
         logger.info("TrustedHostMiddleware enabled for %s", _trusted_hosts)
 
+# Request observability (outermost: times the full stack, echoes
+# X-Request-Id on every response, feeds Prometheus + access logs).
+# Added last so it wraps CORS/security-host handling too.
+from backend.middleware.observability import ObservabilityMiddleware  # noqa: E402
+
+app.add_middleware(ObservabilityMiddleware)
+
 for _router in (
     auth.router,
     chat.router,
@@ -257,6 +264,7 @@ for _router in (
     workflows.router,
     memory.router,
     meta.router,
+    observability.router,
 ):
     app.include_router(_router)
 

@@ -104,6 +104,24 @@ class RedisRateLimiter(RateLimiter):
                     break
 
 
+def get_redis_client() -> Optional[object]:
+    """Shared Redis client for ops checks, or None when unconfigured.
+
+    Never raises and never connects eagerly (redis-py connects lazily;
+    callers that need liveness must ping() inside their own try/except).
+    """
+    redis_url = (os.getenv("REDIS_URL") or "").strip()
+    if not redis_url:
+        return None
+    try:
+        return redis.from_url(
+            redis_url, decode_responses=True,
+            socket_connect_timeout=2.0, socket_timeout=2.0,
+        )
+    except Exception:
+        return None
+
+
 def create_redis_limiter() -> Optional[RateLimiter]:
     """Create RedisRateLimiter if REDIS_URL is configured, else None."""
     redis_url = os.getenv("REDIS_URL")
