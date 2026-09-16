@@ -47,7 +47,8 @@ cd frontend && npm install && npm run dev   # UI on http://localhost:5173
 
 `requirements.txt` holds the loose constraints; `requirements.lock`
 is the hash-pinned build input (regenerate with
-`uv pip compile --generate-hashes --python-version 3.12 -o requirements.lock requirements.txt`).
+`uv pip compile --universal --generate-hashes --python-version 3.12 -o requirements.lock requirements.txt`;
+`--universal` keeps platform markers like `pywin32` so Linux installs work).
 CI, Docker, and Render all install from the lock.
 
 Run the test suite (stubbed models, temp directories — no API quota
