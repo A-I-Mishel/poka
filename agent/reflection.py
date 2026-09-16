@@ -26,10 +26,10 @@ REFLECTION_ENABLED: bool = True
 # single critique pass checks what matters for THIS draft instead of
 # generic quality. Coding lives under "data" (no separate "code" type).
 _TASK_FOCUS: Dict[str, str] = {
-    "research": "claims supported (never pass training knowledge off as fresh fact), complete, cited",
+    "research": "claims supported (never pass training knowledge off as fresh fact), complete, cited; for teaching answers also check source fidelity (only verified slides), concepts before terminology, and exam value",
     "creative": "structure, purpose-fit, consistent formatting",
     "data": "correct logic, edge cases, error handling, fits the surrounding project; no unsafe ops",
-    "multi_step": "every requested step done, results consistent with each other",
+    "multi_step": "every requested step done, results consistent with each other; for teaching answers also check source fidelity (only verified slides) and recall checkpoints",
     "simple": "directly answers what was asked, nothing more",
 }
 

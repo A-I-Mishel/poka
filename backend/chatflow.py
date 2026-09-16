@@ -154,19 +154,49 @@ _TEACHING_FILE_RE = re.compile(
     re.IGNORECASE,
 )
 _TEACHING_SLIDE_MARK_RE = re.compile(r"\[(?:slide|page)\s+(\d+)\]", re.IGNORECASE)
-_TEACHING_TEACH_VERBS = ("teach", "learn", "exam", "recall", "lecture", "tutorial", "tutor")
+_TEACHING_ADMIN_SIGNALS = (
+    "course code", "credit", "instructor", "professor", "adjunct",
+    "attendance", "midterm", "final exam", "grading", "marks distribution",
+    "class test", "assignment", "presentation", "schedule", "monday",
+    "thursday", "tuesday", "wednesday", "friday", "classroom", "room no",
+    "acknowledgement", "acknowledgment", "thank you",
+)
+_TEACHING_COURSE_CODE_RE = re.compile(r"\b\d{3,4}\s*[-–]\s*\d{3,4}\b")
+_TEACHING_CONCEPT_SIGNALS = (
+    "vertex", "vertices", "edge", "edges", "degree", "graph", "walk",
+    "path", "cycle", "circuit", "theorem", "lemma", "proof", "formula",
+    "algorithm", "complexity", "queue", "stack", "tree", "recurrence",
+    "definition",
+)
+_TEACHING_TEACH_VERBS = ("teach", "learn", "exam", "recall", "lecture", "tutorial", "tutor",
+                          "practic", "quiz", "revis", "mock")
 _TEACHING_SUBJECT_NOUNS = (
     "slide", "slides", "page", "pages", "ppt", "pptx", "pdf",
     "document", "deck", "presentation", "lecture", "chapter", "topic", "lesson",
+    "question", "problem", "exercise", "notes", "syllabus",
 )
+_TEACHING_PACE_SLOW = ("slow down", "slower", "too fast", "simplify", "simpler",
+                       "too hard", "confusing", "confused", "more detail",
+                       "in detail", "explain again", "once more", "step by step")
+_TEACHING_PACE_FAST = ("faster", "too easy", "too slow", "skip", "got it",
+                       "understood", "make it harder", "harder problems")
 
 TEACHING_SUFFIX = (
-    "\n\n[Teaching mode: exam-focused detailed, logical/prerequisite order. "
-    "Teach ONLY the verified slides above from ONE file, max 3 slides, in order. "
-    "For EACH slide use the required block format with Source: [slide N]. "
-    "Start with \"📘 FILE: <name> — Slides X-Y\" and end with one quick recall "
-    "question + \"Say Next for ...\". Never invent slides beyond verified content; "
-    "if the window is truncated or empty, say so plainly and ask to re-upload.]"
+    "\n\n[Teaching mode: exam-focused, concept-first. Teach ONLY the verified "
+    "slides above from ONE file, max 3 slides, in order. Pure-admin slides "
+    "(course code/instructor/schedule/grading) get one summary line each, never "
+    "full blocks. Group slides that explain one concept and cite a range. "
+    "For EACH concept output EXACTLY: Concept: <name> / Definition: <1 line> / "
+    "Simple intuition: <beginner> / How it works: <mechanism> / Why: <reason> / "
+    "Example: <worked> / Exam importance: <MUST KNOW/HIGH VALUE/MEDIUM/LOW> / "
+    "Exam trap: <confusion or N/A> / Recall: <one short question> / "
+    "Source: [slide N]. Numerics add Given -> Formula -> Solve -> Answer. "
+    "Distinguish source from support: \"Your slide states X. Supporting "
+    "explanation: ...\". Start with \"📘 FILE: <name> — Slides X-Y\" and end "
+    "with exactly one Recall + \"Say Next for slides Y+1..\" (never per-slide "
+    "Say Next). Then STOP and wait for the learner's answer. Never invent "
+    "slides beyond verified content; if truncated or empty, say so and ask "
+    "to re-upload.]"
 )
 
 
@@ -184,6 +214,28 @@ def _is_teaching_request(text: str) -> bool:
         if "slide by slide" in t or "lecture-wise" in t or "lecture wise" in t:
             return True
         return False
+    except Exception:
+        return False
+
+
+def _is_admin_block(text: str) -> bool:
+    """True for administrative/non-teaching slide text (never raises).
+
+    Admin = 2+ admin signals (or a course code like 0613-4125) AND zero
+    concept signals. Mixed slides (definition + course code) stay concepts.
+    """
+    try:
+        t = str(text or "").lower()
+        if not t:
+            return False
+        if any(s in t for s in _TEACHING_CONCEPT_SIGNALS):
+            return False
+        hits = sum(1 for s in _TEACHING_ADMIN_SIGNALS if s in t)
+        if _TEACHING_COURSE_CODE_RE.search(t):
+            hits += 2
+        if re.search(r"\b\d{1,3}\s*%", t):
+            hits += 1
+        return hits >= 2
     except Exception:
         return False
 
@@ -216,11 +268,92 @@ def _last_teaching_state(history: List[Dict[str, Any]]) -> Tuple[Optional[str], 
         return None, 0
 
 
-def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
-    """True for short "Next/continue" follow-ups inside an active teaching session."""
+def _last_teaching_ends_with_recall(history: List[Dict[str, Any]]) -> bool:
+    """True when the most recent teaching message ends with a Recall checkpoint."""
+    try:
+        for msg in reversed(history or []):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            content = str(msg.get("content", "") or "")
+            if "📘 FILE:" not in content:
+                return False
+            return "recall:" in content.lower()
+        return False
+    except Exception:
+        return False
+
+
+def _is_recall_answer(text: str, history: List[Dict[str, Any]]) -> bool:
+    """True when the user is answering a Recall checkpoint (stays in teaching)."""
     try:
         t = str(text or "")
-        if not t or len(t.strip()) > TEACHING_CONTINUATION_MAX_CHARS:
+        if not t or not t.strip():
+            return False
+        if len(t.strip()) > 300:
+            return False
+        if not _last_teaching_ends_with_recall(history):
+            return False
+        low = t.lower()
+        try:
+            from agent.attachment_gate import NEW_INTENT_SIGNALS
+            from agent.router import _signals
+        except Exception:
+            return False
+        # A clearly different task still exits teaching.
+        if _signals(low, NEW_INTENT_SIGNALS):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _pace_direction(text: str) -> Optional[str]:
+    """'slow' / 'fast' when the learner asks to change pace, else None."""
+    try:
+        t = str(text or "").lower()
+        if any(s in t for s in _TEACHING_PACE_SLOW):
+            return "slow"
+        if any(s in t for s in _TEACHING_PACE_FAST):
+            return "fast"
+        return None
+    except Exception:
+        return None
+
+
+def _is_pace_feedback(text: str, history: List[Dict[str, Any]]) -> bool:
+    """True for in-session pace change asks ("slow down", "got it, harder")."""
+    try:
+        t = str(text or "")
+        if not t or not t.strip() or len(t.strip()) > 200:
+            return False
+        try:
+            has_teaching = any(
+                isinstance(m, dict) and "📘 FILE:" in str(m.get("content", "") or "")
+                for m in (history or [])[-10:]
+            )
+        except Exception:
+            has_teaching = False
+        if not has_teaching:
+            return False
+        if _pace_direction(t) is None:
+            return False
+        try:
+            from agent.attachment_gate import NEW_INTENT_SIGNALS
+            from agent.router import _signals
+            if _signals(t.lower(), NEW_INTENT_SIGNALS):
+                return False
+        except Exception:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
+    """True for "Next/continue" follow-ups AND Recall answers in a session."""
+    try:
+        t = str(text or "")
+        if not t:
             return False
         # Active session requires a prior teaching header in recent history.
         try:
@@ -241,7 +374,11 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
         # NEW_INTENT always wins: "next song" exits teaching.
         if _signals(low, NEW_INTENT_SIGNALS):
             return False
-        return bool(_signals(low, CONTINUATION_SIGNALS))
+        if len(t.strip()) <= TEACHING_CONTINUATION_MAX_CHARS and _signals(low, CONTINUATION_SIGNALS):
+            return True
+        # A short answer to a Recall checkpoint continues the session for
+        # evaluation (correct/partial/incorrect) before advancing.
+        return _is_recall_answer(t, history)
     except Exception:
         return False
 
@@ -992,6 +1129,7 @@ def _apply_teaching_session(
         return send_text, vision_ids, None
     # Pick ONE active file: explicit filename > continuation file > first.
     active = candidates[0]
+    _explicit_file = False
     try:
         low = str(gate_text or "").lower()
         # Explicit filename wins (same stem rule as the gate).
@@ -1004,6 +1142,7 @@ def _apply_teaching_session(
                 break
         if named is not None:
             active = named
+            _explicit_file = True
         else:
             lname, _ = _last_teaching_state(history)
             if lname:
@@ -1037,6 +1176,7 @@ def _apply_teaching_session(
     except Exception:
         pass
     # If the active file is exhausted, advance to the next sorted file.
+    # If every file is covered, switch to EXAM MODE instead of restarting.
     try:
         _blocks_probe, _total_probe, _status_probe = _extract_teaching_blocks(ctx, active)
         if _status_probe == "OK" and _total_probe and last_end >= _total_probe:
@@ -1046,6 +1186,41 @@ def _apply_teaching_session(
                 last_end = 0
     except Exception:
         pass
+    # All material covered → EXAM MODE (rapid recall + practice, no restart).
+    try:
+        _is_last = next(
+            (i for i, c in enumerate(candidates) if c.get("id") == active.get("id")),
+            len(candidates) - 1,
+        ) >= len(candidates) - 1
+        if (not _explicit_file and _status_probe == "OK" and _total_probe
+                and last_end >= _total_probe and _is_last):
+            _exam_counts = []
+            for c in candidates:
+                try:
+                    _, t, s = _extract_teaching_blocks(ctx, c)
+                    _exam_counts.append(
+                        f"'{_escape_hint(str(c.get('name','file')))}' ({t} slides)"
+                        if s == "OK" else f"'{_escape_hint(str(c.get('name','file')))}'")
+                except Exception:
+                    _exam_counts.append(f"'{_escape_hint(str(c.get('name','file')))}'")
+            send_text += attachments_overview(candidates)
+            for position, attach in enumerate(candidates, start=1):
+                try:
+                    send_text += attachment_hint(
+                        attach["kind"], attach["id"], attach["name"], position, len(candidates))
+                except Exception:
+                    pass
+            send_text += (
+                "\n\n[EXAM MODE: all verified material is covered (" + "; ".join(_exam_counts) +
+                "). Do not reteach from the top. Give: 1) rapid recall questions on key "
+                "concepts, 2) must-remember formulas/definitions, 3) a compact comparison "
+                "of commonly confused concepts, 4) common traps, 5) 2-3 practice problems "
+                "with step-by-step solutions, 6) final condensed revision plus likely weak "
+                "areas to review. Cite sources as [slide N].]"
+            )
+            return send_text, vision_ids, None
+    except Exception:
+        pass
     # Single-file hint (no multi-file overview: never mix files in one batch).
     try:
         send_text += attachment_hint(active["kind"], active["id"], active["name"], 1, 1)
@@ -1053,26 +1228,99 @@ def _apply_teaching_session(
         pass
     window_hint, start, end, total, status = _teaching_window_hint(ctx, active, last_end)
     send_text += window_hint
-    # Analysis header for the first turn of a file (names + counts).
+    # Last window of a file: close with a compact section review.
     try:
-        _, cur_end = _last_teaching_state(history)
-        is_fresh_file = (cur_end <= 0) or (start <= 1)
-        if is_fresh_file and len(candidates) > 1 and status == "OK":
-            counts = []
-            for c in candidates:
-                try:
-                    _, t, s = _extract_teaching_blocks(ctx, c)
-                    counts.append(f"'{_escape_hint(str(c.get('name','file')))}' ({t} slides)" if s == "OK" else f"'{_escape_hint(str(c.get('name','file')))}' (unreadable)")
-                except Exception:
-                    counts.append(f"'{_escape_hint(str(c.get('name','file')))}'")
+        if status == "OK" and total and end >= total:
             send_text += (
-                "\n\n[Teaching analysis: " + "; ".join(counts) +
-                f". Teaching '{_escape_hint(str(active.get('name','file')))}' first, "
-                "in file order, max 3 slides this turn.]"
+                f"\n\n[This is the last window of '{_escape_hint(str(active.get('name','file')))}'. "
+                "After teaching it, end with a compact section review: key definitions, "
+                "formulas, distinctions, common traps, plus one recall question.]"
             )
     except Exception:
         pass
+    # Analysis header for the first turn of a file (content map: counts +
+    # admin compression). Runs once per fresh file; later turns skip it.
+    try:
+        _, cur_end = _last_teaching_state(history)
+        is_fresh_file = (cur_end <= 0) or (start <= 1)
+        if is_fresh_file and status == "OK":
+            counts = []
+            for c in candidates:
+                try:
+                    blks, t, s = _extract_teaching_blocks(ctx, c)
+                    if s != "OK":
+                        counts.append(f"'{_escape_hint(str(c.get('name','file')))}' (unreadable)")
+                        continue
+                    n_admin = sum(1 for _, b in blks if _is_admin_block(b))
+                    if n_admin:
+                        counts.append(
+                            f"'{_escape_hint(str(c.get('name','file')))}' ({t} slides, "
+                            f"~{n_admin} admin summarized)"
+                        )
+                    else:
+                        counts.append(f"'{_escape_hint(str(c.get('name','file')))}' ({t} slides)")
+                except Exception:
+                    counts.append(f"'{_escape_hint(str(c.get('name','file')))}'")
+            if len(counts) > 1:
+                send_text += (
+                    "\n\n[Teaching analysis: " + "; ".join(counts) +
+                    f". Teaching '{_escape_hint(str(active.get('name','file')))}' first, "
+                    "in file order, one concept per turn. Admin slides are "
+                    "summarized, not taught as full blocks.]"
+                )
+            elif counts:
+                # Single file: still note admin compression when present.
+                try:
+                    ablks, _, astatus = _extract_teaching_blocks(ctx, active)
+                    if astatus == "OK":
+                        n_admin = sum(1 for _, b in ablks if _is_admin_block(b))
+                        if n_admin:
+                            send_text += (
+                                f"\n\n[Teaching analysis: '{_escape_hint(str(active.get('name','file')))}' "
+                                f"has ~{n_admin} admin slide(s) summarized; teaching "
+                                "concepts only.]"
+                            )
+                except Exception:
+                    pass
+    except Exception:
+        pass
     send_text += TEACHING_SUFFIX
+    # Recall-answer mode: evaluate the student's answer before the next window.
+    try:
+        from agent.attachment_gate import CONTINUATION_SIGNALS
+        from agent.router import _signals as _gate_signals
+
+        _is_next = _gate_signals(str(gate_text or "").lower(), CONTINUATION_SIGNALS)
+    except Exception:
+        _is_next = False
+    try:
+        if not _is_next and _is_recall_answer(str(gate_text or ""), history):
+            send_text += (
+                "\n\n[The user just answered your Recall checkpoint above. First "
+                "evaluate in 3-5 lines: if correct confirm the key idea and "
+                "optionally refine wording; if partial name the missing piece; "
+                "if incorrect name the misconception, explain why simply, and "
+                "re-check briefly. Never mark an answer wrong without repairing "
+                "the misconception. Only then teach the next window below.]"
+            )
+    except Exception:
+        pass
+    # Pace feedback: adapt speed/depth for the next window.
+    try:
+        _pace = _pace_direction(str(gate_text or ""))
+        if _pace == "slow":
+            send_text += (
+                "\n\n[The learner asks to slow down: simplify, teach any missing "
+                "prerequisite first, use smaller examples, explain the WHY. "
+                "Do not advance faster than one small concept.]"
+            )
+        elif _pace == "fast":
+            send_text += (
+                "\n\n[The learner is comfortable: move faster, reduce repetition, "
+                "raise difficulty with exam-level problems.]"
+            )
+    except Exception:
+        pass
     send_text += (
         "\n\n[Note: the user is in a teaching session for the file above; "
         "use its upload ID and verified window only.]"
@@ -1103,8 +1351,10 @@ def _apply_attachment_gate(ctx: UserContext, gate_text: str,
     # inside an active teaching thread bypasses the normal gate so "Next"
     # keeps the SAME file/window instead of restarting blind or mixing files.
     try:
-        _teaching_hit = _is_teaching_request(gate_text) or _is_teaching_continuation(
-            gate_text, history
+        _teaching_hit = (
+            _is_teaching_request(gate_text)
+            or _is_teaching_continuation(gate_text, history)
+            or _is_pace_feedback(gate_text, history)
         )
     except Exception:
         _teaching_hit = False

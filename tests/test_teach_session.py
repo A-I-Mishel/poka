@@ -67,6 +67,47 @@ def test_continuation_needs_active_session():
     assert _is_teaching_continuation("x" * 200, hist) is False
 
 
+def test_recall_answer_continues_session():
+    from backend.chatflow import _is_teaching_continuation
+
+    hist = [{"role": "assistant",
+             "content": "📘 FILE: Lecture_01 — Slides 1-3\nConcept: Graph\nRecall: What is a vertex?\nSay Next for 4-6."}]
+    assert _is_teaching_continuation("A vertex is a node", hist) is True
+    assert _is_teaching_continuation("next song", hist) is False
+    assert _is_teaching_continuation("y" * 400, hist) is False
+    # No Recall checkpoint: plain answers do not continue.
+    hist2 = [{"role": "assistant", "content": "📘 FILE: Lecture_01 — Slides 1-3\nbla\nSay Next for 4-6."}]
+    assert _is_teaching_continuation("A vertex is a node", hist2) is False
+
+
+def test_admin_block_detection():
+    from backend.chatflow import _is_admin_block
+
+    assert _is_admin_block("Course Code CSE 0613-4125 Credit 3.0 Instructor Rubel Sheikh Schedule Mondays") is True
+    assert _is_admin_block("Attendance 10% Midterm 20% Final 40%") is True
+    assert _is_admin_block("A graph is a pair (V, E) of vertices and edges") is False
+    # Mixed definition + course code stays a concept.
+    assert _is_admin_block("Graph theory studies graphs. Course CSE 0613-4125 covers the Handshaking theorem") is False
+
+
+def test_concept_format_in_prompt_and_suffix():
+    from agent.prompts import SYSTEM_PROMPT
+    from backend.chatflow import TEACHING_SUFFIX
+
+    for token in ("Concept:", "Simple intuition:", "How it works:", "Why:",
+                  "Exam importance:", "Exam trap:", "Recall:", "Source: [slide N]"):
+        assert token in SYSTEM_PROMPT
+        assert token in TEACHING_SUFFIX
+    assert "wait for the learner" in SYSTEM_PROMPT.lower()
+
+
+def test_reflection_teaching_focus():
+    from agent.reflection import _TASK_FOCUS
+
+    assert "source fidelity" in _TASK_FOCUS["research"]
+    assert "source fidelity" in _TASK_FOCUS["multi_step"]
+
+
 def test_router_teaching_never_simple():
     from agent.router import rule_route
 
@@ -175,3 +216,128 @@ def test_run_chat_teaching_injects_window(tmp_path, monkeypatch):
     assert "Verified content" in seen["input"]
     assert "Teaching mode" in seen["input"]
     assert "Graph intro" in seen["input"]
+
+
+def test_admin_compressed_in_analysis(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-admin")
+    b1 = _pptx_bytes([
+        ["Course Code CSE 0613-4125 Credit 3.0 Instructor Rubel Sheikh Schedule Mondays"],
+        ["Attendance 10 percent Midterm 20 percent Final 40 percent grading policy"],
+        ["A graph is a pair V E of vertices and edges"],
+        ["Walk repeats vertices edges path cycle degree"],
+    ])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    atts = [{"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]
+    send, _, _ = _apply_teaching_session(ctx, "teach me slides", [], atts, [], "teach me slides")
+    assert "admin" in send.lower()
+    assert "Concept:" in send  # new schema mirrored in suffix
+
+
+def test_practice_quiz_revise_intents():
+    from backend.chatflow import _is_teaching_request
+
+    assert _is_teaching_request("quiz me on chapter 3") is True
+    assert _is_teaching_request("give me practice problems on these slides") is True
+    assert _is_teaching_request("revise lecture 2 notes") is True
+
+
+def test_router_practice_quiz_research():
+    from agent.router import rule_route
+
+    assert rule_route("quiz me on this pdf") == "research"
+    assert rule_route("give me practice questions") == "research"
+
+
+def test_pace_feedback_detection():
+    from backend.chatflow import _is_pace_feedback, _pace_direction
+
+    hist = [{"role": "assistant", "content": "📘 FILE: L — Slides 1-3\nConcept: G\nRecall: Q?\nSay Next."}]
+    assert _pace_direction("slow down, simpler please") == "slow"
+    assert _pace_direction("got it, give harder problems") == "fast"
+    assert _pace_direction("what is a vertex") is None
+    assert _is_pace_feedback("slow down please", hist) is True
+    assert _is_pace_feedback("slow down please", []) is False
+
+
+def test_pace_note_injected(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-pace")
+    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"], ["Path simple"], ["Cycle closed"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    hist = [
+        {"role": "user", "content": "teach me", "attachments": [
+            {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-3\nConcept: G\nRecall: Q?\nSay Next."},
+    ]
+    send, _, _ = _apply_teaching_session(ctx, "slow down, simpler", hist, [], [], "slow down, simpler")
+    assert "slow down" in send.lower()
+
+
+def test_last_window_section_review(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-review")
+    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    atts = [{"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]
+    send, _, _ = _apply_teaching_session(ctx, "teach me slides", [], atts, [], "teach me slides")
+    assert "section review" in send.lower()
+
+
+def test_exhausted_all_files_exam_mode(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-exammode")
+    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    hist = [
+        {"role": "user", "content": "teach me", "attachments": [
+            {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-2\nConcept: G\nRecall: Q?"},
+    ]
+    send, _, _ = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
+    assert "EXAM MODE" in send
+    assert "Verified content" not in send
+
+
+def test_explicit_reteach_skips_exam_mode(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-reteach")
+    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    hist = [
+        {"role": "user", "content": "teach me", "attachments": [
+            {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-2\nConcept: G\nRecall: Q?"},
+    ]
+    send, _, _ = _apply_teaching_session(
+        ctx, "teach Lecture_01 again", hist, [], [], "teach Lecture_01 again")
+    assert "Verified content" in send
+
+
+def test_subject_templates_in_prompt():
+    from agent.prompts import SYSTEM_PROMPT
+
+    assert "line-by-line" in SYSTEM_PROMPT
+    assert "compact comparison" in SYSTEM_PROMPT
+    assert "missing prerequisite first" in SYSTEM_PROMPT
+
+
+def test_recall_answer_gets_evaluation_note(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-eval")
+    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"], ["Path simple"], ["Cycle closed"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    hist = [
+        {"role": "user", "content": "teach me", "attachments": [
+            {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-3\nConcept: Graph\nRecall: What is a vertex?\nSay Next for 4-6."},
+    ]
+    send, _, _ = _apply_teaching_session(ctx, "A vertex is a node", hist, [], [], "A vertex is a node")
+    assert "evaluate" in send.lower()
+    assert "Recall checkpoint" in send
