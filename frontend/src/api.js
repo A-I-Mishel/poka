@@ -14,20 +14,20 @@ async function req(path, init, retried) {
   var headers = Object.assign({ "Content-Type": "application/json" }, authHeaders(), opts.headers || {});
   var hadToken = !!headers.Authorization;
   var res;
-  // ponytail: 30s abort so hung Render cold-start fails fast vs hanging UI
+  // ponytail: 120s abort — Render free sleeps + Deep+PPTX runs exceed 30s
   var timeoutId = null, ctrl = null;
   if (!opts.signal && typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
-    try { opts.signal = AbortSignal.timeout(30000); } catch (e) {}
+    try { opts.signal = AbortSignal.timeout(120000); } catch (e) {}
   } else if (!opts.signal) {
     ctrl = new AbortController();
     opts.signal = ctrl.signal;
-    timeoutId = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 30000);
+    timeoutId = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 120000);
   }
   try {
     res = await fetch(apiUrl(path), Object.assign({}, opts, { headers: headers }));
   } catch (e) {
     if (timeoutId) clearTimeout(timeoutId);
-    if (e && e.name === "AbortError") throw new Error("Request timed out after 30s.");
+    if (e && (e.name === "AbortError" || e.name === "TimeoutError")) throw new Error("Pluto is waking up (Render sleeps) or the reply is long — wait a minute and retry.");
     throw new Error("Cannot reach the Pluto API (" + (API_BASE || "same origin") + "). " + e.message);
   }
   if (timeoutId) clearTimeout(timeoutId);
