@@ -1111,9 +1111,24 @@ def _apply_teaching_session(
 
     Stateless: candidates are current attachments + AVAILABLE history docs
     (deduped, sorted by name); the cursor comes from the last "📘 FILE:"
-    header. Never mixes files in one batch. Fail-closed: when nothing is
-    readable, inject a no-hallucination note instead of generic content.
+    header. Never mixes files in one batch. Fail-closed HARD: when an active
+    session has no verified window, return a server message with NO model
+    call (clarify short-circuit) so a disobedient tier cannot hallucinate
+    slides. Only a fresh explicit request with no files at all falls through
+    to the model (general-knowledge teaching, no source claims allowed).
     """
+    TEACHING_INLINE_OVERFLOW = "exceeds the inline window"
+    try:
+        _explicit_request = _is_teaching_request(gate_text)
+    except Exception:
+        _explicit_request = False
+    try:
+        _prior_session = any(
+            isinstance(m, dict) and "📘 FILE:" in str(m.get("content", "") or "")
+            for m in (history or [])[-10:]
+        )
+    except Exception:
+        _prior_session = False
     vision_ids = list(image_ids or [])
     try:
         _, avail_docs = _available_for_gate(ctx, history)
@@ -1141,12 +1156,21 @@ def _apply_teaching_session(
             continue
     candidates.sort(key=lambda e: str(e.get("name", "")).lower())
     if not candidates:
-        send_text += (
-            "\n\n[Teaching requested but no readable slides were found in "
-            "this conversation. Ask the user to upload the .pptx/.pdf lecture "
-            "files first. Do not invent slides.]"
+        if _explicit_request and not _prior_session:
+            # Fresh ask with no files: general-knowledge teaching is allowed,
+            # so let the model answer (it must not claim source slides).
+            send_text += (
+                "\n\n[Teaching requested but no readable slides were found in "
+                "this conversation. Ask the user to upload the .pptx/.pdf lecture "
+                "files first. Do not invent slides.]"
+            )
+            return send_text, vision_ids, None
+        # Active session lost its files (pruned/deleted): no model call.
+        return send_text, vision_ids, (
+            "The files from this teaching session are no longer available "
+            "(deleted or expired), so I stopped rather than guess their contents. "
+            "Please re-upload the lecture slides and say Next to continue."
         )
-        return send_text, vision_ids, None
     # Pick ONE active file: explicit filename > continuation file > first.
     active = candidates[0]
     _explicit_file = False
@@ -1247,6 +1271,33 @@ def _apply_teaching_session(
     except Exception:
         pass
     window_hint, start, end, total, status = _teaching_window_hint(ctx, active, last_end)
+    if (status != "OK" and TEACHING_INLINE_OVERFLOW not in window_hint
+            and last_end <= 0 and not _explicit_file):
+        # Fresh auto-pick landed on an unreadable file: advance to the next
+        # readable candidate instead of failing the whole turn.
+        try:
+            _idx0 = next((i for i, c in enumerate(candidates)
+                          if c.get("id") == active.get("id")), 0)
+            for _cand in candidates[_idx0 + 1:]:
+                _wh, _st, _en, _to, _ss = _teaching_window_hint(ctx, _cand, 0)
+                if _ss == "OK":
+                    active = _cand
+                    window_hint, start, end, total, status = _wh, _st, _en, _to, _ss
+                    break
+        except Exception:
+            pass
+    if status != "OK" and TEACHING_INLINE_OVERFLOW not in window_hint:
+        # No verified window and the model cannot fetch it inline either
+        # (overflow files keep the model path: read_document handles 200MB).
+        # Anything else → server message, NO model call, so slides cannot
+        # be invented from memory.
+        _reason = status if status.startswith("STATUS=") else "unreadable file"
+        return send_text, vision_ids, (
+            f"I couldn't read '{str(active.get('name', 'file'))}' ({_reason}), "
+            "so I stopped rather than guess its slides. Please re-upload an "
+            "accessible .pptx/.pdf (export scanned slides with OCR text first), "
+            "then say Next to continue."
+        )
     send_text += window_hint
     # Last window of a file: close with a compact section review.
     try:

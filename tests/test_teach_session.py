@@ -202,6 +202,48 @@ def test_no_docs_fail_closed(tmp_path, monkeypatch):
     assert "Do not invent" in send
 
 
+def test_session_lost_files_short_circuits_no_model_call(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-lost")
+    # Prior teaching exists, but no files are available anywhere now.
+    hist = [
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-3\nConcept: G\nRecall: Q?"},
+    ]
+    send, _, clarify = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
+    assert clarify is not None
+    assert "re-upload" in clarify.lower()
+
+
+def test_unreadable_window_short_circuits(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-broken")
+    b1 = _pptx_bytes([["Graph vertex edge"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    ctx.file_store.delete_upload(m1.id)
+    atts = [{"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]
+    send, _, clarify = _apply_teaching_session(
+        ctx, "teach me slides", [], atts, [], "teach me slides")
+    assert clarify is not None
+    assert "re-upload" in clarify.lower()
+
+
+def test_oversize_window_keeps_model_path(tmp_path, monkeypatch):
+    import backend.chatflow as cf
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-big")
+    monkeypatch.setattr(cf, "TEACHING_INLINE_MAX_BYTES", 10)
+    b1 = _pptx_bytes([["Graph vertex edge"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    atts = [{"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]
+    send, _, clarify = _apply_teaching_session(
+        ctx, "teach me slides", [], atts, [], "teach me slides")
+    assert clarify is None
+    assert "read_document" in send
+
+
 def test_run_chat_teaching_injects_window(tmp_path, monkeypatch):
     from backend.chatflow import run_chat
 

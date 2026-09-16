@@ -80,18 +80,59 @@ def is_mutating_tool(name: str) -> bool:
     return name in _MUTATING_TOOLS
 
 
+_BRACKET_CALL_RE = _re.compile(
+    r"\[\s*tool\s*call\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^]\[]*)\)\s*\]",
+    _re.IGNORECASE,
+)
+_BRACKET_ARG_RE = _re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([0-9]+))")
+
+
+def _fallback_bracket_calls_from_text(text: str) -> List[Dict[str, Any]]:
+    """Parse "[Tool call: name(k=v, ...)]" leaks into real tool calls.
+
+    Some tiers narrate actions ("[Tool call: read_document(upload_id=...)]")
+    instead of emitting tool_calls. Only known tools with scalar args
+    (upload_id/page/query-style) are accepted; anything else is ignored.
+    Stdlib only, never raises.
+    """
+    candidates: List[Dict[str, Any]] = []
+    try:
+        for m in _BRACKET_CALL_RE.finditer(text or ""):
+            name = str(m.group(1) or "").strip()
+            if not name or name not in TOOL_MAP:
+                continue
+            args: Dict[str, Any] = {}
+            for am in _BRACKET_ARG_RE.finditer(m.group(2) or ""):
+                key = str(am.group(1) or "").strip()
+                val: Any = am.group(2) if am.group(2) is not None else (
+                    am.group(3) if am.group(3) is not None else am.group(4))
+                if key and isinstance(val, str):
+                    args[key] = val[:500]
+            candidates.append({"name": name, "args": args})
+            if len(candidates) >= 4:
+                break
+    except Exception:
+        pass
+    return candidates
+
+
 def _fallback_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
     """Parse JSON tool calls leaked as text (model wrote JSON instead of tool_calls).
 
     Free tiers often emit {"tool":"read_document","upload_id":"..."} as
     content; the structured tool_calls list is then empty and the raw
     JSON leaks to the user. This extracts it so it can be executed
-    normally. Stdlib only, never raises.
+    normally. Also handles "[Tool call: name(args)]" narration. Stdlib
+    only, never raises.
     """
-    if not text or "{" not in text:
+    if not text:
         return []
+    found = _fallback_bracket_calls_from_text(text)
+    if "{" not in text:
+        return found[:4]
     if '"tool"' not in text and '"name"' not in text:
-        return []
+        return found[:4]
     # ponytail: brace-counting extractor for leaked JSON - upgrade to
     # full json repair only if free-tier models start emitting broken JSON
     candidates: List[Dict[str, Any]] = []
@@ -131,9 +172,10 @@ def _fallback_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
         # keep only string-keyed args
         args = {str(k): v for k, v in args.items()}
         candidates.append({"name": name, "args": args})
-        if len(candidates) >= 4:
+        if len(found) + len(candidates) >= 4:
             break
-    return candidates
+    return (found + candidates)[:4]
+
 
 def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_key: Any = None) -> Any:
     """Invoke a tool with the submitting request's user bound.
@@ -248,9 +290,23 @@ def _execute_tool_calls_parallel(
 
     # Execute read-only tools in parallel
     if read_only:
+        # Capture the submitting request's identity HERE (agent thread):
+        # pool threads do not inherit contextvars, so capturing inside
+        # _execute_tool_call (which runs in the worker) always yields None
+        # and every user-scoped read tool denies with "no user context".
+        caller_user_id = get_current_user_id()
+        caller_limit_key = get_limit_key()
+
+        def _call_with_caller_context(tc: Any) -> str:
+            if caller_user_id is not None:
+                set_current_user_id(caller_user_id)
+            if caller_limit_key is not None:
+                set_limit_key(caller_limit_key)
+            return _execute_tool_call(tc, budget)
+
         with ThreadPoolExecutor(max_workers=min(max_workers, len(read_only))) as executor:
             future_to_idx = {
-                executor.submit(_execute_tool_call, tc, budget): idx
+                executor.submit(_call_with_caller_context, tc): idx
                 for idx, tc in read_only
             }
             for future in as_completed(future_to_idx):
