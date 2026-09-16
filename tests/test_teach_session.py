@@ -399,6 +399,126 @@ def test_format_logging_metadata_only(tmp_path, monkeypatch):
     cf._log_teaching_format(None, None, None)
 
 
+_GOOD_DRAFT = (
+    "📘 FILE: Lecture_01.pptx — Slides 4-6\n"
+    "Concept: Graph\nDefinition: A pair (V, E).\nRecall: What is V?\n"
+    "Source: [slide 4]\nSay Next for slides 7-9."
+)
+
+
+def test_scope_fence_names_window():
+    from backend.chatflow import _teaching_scope_from_send, _teaching_scope_line
+
+    line = _teaching_scope_line(4, 6, 44)
+    assert "ONLY slides 4-6" in line
+    assert "7+ are NOT loaded" in line
+    assert _teaching_scope_from_send("x\n" + line) == (4, 6)
+    assert _teaching_scope_from_send("no fence here") is None
+
+
+def test_validator_matrix():
+    from backend.chatflow import _validate_teaching_draft
+
+    assert _validate_teaching_draft(_GOOD_DRAFT, 4, 6) == []
+    assert _validate_teaching_draft("", 4, 6) == ["empty answer"]
+    overflow = _GOOD_DRAFT.replace("Slides 4-6", "Slides 4-10")
+    assert any("outside window" in r for r in _validate_teaching_draft(overflow, 4, 6))
+    future = _GOOD_DRAFT + "\nSource: [slide 9]"
+    assert any("beyond window" in r for r in _validate_teaching_draft(future, 4, 6))
+    nocite = "📘 FILE: L — Slides 4-6\nConcept: G\nRecall: Q?\nSay Next for slides 7-9."
+    assert any("no slide citations" in r for r in _validate_teaching_draft(nocite, 4, 6))
+    twofoot = _GOOD_DRAFT + "\nSay Next for slides 7-9."
+    assert any("Say-Next" in r for r in _validate_teaching_draft(twofoot, 4, 6))
+    noschema = ("📘 FILE: L — Slides 4-6\nSome table here.\nSource: [slide 4]\n"
+                "Say Next for slides 7-9.")
+    assert any("missing 'concept:'" in r for r in _validate_teaching_draft(noschema, 4, 6))
+    noheader = "Concept: G\nRecall: Q?\nSource: [slide 4]\nSay Next for slides 7-9."
+    assert any("FILE header" in r for r in _validate_teaching_draft(noheader, 4, 6))
+
+
+def _stub_repair(monkeypatch, text):
+    import types
+
+    import agent as agent_mod
+    import config
+
+    calls = {}
+
+    def fake_llm(name, temperature=0.3):
+        calls["tier"] = name
+        return object()
+
+    def fake_invoke(llm, messages, **kw):
+        calls["kw"] = kw
+        return types.SimpleNamespace(content=text)
+
+    monkeypatch.setattr(config, "get_tier_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", fake_invoke)
+    return calls
+
+
+def test_repair_fixes_and_reports(monkeypatch):
+    from backend.chatflow import _maybe_repair_teaching_turn
+
+    send = "window\n" + "x teach ONLY slides 4-6 y"
+    bad = "Concept: G\nSource: [slide 4]\nSource: [slide 9]"
+    calls = _stub_repair(monkeypatch, _GOOD_DRAFT)
+    fixed, repaired, left = _maybe_repair_teaching_turn(send, bad, "Mistral")
+    assert repaired is True and fixed == _GOOD_DRAFT and left == []
+    assert calls["tier"] == "Mistral"
+
+
+def test_repair_keeps_draft_when_unfixable(monkeypatch):
+    import agent as agent_mod
+    import config
+    from backend.chatflow import _maybe_repair_teaching_turn
+
+    monkeypatch.setattr(config, "get_tier_llm", lambda name, temperature=0.3: None)
+    called = []
+    monkeypatch.setattr(agent_mod, "_invoke_bounded",
+                        lambda *a, **k: called.append(1) or None)
+    send = "window\n" + "x teach ONLY slides 4-6 y"
+    bad = "no header here"
+    fixed, repaired, left = _maybe_repair_teaching_turn(send, bad, "Nope")
+    assert repaired is False and fixed == bad and called == [] and left
+
+
+def test_repair_resets_stream(monkeypatch):
+    from backend.chatflow import _maybe_repair_teaching_turn
+
+    send = "window\n" + "x teach ONLY slides 4-6 y"
+    bad = "Concept: G\nSource: [slide 9]"
+    _stub_repair(monkeypatch, _GOOD_DRAFT)
+    resets = []
+    fixed, repaired, _ = _maybe_repair_teaching_turn(
+        send, bad, "Groq", on_reset=lambda: resets.append(1))
+    assert repaired is True and resets == [1] and fixed == _GOOD_DRAFT
+
+
+def test_maybe_repair_skips_non_teaching(monkeypatch):
+    import agent as agent_mod
+    from backend.chatflow import _maybe_repair_teaching_turn
+
+    calls = []
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", lambda *a, **k: calls.append(1))
+    fixed, repaired, left = _maybe_repair_teaching_turn("hello", "hi", "Groq")
+    assert (fixed, repaired, left) == ("hi", False, [])
+    assert calls == []
+
+
+def test_scope_fence_in_session_output(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-scope")
+    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"], ["Path simple"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    atts = [{"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]
+    send, _, clarify = _apply_teaching_session(
+        ctx, "teach me slides", [], atts, [], "teach me slides")
+    assert clarify is None
+    assert "Scope fence" in send and "ONLY slides 1-3" in send
+
+
 def test_subject_templates_in_prompt():
     from agent.prompts import SYSTEM_PROMPT
 

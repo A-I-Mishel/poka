@@ -188,9 +188,12 @@ _TEACHING_DEEP_SIGNALS = ("in detail", "detailed", "deep dive", "thoroughly",
 
 TEACHING_SUFFIX = (
     "\n\n[Teaching mode: exam-focused, concept-first. Teach ONLY the verified "
-    "slides above from ONE file, max 3 slides, in order. Pure-admin slides "
-    "(course code/instructor/schedule/grading) get one summary line each, never "
-    "full blocks. Group slides that explain one concept and cite a range. "
+    "slides above from ONE file, in order. Pure-admin slides "
+    "(course code/instructor/schedule/grading/contacts) get EXACTLY one summary "
+    "line each: never full blocks, never markdown tables, never recall questions "
+    "about admin trivia — recall must test an examinable concept or formula. "
+    "Teaching blocks use Concept: headers, never markdown tables. Group slides "
+    "that explain one concept and cite a range. "
     "For EACH concept output EXACTLY: Concept: <name> / Definition: <1 line> / "
     "Simple intuition: <beginner> / How it works: <mechanism> / Why: <reason> / "
     "Example: <worked> / Exam importance: <MUST KNOW/HIGH VALUE/MEDIUM/LOW> / "
@@ -198,11 +201,31 @@ TEACHING_SUFFIX = (
     "Source: [slide N]. Numerics add Given -> Formula -> Solve -> Answer. "
     "Distinguish source from support: \"Your slide states X. Supporting "
     "explanation: ...\". Start with \"📘 FILE: <name> — Slides X-Y\" and end "
-    "with exactly one Recall + \"Say Next for slides Y+1..\" (never per-slide "
-    "Say Next). Then STOP and wait for the learner's answer. Never invent "
+    "the whole answer with EXACTLY ONE line of the form "
+    "\"Say Next for slides Y+1..\" — no other Say Next line anywhere, not even "
+    "one per slide. Then STOP and wait for the learner's answer. Never invent "
     "slides beyond verified content; if truncated or empty, say so and ask "
     "to re-upload.]"
 )
+
+
+def _teaching_scope_line(start: int, end: int, total: int) -> str:
+    """Dynamic per-turn window fence (never raises).
+
+    Names the exact slides the model may teach and forbids everything
+    beyond them, so it cannot drift into extra slides or preview unloaded
+    ones. The total count is deliberately withheld here.
+    """
+    try:
+        nxt = int(end) + 1
+        return (
+            f"\n\n[Scope fence: you may teach ONLY slides {int(start)}-{int(end)} "
+            f"above. Slides {nxt}+ are NOT loaded: do not teach, preview, "
+            "summarize, or claim their contents. Your header range must equal "
+            f"slides {int(start)}-{int(end)}.]"
+        )
+    except Exception:
+        return ""
 
 
 def _is_teaching_request(text: str) -> bool:
@@ -1356,6 +1379,12 @@ def _apply_teaching_session(
     except Exception:
         pass
     send_text += TEACHING_SUFFIX
+    # Dynamic scope fence: name the exact allowed slides for this turn.
+    try:
+        if status == "OK" and start and end:
+            send_text += _teaching_scope_line(start, end, total)
+    except Exception:
+        pass
     # Recall-answer mode: evaluate the student's answer before the next window.
     try:
         from agent.attachment_gate import CONTINUATION_SIGNALS
@@ -1489,7 +1518,181 @@ def _apply_attachment_gate(ctx: UserContext, gate_text: str,
     return send_text, vision_ids, None
 
 
-def _log_teaching_format(send_text: str, output: str, tier: str) -> None:
+_TEACHING_SCOPE_RE = re.compile(r"teach ONLY slides (\d+)-(\d+)", re.IGNORECASE)
+_TEACHING_CITE_RE = re.compile(r"\[(?:slide|page)\s+(\d+)", re.IGNORECASE)
+_TEACHING_SAY_NEXT_RE = re.compile(r"say\s+next\b", re.IGNORECASE)
+_TEACHING_SCHEMA_HEADINGS = ("concept:", "recall:", "source:")
+TEACHING_REPAIR_TIMEOUT_SECONDS: float = 30.0
+
+
+def _teaching_scope_from_send(send_text: str) -> Optional[Tuple[int, int]]:
+    """Parse the allowed (start, end) window from the scope fence (never raises)."""
+    try:
+        m = _TEACHING_SCOPE_RE.search(str(send_text or ""))
+        if not m:
+            return None
+        return (int(m.group(1)), int(m.group(2)))
+    except Exception:
+        return None
+
+
+def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
+    """Check a teaching draft against its allowed window (pure, never raises).
+
+    Returns a list of violation reasons; empty means pass. Checks: FILE
+    header range within the window, no citations beyond the window end, at
+    least one citation, exactly one Say-Next line, required schema headings.
+    """
+    reasons: List[str] = []
+    try:
+        text = str(output or "")
+        if not text.strip():
+            return ["empty answer"]
+        try:
+            h_start = h_end = None
+            m = _TEACHING_FILE_RE.search(text)
+            if m:
+                h_start = int(m.group(2))
+                h_end = int(m.group(3) or m.group(2))
+        except Exception:
+            h_start = h_end = None
+        if h_start is None:
+            reasons.append("missing FILE header")
+        elif not (start <= h_start <= end and start <= h_end <= end):
+            reasons.append(f"header slides {h_start}-{h_end} outside window {start}-{end}")
+        cited: List[int] = []
+        try:
+            cited = [int(n) for n in _TEACHING_CITE_RE.findall(text)]
+        except Exception:
+            cited = []
+        beyond = sorted({n for n in cited if n > end})
+        if beyond:
+            reasons.append(f"cites slides beyond window: {beyond}")
+        if not cited:
+            reasons.append("no slide citations")
+        n_next = len(_TEACHING_SAY_NEXT_RE.findall(text))
+        if n_next != 1:
+            reasons.append(f"{n_next} Say-Next lines (need exactly 1)")
+        low = text.lower()
+        for heading in _TEACHING_SCHEMA_HEADINGS:
+            if heading not in low:
+                reasons.append(f"missing '{heading}' block")
+    except Exception:
+        pass
+    return reasons
+
+
+def _repair_teaching_draft(
+    send_text: str,
+    draft: str,
+    reasons: List[str],
+    tier: str,
+    on_token: Any = None,
+    on_reset: Any = None,
+) -> Tuple[str, bool]:
+    """One bounded same-tier repair of a violating teaching draft (never raises).
+
+    Returns (text_to_use, repaired). Keeps the original draft whenever repair
+    is unavailable, fails, or does not strictly reduce violations. A streaming
+    consumer is reset first so it never concatenates stale with fixed text.
+    """
+    try:
+        if not reasons:
+            return draft, False
+        from config import get_tier_llm
+
+        import agent as agent_mod
+
+        llm = None
+        try:
+            llm = get_tier_llm(str(tier or ""), temperature=0.3)
+        except Exception:
+            llm = None
+        if llm is None:
+            return draft, False
+        if callable(on_reset):
+            try:
+                on_reset()
+            except Exception:
+                pass
+        from agent.budget import RequestBudget
+
+        repair_budget = RequestBudget()
+        messages = [
+            {"role": "system", "content": (
+                "You repair a lesson's formatting. Change ONLY structure to "
+                "satisfy every listed rule. Keep all facts, numbers, and slide "
+                "citations identical. Never add content about other slides. "
+                "Reply with the full corrected lesson only.")},
+            {"role": "user", "content": (
+                "Rules violated:\n- " + "\n- ".join(reasons) +
+                "\n\nVerified slides and instructions:\n" + str(send_text or "")[:12000] +
+                "\n\nDraft to fix:\n" + str(draft or "")[:12000])},
+        ]
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+
+            lc_messages = [SystemMessage(content=messages[0]["content"]),
+                           HumanMessage(content=messages[1]["content"])]
+        except Exception:
+            lc_messages = messages
+        try:
+            response = agent_mod._invoke_bounded(
+                llm, lc_messages, timeout=TEACHING_REPAIR_TIMEOUT_SECONDS,
+                budget=repair_budget, on_token=on_token, tier_name=str(tier or ""))
+        except Exception:
+            return draft, False
+        try:
+            from agent.prompts import _as_text, strip_internal_reasoning
+
+            fixed = strip_internal_reasoning(_as_text(getattr(response, "content", ""))).strip()
+        except Exception:
+            return draft, False
+        if not fixed:
+            return draft, False
+        scope = _teaching_scope_from_send(send_text)
+        if scope is None:
+            return draft, False
+        new_reasons = _validate_teaching_draft(fixed, scope[0], scope[1])
+        if len(new_reasons) < len(reasons):
+            return fixed, True
+        return draft, False
+    except Exception:
+        return draft, False
+
+
+def _maybe_repair_teaching_turn(
+    send_text: str,
+    content: str,
+    tier: str,
+    on_token: Any = None,
+    on_reset: Any = None,
+) -> Tuple[str, bool, List[str]]:
+    """Validate a teaching-turn answer, repairing once when needed (never raises).
+
+    Returns (content_to_persist, repaired, remaining_reasons). Non-teaching
+    turns (no scope fence) pass through untouched.
+    """
+    try:
+        scope = _teaching_scope_from_send(send_text)
+        if scope is None:
+            return content, False, []
+        reasons = _validate_teaching_draft(content, scope[0], scope[1])
+        if not reasons:
+            return content, False, []
+        fixed, repaired = _repair_teaching_draft(
+            send_text, content, reasons, tier, on_token, on_reset)
+        if repaired:
+            scope2 = _teaching_scope_from_send(send_text)
+            left = _validate_teaching_draft(fixed, scope2[0], scope2[1]) if scope2 else reasons
+            return fixed, True, left
+        return content, False, reasons
+    except Exception:
+        return content, False, []
+
+
+def _log_teaching_format(send_text: str, output: str, tier: str,
+                         repaired: bool = False, violations: int = 0) -> None:
     """Log teaching format compliance as metadata only (never raises).
 
     Records which §37 blocks a teaching answer carried (header/concept/
@@ -1507,6 +1710,8 @@ def _log_teaching_format(send_text: str, output: str, tier: str) -> None:
             has_concept=("concept:" in low),
             has_recall=("recall:" in low),
             has_source=("source:" in low),
+            repaired=bool(repaired),
+            violations=int(violations or 0),
         )
     except Exception:
         pass
@@ -1591,7 +1796,20 @@ def run_chat(ctx: UserContext, content: str,
         bool(force_search), active_tier, on_token, on_reset,
         on_progress)
 
-    _log_teaching_format(send_text, str(assistant_msg.get("content", "")), tier)
+    try:
+        fixed, repaired, left = _maybe_repair_teaching_turn(
+            send_text, str(assistant_msg.get("content", "")), tier,
+            on_token, on_reset)
+        if repaired:
+            assistant_msg = dict(assistant_msg)
+            assistant_msg["content"] = fixed
+        _log_teaching_format(send_text, str(assistant_msg.get("content", "")),
+                             tier, repaired=repaired, violations=len(left))
+    except Exception:
+        try:
+            _log_teaching_format(send_text, str(assistant_msg.get("content", "")), tier)
+        except Exception:
+            pass
     current = current + [user_msg, assistant_msg]
     store.save_chats(chats, current)
     return {
@@ -1705,7 +1923,19 @@ def regenerate_chat(ctx: UserContext, index: int,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier)
 
-    _log_teaching_format(send_text, str(fresh_msg.get("content", "")), tier)
+    try:
+        fixed, repaired, left = _maybe_repair_teaching_turn(
+            send_text, str(fresh_msg.get("content", "")), tier)
+        if repaired:
+            fresh_msg = dict(fresh_msg)
+            fresh_msg["content"] = fixed
+        _log_teaching_format(send_text, str(fresh_msg.get("content", "")),
+                             tier, repaired=repaired, violations=len(left))
+    except Exception:
+        try:
+            _log_teaching_format(send_text, str(fresh_msg.get("content", "")), tier)
+        except Exception:
+            pass
     current = current + [fresh_msg]
     store.save_chats(chats, current)
     return {
