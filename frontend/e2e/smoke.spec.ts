@@ -47,12 +47,17 @@ test("split UI boots and degrades gracefully with zero page errors", async ({
   await page.locator('#modeToggle button[data-mode="deep"]').click();
   await page.locator('#modeToggle button[data-mode="fast"]').click();
 
-  // Send with no tiers configured: must degrade to a toast, never crash.
+  // Send: with no tiers configured this must degrade to a toast, never
+  // crash; with live tiers (dev .env) it answers instead — either settled
+  // outcome proves the send path works end to end.
   await page.fill("#input", "hello e2e");
   await page.click("#sendBtn");
-  await expect(page.locator("#toasts .toast").first()).toBeVisible({
-    timeout: 60_000,
-  });
+  await expect.poll(async () => {
+    if (await page.locator("#toasts .toast").count()) return "toast";
+    if (await page.locator('.msg.ai[aria-busy="true"]').count()) return "pending";
+    const bodies = await page.locator("#viewChat .msg.ai .body").allInnerTexts();
+    return bodies.some((t) => t.trim().length > 0) ? "reply" : "pending";
+  }, { timeout: 60_000 }).not.toBe("pending");
 
   expect(errors).toEqual([]);
 });
