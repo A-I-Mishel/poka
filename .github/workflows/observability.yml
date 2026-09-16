@@ -54,7 +54,7 @@ jobs:
         run: docker build -t pluto:test .
       - name: Smoke test
         run: |
-          docker run -d --name pluto -p 8000:8000 -e PLUTO_AUTH_MODE=open pluto:test
+          docker run -d --name pluto -p 8000:8000 -e PORT=8000 -e PLUTO_AUTH_MODE=open pluto:test
           # Readiness loop: a fixed sleep races cold uvicorn imports and
           # curl fails with 56 (proxy accepts, nobody listening yet).
           for i in $(seq 1 30); do
