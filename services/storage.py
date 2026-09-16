@@ -477,6 +477,10 @@ def _clean_chat_record(value: Any) -> Optional[Dict[str, Any]]:
         record["id"] = value["id"]
     if is_valid_id(value.get("project_id")):
         record["project_id"] = value["project_id"]
+    # ponytail: legacy chats lack updated_at — drop it, sort treats missing as oldest
+    updated = value.get("updated_at")
+    if isinstance(updated, str) and updated.strip():
+        record["updated_at"] = updated.strip()[:64]
     return record
 
 

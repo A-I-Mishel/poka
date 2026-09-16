@@ -800,6 +800,8 @@ def archive_current(current: List[Dict[str, Any]],
         "id": str(chat_id) if is_valid_id(chat_id) else new_conversation_id(),
         "title": title.strip()[:MAX_CHAT_TITLE_CHARS] or "Untitled",
         "messages": msgs,
+        # ponytail: single choke point — every archive (new/edited) gets fresh time
+        "updated_at": utcnow_iso(),
     }
     if is_valid_id(project_id):
         record["project_id"] = str(project_id)

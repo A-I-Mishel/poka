@@ -26,6 +26,11 @@ def _check_chat_rate_limit(ctx: UserContext) -> None:
         )
 
 
+def _sort_key(chat):
+    # ponytail: ISO updated_at sorts chronologically; missing (legacy) = oldest
+    return chat.get("updated_at", "") if isinstance(chat, dict) else ""
+
+
 def _load(ctx: UserContext):
     try:
         stored, _warnings = ctx.user_store.load_chats()
@@ -33,7 +38,10 @@ def _load(ctx: UserContext):
         stored = {"chats": [], "current": []}
     chats = stored.get("chats", []) if isinstance(stored, dict) else []
     current = stored.get("current", []) if isinstance(stored, dict) else []
-    return (chats if isinstance(chats, list) else [],
+    chats = chats if isinstance(chats, list) else []
+    # ponytail: backend owns order (updated_at DESC); frontend renders verbatim
+    chats = sorted(chats, key=_sort_key, reverse=True)
+    return (chats,
             current if isinstance(current, list) else [])
 
 
@@ -60,7 +68,8 @@ def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_us
         else:
             # ponytail: keep recents stable — same id replaces, not duplicates
             deduped = [c for c in chats if not (isinstance(c, dict) and c.get("id") == record.get("id"))]
-            chats = [record] + deduped
+            # ponytail: prepend-then-sort — fresh updated_at stays top, ties keep prepend order
+            chats = sorted([record] + deduped, key=_sort_key, reverse=True)
             if len(chats) > MAX_STORED_CHATS:
                 dropped = len(chats) - MAX_STORED_CHATS
                 del chats[MAX_STORED_CHATS:]
@@ -75,10 +84,11 @@ def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_us
 def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_user)):
     """Adopt an archived chat as the open conversation.
 
-    Recents stay in order (newest on top). Browsing does not reorder:
-    the selected chat becomes current, history order is preserved.
-    Only an unsaved current (diverged from any archived chat) is
-    archived to the top so recently edited chats surface.
+    Recents are ordered by updated_at DESC (newest on top). Browsing
+    does not reorder: the selected chat becomes current, order is
+    preserved. Only an unsaved current (diverged from every archived
+    chat) is archived with a fresh updated_at so recently edited
+    chats surface on top.
     """
     _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
@@ -115,6 +125,7 @@ def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_
                     chats = [record] + chats
                 else:
                     chats = [record] + [c for c in chats if c.get("id") != record.get("id")]
+                chats = sorted(chats, key=_sort_key, reverse=True)
                 if len(chats) > MAX_STORED_CHATS:
                     del chats[MAX_STORED_CHATS:]
             except ValueError:

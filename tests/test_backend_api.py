@@ -387,6 +387,59 @@ def test_chats_new_archives(client, stub_agent):
     assert deleted.json()["chats"] == []
 
 
+def test_chats_new_puts_newest_on_top_with_timestamp(client, stub_agent):
+    client.post("/api/chat/send", json={"content": "old topic"})
+    assert client.post("/api/chats/new", json={}).status_code == 200
+    client.post("/api/chat/send", json={"content": "new topic"})
+    body = client.post("/api/chats/new", json={}).json()
+    titles = [c["title"] for c in body["chats"]]
+    assert titles[0] == "new topic"
+    assert all(c.get("updated_at") for c in body["chats"])
+    assert body["chats"][0]["updated_at"] >= body["chats"][1]["updated_at"]
+
+
+def test_chats_older_updated_moves_to_top(client, stub_agent):
+    client.post("/api/chat/send", json={"content": "old topic"})
+    assert client.post("/api/chats/new", json={}).status_code == 200
+    client.post("/api/chat/send", json={"content": "new topic"})
+    assert client.post("/api/chats/new", json={}).status_code == 200
+    state = client.get("/api/chats").json()
+    assert [c["title"] for c in state["chats"]] == ["new topic", "old topic"]
+    old_id = state["chats"][1]["id"]
+    new_id = state["chats"][0]["id"]
+    # Browse the older chat (stable), continue it, then open the newer one.
+    # Opening archives the diverged current with a fresh updated_at.
+    assert client.post("/api/chats/open", json={"id": old_id}).status_code == 200
+    assert client.post("/api/chat/send", json={"content": "old continued"}).status_code == 200
+    assert [c["title"] for c in client.get("/api/chats").json()["chats"]] == ["new topic", "old topic"]
+    opened = client.post("/api/chats/open", json={"id": new_id}).json()
+    titles = [c["title"] for c in opened["chats"]]
+    assert titles[0] == "old topic"
+    assert titles[1] == "new topic"
+    assert opened["chats"][0]["updated_at"] >= opened["chats"][1]["updated_at"]
+
+
+def test_chats_legacy_without_updated_at(client, stub_agent):
+    from services.storage import UserStore, _clean_chat_record
+
+    # Unit: legacy records survive cleaning without the new field.
+    assert "updated_at" not in _clean_chat_record(
+        {"id": "a" * 16, "title": "legacy", "messages": []})
+    # API: legacy rows stored directly don't break reads; new chats sort above.
+    store = UserStore("api-user", run_migration=False)
+    store.save_chats(
+        [{"id": "b" * 16, "title": "legacy one",
+          "messages": [{"role": "user", "content": "legacy one"}]},
+         {"id": "c" * 16, "title": "legacy two",
+          "messages": [{"role": "user", "content": "legacy two"}]}],
+        [])
+    state = client.get("/api/chats").json()
+    assert [c["title"] for c in state["chats"]] == ["legacy one", "legacy two"]
+    client.post("/api/chat/send", json={"content": "fresh topic"})
+    body = client.post("/api/chats/new", json={}).json()
+    assert [c["title"] for c in body["chats"]][0] == "fresh topic"
+
+
 def test_projects_crud_and_context(client):
     created = client.post("/api/projects", json={"name": "Alpha"})
     assert created.status_code == 201
