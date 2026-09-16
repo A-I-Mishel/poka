@@ -138,14 +138,11 @@ class _LiteParser(HTMLParser):
 
 def _ddg_lite_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[Dict[str, str]]:
     """DDG via its lite HTML endpoint (stdlib; the API package path is dead)."""
-    try:
+    def _fetch(url: str) -> List[Dict[str, str]]:
         import urllib.parse
         import urllib.request
 
-        url = _DDG_LITE + "?" + urllib.parse.urlencode({"q": query})
-        # ponytail: browser-ish UA — lite serves browsers, bots get walls;
-        # rotate only if empty-rate telemetry blames the UA.
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", "replace")
         parser = _LiteParser()
@@ -153,12 +150,29 @@ def _ddg_lite_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[
         parser.close()
         out: List[Dict[str, str]] = []
         for hit in parser.results[:max_results]:
-            title, url = hit["title"].strip(), hit["url"].strip()
-            if not title and not url:
+            title, u = hit["title"].strip(), hit["url"].strip()
+            if not title and not u:
                 continue
-            out.append({"title": title or url, "url": url,
+            out.append({"title": title or u, "url": u,
                         "snippet": hit.get("snippet", ""), "date": "",
-                        "domain": _domain_of(url)})
+                        "domain": _domain_of(u)})
+        return out
+    try:
+        import urllib.parse
+
+        url = _DDG_LITE + "?" + urllib.parse.urlencode({"q": query})
+        out = _fetch(url)
+        if out:
+            return out
+        # ponytail: lite empty on some egress IPs (Render) — fall back to
+        # html endpoint (same parser, different path) before giving up.
+        try:
+            html_url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+            out2 = _fetch(html_url)
+            if out2:
+                return out2
+        except Exception:
+            pass
         return out
     except Exception:
         return []
@@ -230,6 +244,23 @@ def _wikipedia_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List
                 # year or credit the snippet cut off). Never shorten a good snippet.
                 if ex and len(ex) > len(r["snippet"]) + 20:
                     r["snippet"] = ex
+            # Re-rank by query-token overlap so "tere liye song" surfaces
+            # the disambiguation/Atif song page (contains "song") ahead of
+            # unrelated films like "Mera Dil Tere Liye" that match only
+            # "tere liye". Generic, no per-query hardcode.
+            try:
+                q_tokens = [t for t in re.split(r"\W+", query.lower()) if t and len(t) > 2]
+                if q_tokens:
+                    def _score(r: Dict[str, str]) -> int:
+                        text = (r.get("title","") + " " + r.get("snippet","")).lower()
+                        s = sum(1 for tok in q_tokens if tok in text)
+                        # small boost for song intent when snippet is song-like
+                        if "song" in q_tokens and "song" in text:
+                            s += 1
+                        return s
+                    out.sort(key=_score, reverse=True)
+            except Exception:
+                pass
         return out
     except Exception:
         return []
