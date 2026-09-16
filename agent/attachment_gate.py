@@ -51,6 +51,13 @@ AMBIGUOUS_PHRASES = (
     "what does it say", "isme", "usme", "ispe", "uspe", "is mein",
     "us mein", "yeh kya", "ye kya", "kya hai", "kya likha", "kya dikh",
 )
+# Short teaching continuations ("continue", "next") reuse available files.
+# ponytail: whole intent class, never a hardcoded user phrase; NEW_INTENT
+# above still wins ("next song" stays a song, never a file).
+CONTINUATION_SIGNALS = (
+    "continu*", "next", "proceed", "go on", "go ahead",
+    "keep going", "carry on", "remain*", "finish*", "complet*",
+)
 _PRONOUNS = ("this", "that", "it", "isme", "usme", "ispe", "yeh", "ye")
 _SLIDE_RE = re.compile(r"\bslides?\s*\d+")
 _PAGE_RE = re.compile(r"\bpages?\s*\d+")
@@ -146,6 +153,14 @@ def decide(
         if _signals(t, NEW_INTENT_SIGNALS):
             return {"use_images": [], "use_docs": [], "clarify": None,
                     "reason": "new-intent"}
+
+        # 5b. Short continuation reuses available files so "continue" /
+        # "next" after a long doc answer keeps teaching instead of
+        # restarting blind. Length-guarded: long new questions that
+        # happen to contain "next" stay default-deny.
+        if len(t) <= 80 and (imgs or dcs) and _signals(t, CONTINUATION_SIGNALS):
+            return {"use_images": list(imgs), "use_docs": list(dcs),
+                    "clarify": None, "reason": "continuation"}
 
         # 6. Ambiguous pronoun reference.
         ambiguous = _signals(t, AMBIGUOUS_PHRASES) or (
