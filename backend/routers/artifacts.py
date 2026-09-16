@@ -52,23 +52,26 @@ def list_artifacts(ctx: UserContext = Depends(current_user)):
 
 @router.get("/{artifact_id}/download")
 def download_artifact(artifact_id: str, ctx: UserContext = Depends(current_user)):
-    """Download one generated file."""
-    try:
-        data = ctx.file_store.read_output(artifact_id)
-    except StorageError:
-        data = None
-    except Exception:
-        data = None
-    if data is None:
-        raise HTTPException(status_code=404, detail="Artifact expired or not found.")
+    """Download one generated file (streamed, not full-RAM)."""
     try:
         meta = ctx.file_store.get_output(artifact_id)
-        name = str(meta.display_name) if meta else artifact_id
     except StorageError:
-        name = artifact_id
+        meta = None
     except Exception:
-        name = artifact_id
-    from fastapi.responses import Response
+        meta = None
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Artifact expired or not found.")
+    # Resolve path without reading bytes into RAM (artifacts up to 50MB)
+    candidate = ctx.file_store.outputs_dir / getattr(meta, "stored_name", "")
+    try:
+        if not ctx.file_store._inside(ctx.file_store.outputs_dir, candidate) or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="Artifact expired or not found.")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="Artifact expired or not found.")
+    name = str(getattr(meta, "display_name", artifact_id) or artifact_id)
+    from fastapi.responses import FileResponse
     import re
     from urllib.parse import quote
 
@@ -113,9 +116,10 @@ def download_artifact(artifact_id: str, ctx: UserContext = Depends(current_user)
         cd = f'attachment; filename="{ascii_fb}"; filename*=UTF-8\'\'{quoted}'
     else:
         cd = f'attachment; filename="{safe_name}"'
-    return Response(
-        content=data,
+    return FileResponse(
+        str(candidate),
         media_type=media,
+        filename=safe_name,
         headers={
             "Content-Disposition": cd,
             "X-Content-Type-Options": "nosniff",

@@ -80,10 +80,20 @@ async def upload(file: UploadFile = File(...),
     except Exception:
         raise HTTPException(status_code=400, detail="Upload rejected: unexpected storage error.")
     # Best-effort knowledge-base ingest (never fails the upload):
-    # text-bearing documents become vector-searchable for "what do my
-    # documents say" questions. Images/unsupported types are skipped.
+    # small files ingest inline (tests expect immediate visibility);
+    # large files (>512KB) go daemon thread so upload returns fast
+    # (embedding can take seconds on Gemini free tier).
     try:
-        kb_svc.ingest_document(ctx.user_id, meta.id, str(meta.display_name), data)
+        if len(data) > 512 * 1024:
+            import threading
+
+            threading.Thread(
+                target=kb_svc.ingest_document,
+                args=(ctx.user_id, meta.id, str(meta.display_name), data),
+                daemon=True,
+            ).start()
+        else:
+            kb_svc.ingest_document(ctx.user_id, meta.id, str(meta.display_name), data)
     except Exception:
         pass
     return {

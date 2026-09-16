@@ -39,8 +39,9 @@ def _load(ctx: UserContext):
     chats = stored.get("chats", []) if isinstance(stored, dict) else []
     current = stored.get("current", []) if isinstance(stored, dict) else []
     chats = chats if isinstance(chats, list) else []
-    # ponytail: backend owns order (updated_at DESC); frontend renders verbatim
-    chats = sorted(chats, key=_sort_key, reverse=True)
+    # ponytail: keep DESC order but skip sort when already sorted (common path saves N log N)
+    if chats and not all(_sort_key(chats[i]) >= _sort_key(chats[i+1]) for i in range(len(chats)-1)):
+        chats = sorted(chats, key=_sort_key, reverse=True)
     return (chats,
             current if isinstance(current, list) else [])
 
