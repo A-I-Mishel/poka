@@ -28,7 +28,6 @@ tools/  (web_search, read_pdf, read_pdf_page, analyze_csv, csv_inspect,
          create_pptx, build_presentation, create_docx, build_document,
          gating shared pre-generation gate)
 config.py  (tier construction, temperatures; secrets via services.secrets)
-memory_engine.py  (compat alias of services.memory)
 ```
 
 Dependency flow: frontend → backend → agent → services/tools →

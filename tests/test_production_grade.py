@@ -91,14 +91,10 @@ def test_tool_loop_accepts_request_id():
     assert "request_id" in inspect.signature(planning.plan_then_execute).parameters
 
 
-def test_memory_engine_deprecated():
-    import warnings
+def test_memory_alias_removed():
+    import pathlib
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        import importlib
+    assert not (pathlib.Path(__file__).resolve().parent.parent / "memory_engine.py").exists()
+    import services.memory as mem
 
-        import memory_engine
-
-        importlib.reload(memory_engine)
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    assert hasattr(mem, "load_structured_memory")

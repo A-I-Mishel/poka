@@ -27,7 +27,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-cov ruff
       - name: Compile all Python files
-        run: python -m compileall -q backend config.py memory_engine.py services tools agent tests
+        run: python -m compileall -q backend config.py services tools agent tests
       - name: "Lint (ruff: pyflakes + runtime errors)"
         run: python -m ruff check backend config.py services agent tools tests
       - name: Run tests with coverage (mocked providers, no API calls)
