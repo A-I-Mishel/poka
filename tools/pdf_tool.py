@@ -2,17 +2,14 @@
 from pypdf import PdfReader
 from typing import List, Optional, Tuple
 
-import threading as _threading
-
 from services.context import get_current_user_id
 from services.files import FileStore
 from services.limits import MAX_PDF_CHARS, MAX_PDF_PAGES, MAX_UPLOAD_BYTES
 from services.obs import timed as obs_timed
+from tools.parse_cache import ParseCache
 
 # ponytail: mtime-keyed parse cache — second read in same chat is RAM, not re-parse
-_PDF_CACHE: dict = {}
-_PDF_LOCK = _threading.Lock()
-_PDF_CACHE_MAX = 32
+_PDF_CACHE = ParseCache(32)
 
 OCR_SCAN_PAGES: int = 5
 
@@ -189,23 +186,9 @@ def read_pdf(upload_id: str) -> str:
         Extracted text, or a STATUS= error marker on failure.
     """
     # ponytail: cache hit — second csv_inspect-style re-read is instant
-    try:
-        uid = str(upload_id or "").strip()
-        user_id = get_current_user_id() or ""
-        if uid and user_id:
-            p = FileStore(user_id).resolve_upload(uid)
-            if p is not None:
-                try:
-                    st = p.stat()
-                    key = f"{user_id}:{uid}:{st.st_mtime}:{st.st_size}"
-                    with _PDF_LOCK:
-                        hit = _PDF_CACHE.get(key)
-                    if hit is not None:
-                        return hit
-                except OSError:
-                    pass
-    except Exception:
-        pass
+    _hit = _PDF_CACHE.get(_PDF_CACHE.key_for(get_current_user_id(), upload_id))
+    if _hit is not None:
+        return _hit
     try:
         with obs_timed("pdf.parse") as rec:
             reader, total_pages, error = _resolve_reader(upload_id)
@@ -265,20 +248,7 @@ def read_pdf(upload_id: str) -> str:
                 )
             return "STATUS=EMPTY tool=read_pdf: no extractable text." + notes
         result = text + notes
-        try:
-            uid2 = str(upload_id or "").strip()
-            user_id2 = get_current_user_id() or ""
-            if uid2 and user_id2:
-                p2 = FileStore(user_id2).resolve_upload(uid2)
-                if p2 is not None:
-                    st2 = p2.stat()
-                    k2 = f"{user_id2}:{uid2}:{st2.st_mtime}:{st2.st_size}"
-                    with _PDF_LOCK:
-                        if len(_PDF_CACHE) >= _PDF_CACHE_MAX:
-                            _PDF_CACHE.pop(next(iter(_PDF_CACHE)))
-                        _PDF_CACHE[k2] = result
-        except Exception:
-            pass
+        _PDF_CACHE.set(_PDF_CACHE.key_for(get_current_user_id(), upload_id), result)
         return result
     except Exception as e:
         return f"STATUS=FAILED tool=read_pdf: {str(e)[:200]}"

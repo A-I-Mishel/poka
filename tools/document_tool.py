@@ -17,8 +17,6 @@ from typing import Any, Tuple
 
 from langchain_core.tools import tool
 
-import threading as _threading
-
 from services.context import get_current_user_id
 from services.files import FileStore
 from services.limits import (
@@ -30,11 +28,10 @@ from services.limits import (
     MAX_ZIP_UNCOMPRESSED_BYTES,
 )
 from services.obs import timed as obs_timed
+from tools.parse_cache import ParseCache
 
 # ponytail: mtime-keyed text cache — second read in same chat is RAM, not re-parse
-_DOC_CACHE: dict = {}
-_DOC_LOCK = _threading.Lock()
-_DOC_CACHE_MAX = 32
+_DOC_CACHE = ParseCache(32)
 
 _TEXT_EXTS = frozenset({
     "txt", "md", "markdown", "log", "json", "tsv",
@@ -694,23 +691,9 @@ def read_document(upload_id: str) -> str:
         Extracted text, or a STATUS= error marker on failure.
     """
     # ponytail: cache hit — second read is instant, no re-parse
-    try:
-        _uid = str(upload_id or "").strip()
-        _user = get_current_user_id() or ""
-        if _uid and _user:
-            _p = FileStore(_user).resolve_upload(_uid)
-            if _p is not None:
-                try:
-                    _st = _p.stat()
-                    _k = f"{_user}:{_uid}:{_st.st_mtime}:{_st.st_size}"
-                    with _DOC_LOCK:
-                        _hit = _DOC_CACHE.get(_k)
-                    if _hit is not None:
-                        return _hit
-                except OSError:
-                    pass
-    except Exception:
-        pass
+    _hit = _DOC_CACHE.get(_DOC_CACHE.key_for(get_current_user_id(), upload_id))
+    if _hit is not None:
+        return _hit
     try:
         with obs_timed("document.parse") as rec:
             path, ext, error = _resolve_document(upload_id)
@@ -763,20 +746,7 @@ def read_document(upload_id: str) -> str:
             text = text[:MAX_DOCUMENT_CHARS]
             note = "\n[Note: text truncated due to length.]"
         result = text + note
-        try:
-            _uid2 = str(upload_id or "").strip()
-            _user2 = get_current_user_id() or ""
-            if _uid2 and _user2:
-                _p2 = FileStore(_user2).resolve_upload(_uid2)
-                if _p2 is not None:
-                    _st2 = _p2.stat()
-                    _k2 = f"{_user2}:{_uid2}:{_st2.st_mtime}:{_st2.st_size}"
-                    with _DOC_LOCK:
-                        if len(_DOC_CACHE) >= _DOC_CACHE_MAX:
-                            _DOC_CACHE.pop(next(iter(_DOC_CACHE)))
-                        _DOC_CACHE[_k2] = result
-        except Exception:
-            pass
+        _DOC_CACHE.set(_DOC_CACHE.key_for(get_current_user_id(), upload_id), result)
         return result
     except Exception as e:
         return f"STATUS=FAILED tool=read_document: {str(e)[:200]}"

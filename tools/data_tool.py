@@ -3,17 +3,14 @@ import csv
 import io
 from typing import Any, Optional, Tuple, TYPE_CHECKING
 
-import threading as _threading
-
 from services.context import get_current_user_id
 from services.files import FileStore
 from services.limits import MAX_CSV_COLUMNS, MAX_CSV_PARSE_BYTES, MAX_CSV_ROWS, MAX_UPLOAD_BYTES
 from services.obs import timed as obs_timed
+from tools.parse_cache import ParseCache
 
 # ponytail: mtime-keyed DataFrame cache — second csv_inspect reuses parsed frame
-_CSV_CACHE: dict = {}
-_CSV_LOCK = _threading.Lock()
-_CSV_CACHE_MAX = 8
+_CSV_CACHE = ParseCache(8)
 
 if TYPE_CHECKING:  # pandas is imported lazily inside _load_csv_frame
     import pandas as pd
@@ -49,8 +46,7 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional["pd.DataFrame"], Optional[
         size = st.st_size
         mtime = st.st_mtime
         key = f"{user_id}:{upload_id}:{mtime}:{size}"
-        with _CSV_LOCK:
-            hit = _CSV_CACHE.get(key)
+        hit = _CSV_CACHE.get(key)
         if hit is not None:
             # hit is (df_copy, truncated) — return shallow copy to avoid caller mutation
             try:
@@ -120,14 +116,11 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional["pd.DataFrame"], Optional[
     if truncated:
         frame = frame.iloc[:MAX_CSV_ROWS]
     # cache for next csv_inspect in same chat
-    try:
-        if key:
-            with _CSV_LOCK:
-                if len(_CSV_CACHE) >= _CSV_CACHE_MAX:
-                    _CSV_CACHE.pop(next(iter(_CSV_CACHE)))
-                _CSV_CACHE[key] = (frame.copy(), truncated)
-    except Exception:
-        pass
+    if key:
+        try:
+            _CSV_CACHE.set(key, (frame.copy(), truncated))
+        except Exception:
+            pass
     return frame, None, truncated
 
 

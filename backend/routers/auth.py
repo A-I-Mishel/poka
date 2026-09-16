@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from backend import schemas
-from backend.deps import UserContext, current_user
+from backend.deps import UserContext, bearer_token, current_user
 from services import accounts as accounts_svc
 from services.accounts import (
     AccountAuthFailed,
@@ -53,15 +53,6 @@ def _auth_gate(request: Request) -> None:
             detail="Too many attempts, retry in %ds." % int(verdict.retry_after + 0.5),
             headers=rate_limit_headers(verdict, "auth"),
         )
-
-
-def _bearer(authorization: Optional[str]) -> Optional[str]:
-    if not authorization:
-        return None
-    scheme, _, value = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not value.strip():
-        return None
-    return value.strip()
 
 
 @router.post("/signup", response_model=schemas.SessionResponse, status_code=201)
@@ -133,7 +124,7 @@ def sessions(ctx: UserContext = Depends(current_user),
     """List this account's live sessions, newest first."""
     _require_account(ctx)
     return {"sessions": accounts_svc.list_sessions(ctx.user_id,
-                                                   _bearer(authorization))}
+                                                   bearer_token(authorization))}
 
 
 @router.post("/logout-all")
@@ -146,7 +137,7 @@ def logout_all(ctx: UserContext = Depends(current_user)):
 @router.post("/logout")
 def logout(authorization: Optional[str] = Header(default=None)):
     """Revoke the presenting session token (idempotent, always 200)."""
-    accounts_svc.logout(_bearer(authorization))
+    accounts_svc.logout(bearer_token(authorization))
     return {"ok": True}
 
 

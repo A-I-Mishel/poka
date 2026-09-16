@@ -225,7 +225,8 @@ def check_generate_limit(ctx: UserContext) -> None:
         )
 
 
-def _bearer_token(authorization: Optional[str]) -> Optional[str]:
+def bearer_token(authorization: Optional[str]) -> Optional[str]:
+    """Extract a Bearer token from an Authorization header (None when absent/malformed)."""
     if not authorization:
         return None
     scheme, _, value = authorization.partition(" ")
@@ -241,7 +242,7 @@ async def current_user(
 ) -> UserContext:
     """FastAPI dependency: authenticate and bind the request user."""
     try:
-        result = authenticate(_bearer_token(authorization))
+        result = authenticate(bearer_token(authorization))
     except AuthRequired as e:
         raise HTTPException(status_code=401, detail=str(e))
     if result.identity.source == "ephemeral":

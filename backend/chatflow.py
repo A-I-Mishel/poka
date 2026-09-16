@@ -297,40 +297,42 @@ def _resolve_attachments(ctx: UserContext,
     return attachments, image_ids
 
 
-def _recent_image_ids(ctx: UserContext,
-                        messages: List[Any],
-                        exclude: List[str],
-                        limit: int = MAX_IMAGE_ATTACHMENTS) -> List[str]:
-    """Recent owned image upload IDs from history (most-recent first source).
+def _iter_recent_valid_uploads(ctx: UserContext,
+                               messages: List[Any],
+                               exclude: List[str],
+                               kinds: tuple,
+                               limit: int,
+                               legacy_image: bool = False):
+    """Yield (uid, meta, declared_kind, entry) for recent owned uploads.
 
-    Follow-up questions ("can you read the image?") often arrive as a
-    separate text-only turn after the upload turn. Vision only sees the
-    current turn's IDs, so without this the image bytes never reach the
-    model and even Gemini honestly replies it cannot see anything.
-    Scans the last 10 messages for image attachments, validates
-    ownership + file presence, and returns up to `limit` IDs in
-    chronological order (never raises).
+    Shared core behind the image/document history scans: last 10
+    messages, most-recent first, skipping excluded/duplicates, validating
+    ownership (map, then registry fallback) and file presence (dir check,
+    then resolve fallback). Never raises (stops iteration on trouble).
     """
     excluded = set(str(i) for i in (exclude or []))
-    found: List[str] = []
+    seen: set = set()
+    count = 0
     try:
         mp = _upload_map(ctx)
         recent = [m for m in (messages or []) if isinstance(m, dict)][-10:]
         for msg in reversed(recent):
             atts = msg.get("attachments")
             if not isinstance(atts, list):
-                # Legacy single-image marker on old user messages.
-                legacy = msg.get("image")
-                candidates = [{"id": legacy, "kind": "image"}] if legacy else []
-            else:
-                candidates = atts
-            for entry in candidates:
+                if legacy_image:
+                    # Legacy single-image marker on old user messages.
+                    legacy = msg.get("image")
+                    atts = [{"id": legacy, "kind": "image"}] if legacy else []
+                else:
+                    continue
+            for entry in atts:
                 if not isinstance(entry, dict):
                     continue
                 uid = str(entry.get("id", "") or "")
-                if not uid or uid in excluded or uid in found:
+                if not uid or uid in excluded or uid in seen:
                     continue
-                if str(entry.get("kind", "") or "") != "image":
+                declared = str(entry.get("kind", "") or "")
+                if declared not in kinds:
                     continue
                 meta = mp.get(uid)
                 if meta is None:
@@ -351,11 +353,31 @@ def _recent_image_ids(ctx: UserContext,
                             continue
                     except (StorageError, FileValidationError):
                         continue
-                found.append(uid)
-                if len(found) >= limit:
-                    return list(reversed(found))
+                seen.add(uid)
+                yield uid, meta, declared, entry
+                count += 1
+                if count >= limit:
+                    return
     except Exception:
-        return list(reversed(found))[:limit]
+        return
+
+
+def _recent_image_ids(ctx: UserContext,
+                        messages: List[Any],
+                        exclude: List[str],
+                        limit: int = MAX_IMAGE_ATTACHMENTS) -> List[str]:
+    """Recent owned image upload IDs from history (most-recent first source).
+
+    Follow-up questions ("can you read the image?") often arrive as a
+    separate text-only turn after the upload turn. Vision only sees the
+    current turn's IDs, so without this the image bytes never reach the
+    model and even Gemini honestly replies it cannot see anything.
+    Scans the last 10 messages for image attachments, validates
+    ownership + file presence, and returns up to `limit` IDs in
+    chronological order (never raises).
+    """
+    found = [uid for uid, _meta, _kind, _entry
+             in _iter_recent_valid_uploads(ctx, messages, exclude, ("image",), limit, legacy_image=True)]
     return list(reversed(found))
 
 
@@ -373,53 +395,12 @@ def _recent_document_attachments(ctx: UserContext,
     messages, validates ownership + file presence, returns up to `limit`
     attachment dicts (never raises).
     """
-    excluded = set(str(i) for i in (exclude or []))
-    found: List[Dict[str, str]] = []
-    try:
-        mp = _upload_map(ctx)
-        recent = [m for m in (messages or []) if isinstance(m, dict)][-10:]
-        for msg in reversed(recent):
-            atts = msg.get("attachments")
-            if not isinstance(atts, list):
-                continue
-            for entry in atts:
-                if not isinstance(entry, dict):
-                    continue
-                uid = str(entry.get("id", "") or "")
-                if not uid or uid in excluded:
-                    continue
-                if any(d.get("id") == uid for d in found):
-                    continue
-                kind = str(entry.get("kind", "") or "")
-                if kind not in ("document", "pdf", "csv"):
-                    continue
-                meta = mp.get(uid)
-                if meta is None:
-                    try:
-                        meta = ctx.file_store.get_upload(uid)
-                    except (StorageError, FileValidationError):
-                        meta = None
-                    if meta is None:
-                        continue
-                try:
-                    cand = ctx.file_store.uploads_dir / getattr(meta, "stored_name", "")
-                    if not ctx.file_store._inside(ctx.file_store.uploads_dir, cand) or not cand.is_file():
-                        continue
-                except Exception:
-                    try:
-                        if ctx.file_store.resolve_upload(uid) is None:
-                            continue
-                    except (StorageError, FileValidationError):
-                        continue
-                found.append({
-                    "id": uid,
-                    "kind": str(getattr(meta, "kind", kind) or kind),
-                    "name": str(getattr(meta, "display_name", entry.get("name", "file")) or "file"),
-                })
-                if len(found) >= limit:
-                    return list(reversed(found))
-    except Exception:
-        return list(reversed(found))[:limit]
+    found = [{
+        "id": uid,
+        "kind": str(getattr(meta, "kind", declared) or declared),
+        "name": str(getattr(meta, "display_name", entry.get("name", "file")) or "file"),
+    } for uid, meta, declared, entry
+        in _iter_recent_valid_uploads(ctx, messages, exclude, ("document", "pdf", "csv"), limit)]
     return list(reversed(found))
 
 
