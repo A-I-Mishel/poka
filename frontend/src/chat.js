@@ -129,17 +129,20 @@ function msgEl(m, idx) {
 }
 var uploadBlobCache = {};
 var liveUploadUrls = {};
+var inflightImgs = {};
 function hydrateUploadImages() {
   chatCol.querySelectorAll("img[data-up]").forEach(function (im) {
     var id = im.getAttribute("data-up");
+    if (!id) return;
     function attach(blob) {
-      // Re-hydrating the same upload must not leak an object URL per render.
       if (liveUploadUrls[id]) URL.revokeObjectURL(liveUploadUrls[id]);
       var url = URL.createObjectURL(blob);
       liveUploadUrls[id] = url;
       im.src = url;
     }
     if (uploadBlobCache[id]) { attach(uploadBlobCache[id]); return; }
+    if (inflightImgs[id]) return;
+    inflightImgs[id] = true;
     fetch(apiUrl("/api/uploads/" + id + "/file"), { headers: authHeaders() }).then(function (res) {
       if (!res.ok) throw new Error("gone");
       return res.blob();
@@ -148,7 +151,7 @@ function hydrateUploadImages() {
       var keys = Object.keys(uploadBlobCache);
       if (keys.length > 50) delete uploadBlobCache[keys[0]];
       attach(blob);
-    }).catch(function () { im.remove(); });
+    }).catch(function () { im.remove(); }).finally(function () { delete inflightImgs[id]; });
   });
 }
 /* Regenerated replies: the backend appends each fresh answer, so a
@@ -238,10 +241,15 @@ function maybeScroll() {
 }
 function scrollBottom() { chatScroll.scrollTop = chatScroll.scrollHeight; }
 $("scrollBtn").addEventListener("click", function () { scrollBottom(); });
+var _scrollRaf = null;
 chatScroll.addEventListener("scroll", function () {
-  var far = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight > 250;
-  $("scrollBtn").classList.toggle("hidden", !far);
-});
+  if (_scrollRaf) return;
+  _scrollRaf = requestAnimationFrame(function () {
+    _scrollRaf = null;
+    var far = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight > 250;
+    $("scrollBtn").classList.toggle("hidden", !far);
+  });
+}, { passive: true });
 
 /* ---------- refresh from server ---------- */
 async function refreshChats() {
@@ -332,9 +340,25 @@ function streamInto(bodyEl, onMeta) {
       var decoder = new TextDecoder();
       var buf = "";
       var result = null;
+      var pendingText = null, raf = null;
+      function flushToken() {
+        raf = null;
+        if (pendingText !== null) {
+          bodyEl.innerHTML = md(pendingText) + '<span class="caret"></span>';
+          pendingText = null;
+          maybeScroll();
+        }
+      }
+      function scheduleToken(t) {
+        pendingText = t;
+        if (raf) return;
+        raf = requestAnimationFrame(flushToken);
+      }
       function pump() {
         return reader.read().then(function (step) {
           if (step.done) {
+            if (raf) { cancelAnimationFrame(raf); raf = null; }
+            if (pendingText !== null) { bodyEl.innerHTML = md(pendingText) + '<span class="caret"></span>'; pendingText = null; }
             if (!result) throw new Error("Stream ended without a result.");
             resolve(result);
             return;
@@ -348,13 +372,12 @@ function streamInto(bodyEl, onMeta) {
             var evt;
             try { evt = JSON.parse(line.slice(6)); } catch (e) { return; }
             if (evt.type === "meta" && onMeta) onMeta(evt);
-            else if (evt.type === "token") bodyEl.innerHTML = md(evt.text) + '<span class="caret"></span>';
-            else if (evt.type === "reset") bodyEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
-            else if (evt.type === "status") bodyEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span> ' + esc(evt.text || "");
+            else if (evt.type === "token") scheduleToken(evt.text);
+            else if (evt.type === "reset") { if (raf) { cancelAnimationFrame(raf); raf = null; pendingText = null; } bodyEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>'; }
+            else if (evt.type === "status") { if (raf) { cancelAnimationFrame(raf); raf = null; pendingText = null; } bodyEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span> ' + esc(evt.text || ""); }
             else if (evt.type === "done") result = evt.result;
             else if (evt.type === "error") throw new Error(evt.detail || "Stream error");
           });
-          maybeScroll();
           return pump();
         });
       }
@@ -440,9 +463,14 @@ $("sendBtn").addEventListener("click", send);
 input.addEventListener("keydown", function (e) {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
+var _inputRaf = null;
 input.addEventListener("input", function () {
-  input.style.height = "auto";
-  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  if (_inputRaf) cancelAnimationFrame(_inputRaf);
+  _inputRaf = requestAnimationFrame(function () {
+    _inputRaf = null;
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  });
 });
 
 /* ---------- message actions ---------- */
@@ -715,7 +743,8 @@ $("addProjBtn").addEventListener("click", function () {
     } catch (err) { toast("Cannot create project: " + err.message); }
   });
 });
-$("sideSearch").addEventListener("input", renderRecents);
+function debounce(fn, ms) { var t; return function () { var a = arguments, c = this; clearTimeout(t); t = setTimeout(function () { fn.apply(c, a); }, ms); }; }
+$("sideSearch").addEventListener("input", debounce(renderRecents, 150));
 $("ctxRename").addEventListener("click", function () {
   $("ctxMenu").classList.add("hidden");
   var c = chats.filter(function (x) { return x && x.id === ctxId; })[0];

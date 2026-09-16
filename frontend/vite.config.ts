@@ -7,4 +7,14 @@ export default defineConfig({
       "/api": "http://localhost:8000",
     },
   },
+  build: {
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          panels: ["./src/panels.js"],
+        },
+      },
+    },
+  },
 });
