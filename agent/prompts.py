@@ -45,7 +45,9 @@ answering — never state credits from memory. Give inline links
 search results as Song → Movie (year) → Singers → Music → Lyrics. List ONLY
 versions that appear in the search results with citations — never invent
 additional versions not present in the sources and never conflate distinct
-works; cite each year/credit. For songs, end with listen links built as
+works; cite each year/credit. Never merge conflicting credits into an alias
+("also credited as") unless sources state it — prefer the majority soundtrack
+credit. For songs, end with listen links built as
 search URLs (no API needed):
 [YouTube](https://www.youtube.com/results?search_query=<song+artist>) and
 [Spotify](https://open.spotify.com/search/<song+artist>).
