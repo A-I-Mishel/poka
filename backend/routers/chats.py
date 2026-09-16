@@ -1,7 +1,5 @@
 """Conversation history endpoints (mirrors sidebar chat semantics)."""
 
-from typing import Any, Dict, List
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend import schemas
@@ -60,7 +58,9 @@ def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_us
         except ValueError:
             current = []
         else:
-            chats = [record] + list(chats)
+            # ponytail: keep recents stable — same id replaces, not duplicates
+            deduped = [c for c in chats if not (isinstance(c, dict) and c.get("id") == record.get("id"))]
+            chats = [record] + deduped
             if len(chats) > MAX_STORED_CHATS:
                 dropped = len(chats) - MAX_STORED_CHATS
                 del chats[MAX_STORED_CHATS:]
@@ -75,31 +75,54 @@ def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_us
 def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_user)):
     """Adopt an archived chat as the open conversation.
 
-    Same semantics as the sidebar: the selected record leaves history,
-    the previously open conversation is archived first.
+    Recents stay in order (newest on top). Browsing does not reorder:
+    the selected chat becomes current, history order is preserved.
+    Only an unsaved current (diverged from any archived chat) is
+    archived to the top so recently edited chats surface.
     """
     _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
     selected = None
-    rest: List[Dict[str, Any]] = []
-    for chat in chats:
-        if selected is None and isinstance(chat, dict) and str(chat.get("id", "")) == body.id:
-            selected = chat
-        else:
-            rest.append(chat)
+    for c in chats:
+        if isinstance(c, dict) and str(c.get("id", "")) == body.id:
+            selected = c
+            break
     if selected is None:
         raise HTTPException(status_code=404, detail="Chat not found.")
+    # ponytail: keep recents stable on browse; only archive current if it
+    # has diverged from every archived chat (unsaved edit/new chat).
     if [m for m in current if isinstance(m, dict)]:
-        try:
-            record, _ = archive_current(
-                current,
-                selected.get("project_id") if isinstance(selected, dict) else None)
-            rest = [record] + rest
-        except ValueError:
-            pass
+        already_saved = any(
+            isinstance(c, dict) and c.get("messages") == current for c in chats
+        )
+        if not already_saved:
+            # reuse origin id when current is an edited version of an existing chat
+            origin_id = None
+            best_len = -1
+            for c in chats:
+                msgs = c.get("messages") if isinstance(c, dict) else None
+                if isinstance(msgs, list) and len(msgs) <= len(current) and current[:len(msgs)] == msgs:
+                    if len(msgs) > best_len:
+                        best_len = len(msgs)
+                        origin_id = c.get("id") if isinstance(c, dict) else None
+            try:
+                record, _ = archive_current(
+                    current,
+                    selected.get("project_id") if isinstance(selected, dict) else None,
+                    origin_id)
+                # same id replaces and moves to top; new id prepends
+                if not any(isinstance(c, dict) and c.get("id") == record.get("id") for c in chats):
+                    chats = [record] + chats
+                else:
+                    chats = [record] + [c for c in chats if c.get("id") != record.get("id")]
+                if len(chats) > MAX_STORED_CHATS:
+                    del chats[MAX_STORED_CHATS:]
+            except ValueError:
+                pass
     messages = selected.get("messages", []) if isinstance(selected, dict) else []
-    ctx.user_store.save_chats(rest, messages if isinstance(messages, list) else [])
-    return {"chats": rest, "current": messages}
+    # ponytail: do not pop selected from history — recents stay stable, newer on top
+    ctx.user_store.save_chats(chats, messages if isinstance(messages, list) else [])
+    return {"chats": chats, "current": messages}
 
 
 @router.get("/{chat_id}/messages")
