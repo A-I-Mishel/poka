@@ -131,16 +131,15 @@ def pprof_cpu_profile(seconds: int = 30, ctx: UserContext = Depends(current_user
 
 @router.get("/debug/pprof/heap")
 def pprof_heap_profile(ctx: UserContext = Depends(current_user)):
-    """Heap profile via tracemalloc (built-in)."""
-    import tracemalloc
-    tracemalloc.start()
-    # Take snapshot
-    snapshot = tracemalloc.take_snapshot()
-    top_stats = snapshot.statistics("lineno")
-    tracemalloc.stop()
+    """Heap profile via an external profiler (tracemalloc intentionally not used).
+
+    A per-request tracemalloc start/snapshot/stop would only capture
+    microseconds of allocations (near-useless data) while disturbing
+    global tracer state and burning CPU on every hit — so this endpoint
+    documents the capability like the CPU one above; actual profiling
+    is done externally (py-spy sidecar, memray).
+    """
     return {
-        "top_allocations": [
-            {"file": str(stat.traceback[0].filename), "line": stat.traceback[0].lineno, "size_bytes": stat.size}
-            for stat in top_stats[:20]
-        ]
+        "message": "Heap profiling is done externally; this endpoint takes no snapshots",
+        "example": "py-spy dump --pid <pid> / memray run -o /tmp/out.bin uvicorn backend.main:app",
     }

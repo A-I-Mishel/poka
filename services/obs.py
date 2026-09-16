@@ -46,6 +46,7 @@ def record_http_request(method: str, endpoint: str, status_code: int, duration_s
 
 
 def set_active_connections(delta: int) -> None:
+    """Adjust the active-connections gauge by delta (+1 on entry, -1 on exit)."""
     HTTP_ACTIVE_CONNECTIONS.inc(delta)
 
 

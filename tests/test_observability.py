@@ -81,9 +81,10 @@ def test_detailed_health_private_requires_auth(client, monkeypatch):
 
 
 def test_debug_heap_open_mode(client):
+    # Doc stub (like the CPU profile endpoint): guidance, no live snapshot.
     res = client.get("/api/debug/pprof/heap")
     assert res.status_code == 200
-    assert "top_allocations" in res.json()
+    assert "message" in res.json()
 
 
 def test_redis_client_none_when_unconfigured(monkeypatch):
