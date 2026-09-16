@@ -33,7 +33,8 @@ from services.files import FileStore
 from services.identity import AuthRequired, UserIdentity
 from services.limits import STORAGE_HYGIENE_INTERVAL_SECONDS
 from services.memory import set_memory_dir
-from services.ratelimit import extract_client_ip, limit_key_for
+from services.obs import event as obs_event
+from services.ratelimit import extract_client_ip, get_rate_limiter, limit_key_for, rate_limit_headers
 from services.storage import UserStore
 
 # Client-minted visitor ids (open mode only): strict shape so the
@@ -209,6 +210,19 @@ class UserContext:
     limiter checks, or limits will not bind across requests."""
     source: str = ""
     """Identity source: "env" | "token" | "account" (stable) or "ephemeral"."""
+
+
+def check_generate_limit(ctx: UserContext) -> None:
+    """Enforce generate rate limits; raises HTTPException(429)."""
+    verdict = get_rate_limiter().check(ctx.limit_key or ctx.user_id, "generate")
+    if not verdict.allowed:
+        obs_event("ratelimit.deny", action="generate", user=ctx.user_id,
+                  retry_after_s=round(verdict.retry_after, 1))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Generate rate limit exceeded, retry in {verdict.retry_after:.0f}s.",
+            headers=rate_limit_headers(verdict, "generate"),
+        )
 
 
 def _bearer_token(authorization: Optional[str]) -> Optional[str]:

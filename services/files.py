@@ -93,6 +93,28 @@ def sanitize_filename(name: Any) -> str:
     return text[:MAX_FILENAME_LEN]
 
 
+def sanitize_download_filename(name: Any, fallback: str = "file") -> str:
+    """Sanitize a name for Content-Disposition (RFC 6266/5987).
+
+    Strips NUL/controls, quotes, semicolons, path separators, and
+    truncates (preserving the extension) — defense-in-depth even though
+    display names were sanitized at write time (legacy rows bypass).
+    """
+    tmp = str(name or fallback).replace("\x00", "").replace("\\", "_").replace("/", "_")
+    tmp = re.sub(r'[\x00-\x1f\x7f]', '', tmp)
+    tmp = tmp.replace('"', '').replace(";", "_").replace("\r", "").replace("\n", "").strip(" .")
+    if not tmp:
+        tmp = fallback
+    if len(tmp) > MAX_FILENAME_LEN:
+        if "." in tmp:
+            base, ext = tmp.rsplit(".", 1)
+            ext = ext[:10]
+            tmp = base[: MAX_FILENAME_LEN - len(ext) - 1] + "." + ext
+        else:
+            tmp = tmp[:MAX_FILENAME_LEN]
+    return tmp
+
+
 def kind_for_ext(ext: str) -> str:
     """Map a validated extension to an attachment kind."""
     if ext == "pdf":
