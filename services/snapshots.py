@@ -197,13 +197,28 @@ def _local_data_partial(root: Optional[Path] = None) -> bool:
     The unambiguous partial-wipe signal: `accounts.json` still exists but
     says users should be here, while data/users/ is missing or empty. The
     inverse (users present, no accounts.json) is the *normal* open-mode
-    layout, so it is never treated as partial — otherwise open-mode
-    installs could never upload a snapshot.
+    layout, so it is never treated as partial there — otherwise open-mode
+    installs could never upload a snapshot. In private mode the registry
+    is required, so users without it means a half-wiped disk: suppress
+    the upload instead of overwriting a good remote with an
+    account-less image.
     """
     base = root or _data_root()
     try:
         if not (base / "accounts.json").exists():
-            return False
+            try:
+                from services.identity import auth_mode
+
+                private = auth_mode() == "private"
+            except Exception:
+                private = False
+            if not private:
+                return False
+            users = base / "users"
+            try:
+                return users.is_dir() and any(users.iterdir())
+            except OSError:
+                return True
         users = base / "users"
         if not users.is_dir():
             return True

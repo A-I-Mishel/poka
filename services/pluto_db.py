@@ -224,6 +224,7 @@ def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
     try:
         with _connect(user_id) as conn:
             # Defense in depth: authorizer denies any non-read operation even if regex misses.
+            # Fail closed: if the authorizer cannot be installed, abort the query.
             try:
                 def _authorizer(action: int, _a: Any, _b: Any, _dbname: Any, _src: Any) -> int:
                     # Allow SELECT (21), READ (20), and EXPLAIN's internal reads.
@@ -234,8 +235,8 @@ def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
                     return sqlite3.SQLITE_OK if action in allowed else sqlite3.SQLITE_DENY
 
                 conn.set_authorizer(_authorizer)  # type: ignore[arg-type]
-            except Exception:
-                pass
+            except Exception as e:
+                return {"error": _safe_db_error("query (authorizer setup failed)", e)}
             cur = conn.execute(text)
             cols = [d[0] for d in (cur.description or [])]
             rows = cur.fetchmany(max(1, min(int(max_rows or 200), MAX_ROWS)))

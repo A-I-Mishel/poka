@@ -295,8 +295,11 @@ class FileStore:
             raise StorageError(f"Cannot read {path.name}: storage failure ({e}).") from e
         except ValueError:
             try:
-                backup = path.with_name(f"{path.stem}.corrupt-{int(time.time())}{path.suffix}")
-                os.replace(path, backup)
+                stamp = "%d-%s" % (int(time.time() * 1000), uuid.uuid4().hex[:8])
+                backup = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
+                with path_lock(path):
+                    if path.exists():
+                        os.replace(path, backup)
             except OSError:
                 pass
             obs_event("storage.quarantine", file=path.name)
@@ -318,8 +321,9 @@ class FileStore:
                 raise StorageError(f"Cannot read {path.name}: storage failure ({e}).") from e
             except ValueError:
                 try:
+                    stamp = "%d-%s" % (int(time.time() * 1000), uuid.uuid4().hex[:8])
                     backup = path.with_name(
-                        f"{path.stem}.corrupt-{int(time.time())}{path.suffix}"
+                        f"{path.stem}.corrupt-{stamp}{path.suffix}"
                     )
                     os.replace(path, backup)
                 except OSError:

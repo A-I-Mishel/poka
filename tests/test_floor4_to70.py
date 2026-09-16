@@ -152,11 +152,11 @@ def test_pptx_xlsx_truncate_and_error(tmp_path, monkeypatch):
 def test_document_no_user_and_stat_and_unsupported(tmp_path, monkeypatch):
     from tools.document_tool import read_document
 
-    # no user -> INVALID
+    # no user -> DENIED (unified no-user vocabulary)
     ctx.set_current_user_id(None)
     try:
         out = read_document.invoke({"upload_id": "a" * 16})
-        assert out.startswith("STATUS=INVALID")
+        assert out.startswith("STATUS=DENIED")
         assert "no user" in out.lower()
     finally:
         ctx.set_current_user_id("floor4-user")
@@ -264,7 +264,7 @@ def test_data_tool_cap_and_resolve(monkeypatch, tmp_path):
     ctx.set_current_user_id(None)
     try:
         df, err, trunc = _load_csv_frame("a" * 16)
-        assert err.startswith("STATUS=INVALID")
+        assert err.startswith("STATUS=DENIED")
     finally:
         ctx.set_current_user_id("floor4-user")
 

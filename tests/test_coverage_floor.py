@@ -64,7 +64,7 @@ def test_analyze_csv_no_user_invalid():
         out = analyze_csv.invoke({"upload_id": "0" * 16})
     finally:
         ctx.set_current_user_id("floor-user")
-    assert out.startswith("STATUS=INVALID")
+    assert out.startswith("STATUS=DENIED")
 
 
 def test_csv_inspect_ops():

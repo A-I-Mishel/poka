@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend import schemas
 from backend.deps import UserContext, current_user
-from services.storage import StorageError
+from services.storage import StorageError, WorkflowNotFoundError
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -21,8 +21,8 @@ def list_workflows(ctx: UserContext = Depends(current_user)):
     """List saved pipelines (newest first)."""
     try:
         return {"workflows": ctx.user_store.list_workflows()}
-    except StorageError as e:
-        raise HTTPException(status_code=500, detail=f"Could not load workflows: {e}")
+    except StorageError:
+        raise HTTPException(status_code=500, detail="Could not load workflows.")
     except Exception:
         raise HTTPException(status_code=500, detail="Could not load workflows.")
 
@@ -40,8 +40,8 @@ def create_workflow(body: schemas.WorkflowCreate,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except StorageError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except StorageError:
+        raise HTTPException(status_code=500, detail="Could not save workflow.")
     except Exception:
         raise HTTPException(status_code=500, detail="Could not save workflow.")
 
@@ -72,12 +72,12 @@ def update_workflow(workflow_id: str, body: schemas.WorkflowUpdate,
             body.description,
             _known_tools(),
         )
+    except WorkflowNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
-        msg = str(e)
-        raise HTTPException(
-            status_code=404 if msg == "Workflow not found." else 400, detail=msg)
-    except StorageError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except StorageError:
+        raise HTTPException(status_code=500, detail="Could not update workflow.")
     except Exception:
         raise HTTPException(status_code=500, detail="Could not update workflow.")
 

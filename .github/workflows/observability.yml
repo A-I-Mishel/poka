@@ -1,0 +1,61 @@
+name: Observability & Profiling
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * 0"  # Weekly profiling
+
+jobs:
+  test-with-profiling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install py-spy scalene
+
+      - name: Run tests with py-spy
+        run: |
+          py-spy record -o profile.pb.gz --rate 100 -- pytest -q --tb=short
+        env:
+          PLUTO_AUTH_MODE: open
+
+      - name: Run scalene profile (subset)
+        run: |
+          scalene --json --outfile scalene.json -m pytest tests/test_benchmarks.py -q
+        continue-on-error: true
+
+      - name: Upload profiles
+        uses: actions/upload-artifact@v4
+        with:
+          name: profiles
+          path: |
+            profile.pb.gz
+            scalene.json
+          retention-days: 7
+
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: test-with-profiling
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t pluto:test .
+      - name: Smoke test
+        run: |
+          docker run -d --name pluto -p 8000:8000 -e PLUTO_AUTH_MODE=open pluto:test
+          sleep 5
+          curl -f http://localhost:8000/api/health
+          curl -f http://localhost:8000/api/metrics | head -20
+          docker stop pluto

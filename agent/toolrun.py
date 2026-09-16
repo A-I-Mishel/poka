@@ -25,6 +25,7 @@ from services.limits import (
     MAX_QUERY_CHARS,
     MAX_TOOL_RESULT_TOKENS,
     MAX_TOOL_ROUNDS,
+    SYNTHESIS_TIMEOUT_SECONDS,
     TOOL_TIMEOUT_SECONDS,
 )
 from services.obs import (
@@ -659,7 +660,7 @@ def run_tool_loop(
         final = agent._invoke_bounded(
             last_llm,
             synthesis_messages,
-            timeout=60.0,
+            timeout=SYNTHESIS_TIMEOUT_SECONDS,
             budget=budget,
             on_token=live,
             tier_name=round_tier,
@@ -684,7 +685,7 @@ def run_tool_loop(
                     final = agent._invoke_bounded(
                         synthesis_llm,
                         synthesis_messages,
-                        timeout=60.0,
+                        timeout=SYNTHESIS_TIMEOUT_SECONDS,
                         budget=budget,
                         on_token=live,
                         tier_name=synthesis_tier,

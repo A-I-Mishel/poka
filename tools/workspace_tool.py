@@ -11,10 +11,8 @@ absolute paths or upload IDs. Results carry STATUS= markers.
 
 from langchain_core.tools import tool
 
-from services.context import get_current_user_id, get_limit_key
 from services.identity import auth_mode
 from services.obs import event as obs_event
-from services.ratelimit import get_rate_limiter
 from services.storage import StorageError
 from services.workspace import (
     delete_workspace_file,
@@ -22,13 +20,11 @@ from services.workspace import (
     read_workspace_file,
     write_workspace_file,
 )
+from tools.gating import claim_tool_slot
 
 
 def _need_user(tool_name: str):
-    user_id = get_current_user_id()
-    if not user_id:
-        return None, f"STATUS=DENIED tool={tool_name}: no user context."
-    return user_id, ""
+    return claim_tool_slot(tool_name, "code", "code")
 
 
 def _need_private(tool_name: str, action: str = "code"):
@@ -39,16 +35,7 @@ def _need_private(tool_name: str, action: str = "code"):
             f"STATUS=DENIED tool={tool_name}: workspace writes are disabled "
             "in open mode. Set PLUTO_AUTH_MODE=private (trusted/owner use only)."
         )
-    user_id, err = _need_user(tool_name)
-    if user_id is None:
-        return None, err
-    verdict = get_rate_limiter().check(get_limit_key() or user_id, "code")
-    if not verdict.allowed:
-        return None, (
-            f"STATUS=DENIED tool={tool_name}: code rate limit exceeded, "
-            f"retry in {verdict.retry_after:.0f}s."
-        )
-    return user_id, ""
+    return claim_tool_slot(tool_name, "code", "code")
 
 
 @tool

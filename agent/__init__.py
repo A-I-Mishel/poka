@@ -20,8 +20,6 @@ from agent.budget import BudgetExhausted, RequestBudget
 from agent.cascade import (
     ROUTER_STATS,
     SKIP_AFTER_FAILS,
-    SKIP_SECONDS,
-    SKIP_SECONDS_PERMANENT,
     _friendly_cascade_error,
     _friendly_reason,
     _ordered_tiers,
@@ -95,8 +93,6 @@ __all__ = [
     "REFLECTION_ENABLED",
     "ROUTER_STATS",
     "SKIP_AFTER_FAILS",
-    "SKIP_SECONDS",
-    "SKIP_SECONDS_PERMANENT",
     "TIER_AGENT_GETTERS",
     "TOOL_MAP",
     "RequestBudget",

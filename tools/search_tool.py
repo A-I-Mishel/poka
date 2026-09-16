@@ -397,18 +397,17 @@ def web_search(query: str) -> str:
     query = str(query or "")[:MAX_QUERY_CHARS]
     if not query.strip():
         return "STATUS=INVALID tool=web_search: empty query."
-    user_id = get_current_user_id()
-    if user_id:
-        verdict = get_rate_limiter().check(get_limit_key() or user_id, "search")
-        if not verdict.allowed:
-            obs_event(
-                "ratelimit.deny", action="search", user=user_id,
-                retry_after_s=round(verdict.retry_after, 1),
-            )
-            return (
-                "STATUS=DENIED tool=web_search: search rate limit exceeded, "
-                f"retry in {verdict.retry_after:.0f}s."
-            )
+    limit_key = get_limit_key() or get_current_user_id() or "anon"
+    verdict = get_rate_limiter().check(limit_key, "search")
+    if not verdict.allowed:
+        obs_event(
+            "ratelimit.deny", action="search", user=limit_key,
+            retry_after_s=round(verdict.retry_after, 1),
+        )
+        return (
+            "STATUS=DENIED tool=web_search: search rate limit exceeded, "
+            f"retry in {verdict.retry_after:.0f}s."
+        )
     try:
         formatted, _sources = search_sources(query)
         if not formatted:

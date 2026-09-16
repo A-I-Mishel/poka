@@ -15,12 +15,8 @@ source = ["backend", "services", "agent", "tools", "config"]
 omit = [
   "tests/*",
   "*/__init__.py",
-  # Parked WIP — SQLite/migration world not yet landed (omit from floor)
+  # FAISS index is best-effort WIP (omit from floor)
   "services/kb_index.py",
-  "services/sqlite_store.py",
-  "services/store_router.py",
-  "services/rollback.py",
-  "config/migration.py",
   "scripts/*",
 ]
 

@@ -10,30 +10,15 @@ import logging
 from langchain_core.tools import tool
 
 from services import pluto_db as db
-from services.context import get_current_user_id, get_limit_key
 from services.files import FileStore
-from services.obs import event as obs_event
-from services.ratelimit import get_rate_limiter
+from tools.gating import claim_tool_slot
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _gate(tool_name: str):
     """User context + rate check, or (None, error)."""
-    user_id = get_current_user_id()
-    if not user_id:
-        return None, f"STATUS=DENIED tool={tool_name}: no user context."
-    verdict = get_rate_limiter().check(get_limit_key() or user_id, "database")
-    if not verdict.allowed:
-        obs_event(
-            "ratelimit.deny", action="database", tool=tool_name, user=user_id,
-            retry_after_s=round(verdict.retry_after, 1),
-        )
-        return None, (
-            f"STATUS=DENIED tool={tool_name}: Database rate limit exceeded, "
-            f"retry in {verdict.retry_after:.0f}s."
-        )
-    return user_id, ""
+    return claim_tool_slot(tool_name, "database", "Database")
 
 
 @tool

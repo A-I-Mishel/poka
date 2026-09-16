@@ -110,7 +110,7 @@ def _resolve_document(upload_id: str):
     """Resolve upload ID to (path, ext, None) or (None, '', STATUS=...)."""
     user_id = get_current_user_id()
     if not user_id:
-        return None, "", "STATUS=INVALID tool=read_document: no user context, cannot resolve uploads."
+        return None, "", "STATUS=DENIED tool=read_document: no user context, cannot resolve uploads."
     meta = FileStore(user_id).get_upload(upload_id)
     if meta is None:
         return None, "", "STATUS=DENIED tool=read_document: unknown upload ID or not owned by you."

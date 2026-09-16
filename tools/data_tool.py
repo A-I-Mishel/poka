@@ -40,7 +40,7 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional["pd.DataFrame"], Optional[
 
     user_id = get_current_user_id()
     if not user_id:
-        return None, "STATUS=INVALID tool=csv: no user context, cannot resolve uploads.", False
+        return None, "STATUS=DENIED tool=csv: no user context, cannot resolve uploads.", False
     path = FileStore(user_id).resolve_upload(upload_id)
     if path is None:
         return None, "STATUS=DENIED tool=csv: unknown upload ID or not owned by you.", False

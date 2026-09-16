@@ -33,17 +33,9 @@ load_tests/
 .ruff_cache/
 .venv/
 
-# Parked WIP — SQLite/migration + chaos/infra not yet landed (omit from coverage floor, hidden from status)
-services/kb_index.py
-services/sqlite_store.py
-services/store_router.py
-services/rollback.py
-config/migration.py
-scripts/migrate_to_sqlite.py
-scripts/validate_migration.py
+# Generated/local artifacts (never commit)
 chaos/
 load-test/
 locustfile.py
 observability/
 .github/workflows/load-test.yml
-.github/workflows/observability.yml

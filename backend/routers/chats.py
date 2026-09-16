@@ -6,24 +6,9 @@ from backend import schemas
 from backend.chatflow import archive_current
 from backend.deps import UserContext, current_user
 from services.limits import MAX_CHAT_TITLE_CHARS
-from services.obs import event as obs_event
-from services.ratelimit import get_rate_limiter, rate_limit_headers
 from services.storage import MAX_STORED_CHATS, StorageError
 
 router = APIRouter(prefix="/api/chats", tags=["chats"])
-
-
-def _check_chat_rate_limit(ctx: UserContext) -> None:
-    """Enforce chat rate limits; raises HTTPException(429)."""
-    verdict = get_rate_limiter().check(ctx.limit_key or ctx.user_id, "chat")
-    if not verdict.allowed:
-        obs_event("ratelimit.deny", action="chat", user=ctx.user_id,
-                  retry_after_s=round(verdict.retry_after, 1))
-        raise HTTPException(
-            status_code=429,
-            detail=f"Chat rate limit exceeded, retry in {verdict.retry_after:.0f}s.",
-            headers=rate_limit_headers(verdict, "chat"),
-        )
 
 
 def _sort_key(chat):
@@ -49,7 +34,6 @@ def _load(ctx: UserContext):
 @router.get("", response_model=schemas.ChatsResponse)
 def list_chats(ctx: UserContext = Depends(current_user)):
     """Return archived chats plus the open conversation."""
-    _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
     return {"chats": chats, "current": current}
 
@@ -57,7 +41,6 @@ def list_chats(ctx: UserContext = Depends(current_user)):
 @router.post("/new", response_model=schemas.ChatsResponse)
 def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_user)):
     """Archive the open conversation (if any) and start fresh."""
-    _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
     warnings: list = []
     if [m for m in current if isinstance(m, dict)]:
@@ -91,7 +74,6 @@ def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_
     chat) is archived with a fresh updated_at so recently edited
     chats surface on top.
     """
-    _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
     selected = None
     for c in chats:
@@ -144,7 +126,6 @@ def chat_messages(chat_id: str, ctx: UserContext = Depends(current_user)):
     Strictly read-only: stored state is untouched, so exporting any chat
     from the sidebar never disturbs the open conversation.
     """
-    _check_chat_rate_limit(ctx)
     chats, _current = _load(ctx)
     for chat in chats:
         if isinstance(chat, dict) and str(chat.get("id", "")) == chat_id:
@@ -161,7 +142,6 @@ def chat_messages(chat_id: str, ctx: UserContext = Depends(current_user)):
 def rename_chat(chat_id: str, body: schemas.RenameRequest,
                 ctx: UserContext = Depends(current_user)):
     """Rename an archived conversation."""
-    _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
     found = False
     for chat in chats:
@@ -177,7 +157,6 @@ def rename_chat(chat_id: str, body: schemas.RenameRequest,
 @router.delete("/{chat_id}", response_model=schemas.ChatsResponse)
 def delete_chat(chat_id: str, ctx: UserContext = Depends(current_user)):
     """Delete an archived conversation."""
-    _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
     kept = [c for c in chats
             if not (isinstance(c, dict) and str(c.get("id", "")) == chat_id)]
@@ -190,7 +169,6 @@ def delete_chat(chat_id: str, ctx: UserContext = Depends(current_user)):
 @router.delete("", response_model=schemas.ChatsResponse)
 def clear_current(ctx: UserContext = Depends(current_user)):
     """Clear the open conversation without archiving (fresh start)."""
-    _check_chat_rate_limit(ctx)
     chats, _current = _load(ctx)
     ctx.user_store.save_chats(chats, [])
     return {"chats": chats, "current": []}
@@ -203,7 +181,6 @@ def truncate_current(body: schemas.TruncateRequest,
 
     Keeps messages[:index]; used to re-draft a user message and resend.
     """
-    _check_chat_rate_limit(ctx)
     chats, current = _load(ctx)
     if not (0 <= int(body.index) <= len(current)):
         raise HTTPException(status_code=400, detail="Nothing to edit.")

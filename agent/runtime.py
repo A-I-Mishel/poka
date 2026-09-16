@@ -31,7 +31,7 @@ from services.memory import (
 from services.obs import event as obs_event, trace_llm_call
 
 from agent.budget import BudgetExhausted, RequestBudget
-from agent.cascade import ROUTER_STATS, _run_cascade_step, _run_cascade_step_async, _usable_tiers
+from agent.cascade import ROUTER_STATS, _run_cascade_step, _usable_tiers
 from agent.executor import TokenStream
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.planning import plan_then_execute
@@ -42,29 +42,6 @@ from agent.toolrun import MAX_TOOL_ROUNDS, run_tool_loop
 from agent.vision import _try_vision_answer
 
 logger = logging.getLogger(__name__)
-
-# Helper to run async cascade step from synchronous context
-def _run_cascade_step_sync(
-    fn: Callable[[str, BaseLanguageModel], Any],
-    first: Optional[str] = None,
-    tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
-    attempts: Optional[List[str]] = None,
-) -> Tuple[str, Any]:
-    """Run the async cascade step from synchronous context."""
-    try:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If we're in a running loop, create a new task and wait
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(asyncio.run, _run_cascade_step_async(fn, first, tiers, attempts))
-                return future.result(timeout=120)
-        else:
-            return asyncio.run(_run_cascade_step_async(fn, first, tiers, attempts))
-    except RuntimeError:
-        # No event loop, create new one
-        return asyncio.run(_run_cascade_step_async(fn, first, tiers, attempts))
 
 MAX_HISTORY_MESSAGES: int = 6
 
@@ -108,6 +85,7 @@ def summarize_history(
     llm_instance: BaseLanguageModel,
     max_messages: int = MAX_HISTORY_MESSAGES,
     budget: Optional[RequestBudget] = None,
+    tier_name: Optional[str] = None,
 ) -> List[BaseMessage]:
     """Keep the last N messages verbatim; summarize older ones into context."""
     if len(messages) <= max_messages:
@@ -128,7 +106,7 @@ def summarize_history(
         CTX_SUMMARY_TOKENS,
     )
     summary_response = agent._invoke_bounded(
-        llm_instance, [HumanMessage(content=summary_prompt)], budget=budget
+        llm_instance, [HumanMessage(content=summary_prompt)], budget=budget, tier_name=tier_name
     )
     summary = _as_text(summary_response.content)
 
@@ -290,7 +268,7 @@ def answer_with_fallback(
         ROUTER_STATS["llm"] += 1
         try:
             _, task_type = _run_cascade_step(
-                lambda _name, llm: classify_task(user_input, llm, budget), first, tiers
+                lambda _name, llm: classify_task(user_input, llm, budget, tier_name=_name), first, tiers
             )
         except (RuntimeError, BudgetExhausted):
             # Classifier is down: fall back to the cheapest path (a
@@ -307,7 +285,7 @@ def answer_with_fallback(
                 langchain_history = cached
             else:
                 def _summarize(_name: str, llm: BaseLanguageModel) -> List[BaseMessage]:
-                    return summarize_history(history_list, llm, budget=budget)
+                    return summarize_history(history_list, llm, budget=budget, tier_name=_name)
 
                 with trace_llm_call(request_id, "summarize", "summarize") as _:
                     _, langchain_history = _run_cascade_step(_summarize, first, tiers)
@@ -319,8 +297,30 @@ def answer_with_fallback(
     except (RuntimeError, BudgetExhausted):
         langchain_history = history
 
+    def _size_llm_for_task(tier_name: str, llm: BaseLanguageModel) -> BaseLanguageModel:
+        # Task temperature via a cached client for (tier, temperature):
+        # cached instances are never mutated (thread-safe sharing). Only
+        # for the default cascade table -- a caller-supplied tiers table
+        # owns its instances, so those are used exactly as given (with
+        # the historical temperature hint) and never swapped for real
+        # clients, even on a name collision.
+        if tiers is None:
+            try:
+                sized = get_tier_llm(tier_name, temperature=TASK_TEMPERATURES.get(task_type, 0.5))
+            except Exception:
+                sized = None
+            if sized is not None:
+                return sized
+            return llm
+        try:
+            llm.temperature = TASK_TEMPERATURES.get(task_type, 0.5)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return llm
+
     if task_type == "simple":
         def _answer_direct(_name: str, llm: BaseLanguageModel) -> str:
+            llm = _size_llm_for_task(_name, llm)
             system_text = _build_system_prompt(
                 combined_notes, relevant_context, project_context, simple=True)
             with trace_llm_call(request_id, "simple", "simple") as _:
@@ -375,27 +375,6 @@ def answer_with_fallback(
     # the final response.
     used_tools: List[str] = []
     used_sources: List[Dict[str, str]] = []
-
-    def _size_llm_for_task(tier_name: str, llm: BaseLanguageModel) -> BaseLanguageModel:
-        # Task temperature via a cached client for (tier, temperature):
-        # cached instances are never mutated (thread-safe sharing). Only
-        # for the default cascade table -- a caller-supplied tiers table
-        # owns its instances, so those are used exactly as given (with
-        # the historical temperature hint) and never swapped for real
-        # clients, even on a name collision.
-        if tiers is None:
-            try:
-                sized = get_tier_llm(tier_name, temperature=TASK_TEMPERATURES.get(task_type, 0.5))
-            except Exception:
-                sized = None
-            if sized is not None:
-                return sized
-            return llm
-        try:
-            llm.temperature = TASK_TEMPERATURES.get(task_type, 0.5)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        return llm
 
     def _make_tier_provider(pinned: Optional[Tuple[str, BaseLanguageModel]] = None,
                             failed: Optional[set] = None):

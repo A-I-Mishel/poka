@@ -245,7 +245,6 @@ def _model_override(env_name: str, default: str) -> str:
 def _get_generic_openai_tier(
     tier: str,
     key_name: str,
-    placeholder: str,
     base_url: str,
     model: str,
     temperature: float,
@@ -253,8 +252,9 @@ def _get_generic_openai_tier(
     """Build a client for any OpenAI-compatible free tier (shared factory).
 
     New lanes (GitHub Models, Mistral, NVIDIA) share this shape: missing
-    or placeholder key -> None (tier skipped), cached client otherwise.
-    Older tiers keep their bespoke constructors untouched.
+    key -> None (tier skipped; placeholder filtering lives in
+    services.secrets.get_secret), cached client otherwise. Older tiers
+    keep their bespoke constructors untouched.
     """
     key: Optional[str] = _get_secret(key_name)
     if key is None:
@@ -284,7 +284,6 @@ def get_tier_github_models_llm(temperature: float = TEMPERATURE) -> Optional[Cha
     return _get_generic_openai_tier(
         "GitHub Models",
         "GITHUB_MODELS_TOKEN",
-        "your_github_models_token_here",
         GITHUB_MODELS_BASE_URL,
         _model_override("GITHUB_MODELS_MODEL", GITHUB_MODELS_MODEL),
         temperature,
@@ -296,7 +295,6 @@ def get_tier_mistral_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenA
     return _get_generic_openai_tier(
         "Mistral",
         "MISTRAL_API_KEY",
-        "your_mistral_key_here",
         MISTRAL_BASE_URL,
         _model_override("MISTRAL_MODEL", MISTRAL_MODEL),
         temperature,
@@ -308,7 +306,6 @@ def get_tier_nvidia_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI
     return _get_generic_openai_tier(
         "NVIDIA",
         "NVIDIA_API_KEY",
-        "your_nvidia_key_here",
         NVIDIA_BASE_URL,
         _model_override("NVIDIA_MODEL", NVIDIA_MODEL),
         temperature,

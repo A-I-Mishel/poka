@@ -67,7 +67,8 @@ def _memory_path() -> str:
     directory = getattr(_state, "directory", "") or _MEMORY_DIR
     if directory:
         return os.path.join(directory, "structured_memory.json")
-    return MEMORY_FILE
+    # Fail closed: never fall back to a CWD-global file shared across users.
+    raise StorageError("Memory user context is not bound.")
 
 
 def _blank_memory() -> Dict[str, Any]:

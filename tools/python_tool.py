@@ -11,11 +11,10 @@ no network, no `while`, no dunders.
 from langchain_core.tools import tool
 
 from services import codeexec
-from services.context import get_current_user_id, get_limit_key
 from services.identity import auth_mode
 from services.limits import MAX_PYTHON_OUTPUT_CHARS
 from services.obs import event as obs_event
-from services.ratelimit import get_rate_limiter
+from tools.gating import claim_tool_slot
 
 
 def _gate(tool_name: str):
@@ -26,20 +25,7 @@ def _gate(tool_name: str):
             f"STATUS=DENIED tool={tool_name}: code execution is disabled "
             "in open mode. Set PLUTO_AUTH_MODE=private (trusted/owner use only)."
         )
-    user_id = get_current_user_id()
-    if not user_id:
-        return None, f"STATUS=DENIED tool={tool_name}: no user context."
-    verdict = get_rate_limiter().check(get_limit_key() or user_id, "code")
-    if not verdict.allowed:
-        obs_event(
-            "ratelimit.deny", action="code", tool=tool_name, user=user_id,
-            retry_after_s=round(verdict.retry_after, 1),
-        )
-        return None, (
-            f"STATUS=DENIED tool={tool_name}: code-execution rate limit "
-            f"exceeded, retry in {verdict.retry_after:.0f}s."
-        )
-    return user_id, ""
+    return claim_tool_slot(tool_name, "code", "code-execution")
 
 
 @tool

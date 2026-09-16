@@ -21,7 +21,7 @@ def _resolve_reader(upload_id: str) -> Tuple[Optional[PdfReader], int, Optional[
     """Resolve an upload ID to (reader, total_pages, None) or (None, 0, STATUS=...)."""
     user_id = get_current_user_id()
     if not user_id:
-        return None, 0, "STATUS=INVALID tool=read_pdf: no user context, cannot resolve uploads."
+        return None, 0, "STATUS=DENIED tool=read_pdf: no user context, cannot resolve uploads."
     path = FileStore(user_id).resolve_upload(upload_id)
     if path is None:
         return None, 0, "STATUS=DENIED tool=read_pdf: unknown upload ID or not owned by you."

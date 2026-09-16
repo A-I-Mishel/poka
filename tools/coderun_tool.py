@@ -18,11 +18,10 @@ the host, else an honest STATUS=FAILED naming the missing runtime.
 from langchain_core.tools import tool
 
 from services import coderun
-from services.context import get_current_user_id, get_limit_key
 from services.identity import auth_mode
 from services.limits import MAX_CODE_OUTPUT_CHARS
 from services.obs import event as obs_event
-from services.ratelimit import get_rate_limiter
+from tools.gating import claim_tool_slot
 
 
 def _gate(tool_name: str):
@@ -33,16 +32,7 @@ def _gate(tool_name: str):
             f"STATUS=DENIED tool={tool_name}: code execution is disabled "
             "in open mode. Set PLUTO_AUTH_MODE=private (trusted/owner use only)."
         )
-    user_id = get_current_user_id()
-    if not user_id:
-        return None, f"STATUS=DENIED tool={tool_name}: no user context."
-    verdict = get_rate_limiter().check(get_limit_key() or user_id, "code")
-    if not verdict.allowed:
-        return None, (
-            f"STATUS=DENIED tool={tool_name}: code-execution rate limit "
-            f"exceeded, retry in {verdict.retry_after:.0f}s."
-        )
-    return user_id, ""
+    return claim_tool_slot(tool_name, "code", "code-execution")
 
 
 def _format(res: dict, tool_name: str) -> str:
@@ -103,12 +93,9 @@ def run_code(file: str = "", language: str = "", code: str = "",
         return _format(res, "run_code")
     if lang and src.strip():
         if str(cli_args or "").strip():
-            # Inline + args: still run inline file without args passthrough
-            # confusion — execute_inline ignores args by design; run the
-            # snippet then note args are file-mode only.
-            res = coderun.execute_inline(user_id, lang, src)
-            out = _format(res, "run_code")
-            return out + "\n[Note: cli_args are only applied in file mode (run_code(file=...)).]"
+            return ("STATUS=INVALID tool=run_code: cli_args are file-mode only "
+                    "(run_code(file=...)). Re-run without cli_args or put the file "
+                    "in the workspace first; nothing was executed.")
         res = coderun.execute_inline(user_id, lang, src)
         return _format(res, "run_code")
     return ("STATUS=INVALID tool=run_code: provide file=\"main.py\" OR "

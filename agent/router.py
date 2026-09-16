@@ -121,6 +121,7 @@ def classify_task(
     user_input: str,
     llm_instance: BaseLanguageModel,
     budget: Optional[RequestBudget] = None,
+    tier_name: Optional[str] = None,
 ) -> str:
     """Classify a request: simple, research, creative, data, or multi_step."""
     prompt = (
@@ -132,7 +133,7 @@ def classify_task(
         "- multi_step: Combines multiple tools\n\n"
         f"Request: {user_input}\nCategory:"
     )
-    response = agent._invoke_bounded(llm_instance, [HumanMessage(content=prompt)], budget=budget)
+    response = agent._invoke_bounded(llm_instance, [HumanMessage(content=prompt)], budget=budget, tier_name=tier_name)
     category = _as_text(response.content).strip().lower()
     valid = ["simple", "research", "creative", "data", "multi_step"]
     return category if category in valid else "simple"

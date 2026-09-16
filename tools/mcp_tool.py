@@ -11,9 +11,7 @@ import logging
 from langchain_core.tools import tool
 
 from services import mcp as mcp_svc
-from services.context import get_current_user_id, get_limit_key
-from services.obs import event as obs_event
-from services.ratelimit import get_rate_limiter
+from tools.gating import claim_tool_slot
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -22,25 +20,15 @@ MAX_LIST_CHARS: int = 4000
 
 def _gate(tool_name: str):
     """User context + rate check, or (None, error)."""
-    user_id = get_current_user_id()
-    if not user_id:
-        return None, f"STATUS=DENIED tool={tool_name}: no user context."
-    verdict = get_rate_limiter().check(get_limit_key() or user_id, "mcp")
-    if not verdict.allowed:
-        obs_event(
-            "ratelimit.deny", action="mcp", tool=tool_name, user=user_id,
-            retry_after_s=round(verdict.retry_after, 1),
-        )
-        return None, (
-            f"STATUS=DENIED tool={tool_name}: MCP rate limit exceeded, "
-            f"retry in {verdict.retry_after:.0f}s."
-        )
+    user_id, err = claim_tool_slot(tool_name, "mcp", "MCP")
+    if user_id is None:
+        return None, err
     if not mcp_svc.server_names():
         return None, (
             f"STATUS=DEGRADED tool={tool_name}: no MCP servers configured. "
             "Set PLUTO_MCP_SERVERS."
         )
-    return user_id, ""
+    return user_id, err
 
 
 @tool

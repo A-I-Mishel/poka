@@ -74,6 +74,10 @@ class StorageError(Exception):
     """Raised when a storage path or operation is unsafe or fails."""
 
 
+class WorkflowNotFoundError(ValueError):
+    """Unknown workflow ID (distinct from invalid definitions)."""
+
+
 def data_root() -> Path:
     """Return the configured data root directory."""
     return Path(os.getenv("PLUTO_DATA_DIR", "data"))
@@ -256,8 +260,11 @@ def _read_json(path: Path) -> Tuple[Any, bool]:
         raise StorageError(f"Cannot read {path.name}: storage failure ({e}).") from e
     except ValueError:
         try:
-            backup = path.with_name(f"{path.stem}.corrupt-{int(time.time())}{path.suffix}")
-            os.replace(path, backup)
+            stamp = "%d-%d-%d" % (int(time.time() * 1000), os.getpid(), threading.get_ident() % 100000)
+            backup = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
+            with path_lock(path):
+                if path.exists():
+                    os.replace(path, backup)
         except OSError:
             pass
         obs_event("storage.quarantine", file=path.name)
@@ -1108,7 +1115,7 @@ class UserStore:
         from services import workflows as workflows_svc
 
         if not is_valid_id(workflow_id):
-            raise ValueError("Workflow not found.")
+            raise WorkflowNotFoundError("Workflow not found.")
         clean_name, clean_desc, clean_steps = workflows_svc.validate_workflow(
             name, steps, description, known_tools
         )
@@ -1130,7 +1137,7 @@ class UserStore:
                 else:
                     updated_list.append(entry)
             if found is None:
-                raise ValueError("Workflow not found.")
+                raise WorkflowNotFoundError("Workflow not found.")
             return dict(found), updated_list
 
         return self._mutate_workflows(_replace)

@@ -119,6 +119,9 @@ MODEL_TIMEOUT_SECONDS: float = 90.0
 # constant false-timeout churn, wasted quota, and latency.
 FIRST_TOKEN_TIMEOUT_SECONDS: float = 12.0
 TOOL_TIMEOUT_SECONDS: float = 90.0
+# Final no-tools synthesis after a tool loop: shorter than a full model
+# call by design (summary of already-collected results, not new work).
+SYNTHESIS_TIMEOUT_SECONDS: float = 60.0
 MCP_TIMEOUT_SECONDS: float = 60.0
 PROBE_TIMEOUT_SECONDS: float = 20.0
 

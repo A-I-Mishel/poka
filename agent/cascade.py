@@ -29,8 +29,6 @@ from services.limits import (
 # timeouts are congestion (brief, 2nd consecutive strike); quota errors
 # mean hours of darkness; auth/invalid config never heals by retrying.
 SKIP_AFTER_FAILS: int = 1
-SKIP_SECONDS: float = TIER_COOLDOWN_TRANSIENT_SECONDS
-SKIP_SECONDS_PERMANENT: float = TIER_COOLDOWN_PERMANENT_SECONDS
 _TIER_FAILS: Dict[str, int] = {}
 _TIER_TIMEOUTS: Dict[str, int] = {}
 _TIER_SKIP_UNTIL: Dict[str, float] = {}
@@ -196,6 +194,11 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
     return ("unknown", True)
 
 
+def _is_shed_load(error: Any) -> bool:
+    """Our limit, not theirs: saturated pool must never cool a tier."""
+    return type(error).__name__ == "ExecutorBusyError"
+
+
 def _tier_skipped(name: str) -> bool:
     """Check whether a tier is currently in its cool-down window."""
     with _STATE_LOCK:
@@ -264,7 +267,7 @@ def _friendly_cascade_error(last_error: Any) -> str:
     """Translate raw provider errors into a human-readable message."""
     raw: str = str(last_error)
     lowered: str = raw.lower()
-    if "429" in raw or "quota" in lowered or "rate limit" in lowered or "freeusagelimit" in lowered \
+    if re.search(r"\b429\b", raw) is not None or "quota" in lowered or "rate limit" in lowered or "freeusagelimit" in lowered \
             or "usage limit" in lowered or "usagelimit" in lowered:
         return (
             "All model tiers are unavailable right now: the free services are "
@@ -303,6 +306,19 @@ def _usable_tiers(
     return usable or ordered
 
 
+def _all_skipped_permanent(
+    tiers: Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]],
+) -> bool:
+    """True when every tier is cooled for quota/auth/invalid (hammer would burn quota)."""
+    for name, _ in tiers:
+        if not _tier_skipped(name):
+            return False
+        hit = last_tier_error(name)
+        if hit is None or hit[0] not in ("rate_limit", "auth", "invalid"):
+            return False
+    return bool(tiers)
+
+
 def _run_cascade_step(
     fn: Callable[[str, BaseLanguageModel], Any],
     first: Optional[str] = None,
@@ -313,10 +329,15 @@ def _run_cascade_step(
 
     This is the single funnel for classification, summarization, planning,
     answering, reflection support, and probing: a skipped provider is never
-    selected here, no matter which feature is calling. BudgetExhausted is
-    never swallowed and never cools a tier (it is our limit, not theirs).
-    Tried tier names are appended to `attempts` when provided (metrics).
+    selected here, no matter which feature is calling. BudgetExhausted and
+    ExecutorBusyError are never swallowed and never cool a tier (they are
+    our limits, not theirs). Tried tier names are appended to `attempts`
+    when provided (metrics).
     """
+    ordered = _ordered_tiers(first, tiers)
+    if ordered and _all_skipped_permanent(ordered):
+        last_kind, last_detail = last_tier_error(ordered[0][0]) or ("rate_limit", "")
+        raise RuntimeError(_friendly_cascade_error(f"{last_kind}: {last_detail}"))
     last_error: Exception | None = None
     for name, getter in _usable_tiers(first, tiers):
         if attempts is not None:
@@ -327,6 +348,8 @@ def _run_cascade_step(
             raise
         except Exception as e:
             last_error = e
+            if _is_shed_load(e):
+                raise
             _record_tier_failure(name, classify_provider_error(e)[0], e)
             continue
         if llm_instance is None:
@@ -339,117 +362,8 @@ def _run_cascade_step(
             raise
         except Exception as e:
             last_error = e
+            if _is_shed_load(e):
+                raise
             _record_tier_failure(name, classify_provider_error(e)[0], e)
             continue
-    raise RuntimeError(_friendly_cascade_error(last_error))
-
-
-async def _run_cascade_step_async(
-    fn: Callable[[str, BaseLanguageModel], Any],
-    first: Optional[str] = None,
-    tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
-    attempts: Optional[List[str]] = None,
-    max_concurrent: int = 3,
-) -> Tuple[str, Any]:
-    """Run fn(name, llm) on tiers CONcurrently, returning first success.
-
-    Tries all usable tiers in parallel (up to max_concurrent at a time),
-    cancels remaining on first success. Preserves attempt order for metrics.
-    Falls back to serial on BudgetExhausted or when no tiers usable.
-    """
-    import asyncio
-
-    usable = _usable_tiers(first, tiers)
-    if not usable:
-        raise RuntimeError("No usable tiers available")
-
-    last_error: Exception | None = None
-
-    # If only one tier, run directly (avoid executor overhead)
-    if len(usable) == 1:
-        name, getter = usable[0]
-        if attempts is not None:
-            attempts.append(name)
-        try:
-            llm_instance = getter()
-        except BudgetExhausted:
-            raise
-        except Exception as e:
-            last_error = e
-            _record_tier_failure(name, classify_provider_error(e)[0], e)
-            raise RuntimeError(_friendly_cascade_error(last_error))
-        if llm_instance is None:
-            raise RuntimeError("Tier returned None LLM")
-        try:
-            result = await asyncio.get_event_loop().run_in_executor(None, lambda: fn(name, llm_instance))
-            _record_tier_success(name)
-            return name, result
-        except BudgetExhausted:
-            raise
-        except Exception as e:
-            _record_tier_failure(name, classify_provider_error(e)[0], e)
-            raise RuntimeError(_friendly_cascade_error(e))
-
-    # Multiple tiers: race them with limited concurrency
-    semaphore = asyncio.Semaphore(max_concurrent)
-    tasks = {}
-
-    async def _try_tier(name: str, getter: Callable[[], Optional[BaseLanguageModel]]) -> Tuple[str, Any]:
-        nonlocal last_error
-        async with semaphore:
-            if attempts is not None:
-                attempts.append(name)
-            try:
-                # Get LLM instance (may block on I/O)
-                llm_instance = await asyncio.get_event_loop().run_in_executor(None, getter)
-            except BudgetExhausted:
-                raise
-            except Exception as e:
-                last_error = e
-                _record_tier_failure(name, classify_provider_error(e)[0], e)
-                raise
-            if llm_instance is None:
-                raise RuntimeError(f"Tier {name} returned None LLM")
-            try:
-                result = await asyncio.get_event_loop().run_in_executor(None, lambda: fn(name, llm_instance))
-                _record_tier_success(name)
-                return name, result
-            except BudgetExhausted:
-                raise
-            except Exception as e:
-                _record_tier_failure(name, classify_provider_error(e)[0], e)
-                raise
-
-    # Create tasks for all usable tiers
-    for name, getter in usable:
-        tasks[name] = asyncio.create_task(_try_tier(name, getter))
-
-    # Wait for first completion
-    while tasks:
-        done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            try:
-                result = task.result()
-                # Cancel remaining tasks
-                for p in pending:
-                    p.cancel()
-                # Wait for cancellation to complete
-                if pending:
-                    await asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED)
-                return result
-            except BudgetExhausted:
-                # Cancel all and re-raise
-                for p in pending:
-                    p.cancel()
-                raise
-            except Exception as e:
-                last_error = e
-                # This tier failed, continue with remaining
-                pass
-        # Remove completed task
-        for name, task in list(tasks.items()):
-            if task in done:
-                del tasks[name]
-
-    # All tiers failed
     raise RuntimeError(_friendly_cascade_error(last_error))
