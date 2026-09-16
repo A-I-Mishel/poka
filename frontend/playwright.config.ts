@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import * as path from "node:path";
 
 // E2E smoke for the split UI: real backend (open mode, throwaway data dir)
 // + real Vite dev server. Catches runtime ReferenceErrors and broken wiring
@@ -25,7 +26,11 @@ export default defineConfig({
       cwd: "..",
       env: {
         PLUTO_AUTH_MODE: "open",
-        PLUTO_DATA_DIR: "../.e2e-data",
+        // Absolute: a relative PLUTO_DATA_DIR would resolve against the
+        // backend's working directory and scatter throwaway e2e data
+        // outside the repo (projects/.e2e-data). Keep it in ./.e2e-data.
+        // (import.meta.dirname: __dirname does not exist in ESM configs.)
+        PLUTO_DATA_DIR: path.resolve(import.meta.dirname, "../.e2e-data"),
         PLUTO_FRONTEND_ORIGIN: "http://localhost:5173",
       },
       url: "http://127.0.0.1:8000/api/health",
