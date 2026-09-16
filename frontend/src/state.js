@@ -5,7 +5,7 @@ import { PREFS_KEY, LEGACY_PREFS_KEY } from "./config.js";
 
 /* ---------- prefs (local only: theme/mode/selection) ---------- */
 function defaultPrefs() {
-  return { theme: "dark", folded: false, mode: "fast", web: false, model: "", projectId: null, recentsCollapsed: false };
+  return { theme: "dark", folded: false, mode: "fast", web: false, model: "", projectId: null, recentsCollapsed: false, moreCollapsed: false };
 }
 function loadPrefs() {
   var p = defaultPrefs();

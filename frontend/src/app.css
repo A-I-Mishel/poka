@@ -12,7 +12,7 @@ svg{display:block;flex-shrink:0}
 
 .sidebar{width:280px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--bd);display:flex;flex-direction:column;padding:12px 10px;overflow-y:auto;overscroll-behavior:contain;min-height:0}
 /* ponytail: keep header controls at full height, scroll instead of squishing at 100% zoom */
-.sidebar>.brand,.sidebar>.btn-primary,.sidebar>.input,.sidebar>.label,.sidebar>.rule,.sidebar>.sidebar-footer{flex-shrink:0}
+.sidebar>.brand,.sidebar>.btn-primary,.sidebar>.input,.sidebar>.label,.sidebar>.nav,.sidebar>.stack,.sidebar>.rule,.sidebar>.sidebar-footer{flex-shrink:0}
 .brand{display:flex;align-items:center;gap:9px;padding:2px 6px 14px}
 .brand-mark{width:26px;height:26px;border-radius:7px;background:var(--s2);border:1px solid var(--bd2);display:grid;place-items:center;color:var(--t2)}
 .brand b{font-size:13px;font-weight:600;display:block}
@@ -34,6 +34,9 @@ svg{display:block;flex-shrink:0}
 .nav.collapsed .chev{transform:rotate(-90deg)}
 #moreItems.collapsed{display:none}
 #recentList.collapsed{display:none}
+.label-toggle{display:flex;align-items:center;width:100%;text-align:left}
+.label-toggle .chev{margin-left:auto;transition:transform .15s}
+.label-toggle.collapsed .chev{transform:rotate(-90deg)}
 .recent{display:flex;align-items:center;gap:2px;height:30px;padding:0 4px 0 8px;border-radius:6px;color:var(--t2);font-size:12.5px;cursor:pointer}
 .recent>span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recent:hover{background:var(--s2);color:var(--tx)}

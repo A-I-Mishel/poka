@@ -484,12 +484,24 @@ panelBody.addEventListener("input", function (e) {
     });
   }
 });
-$("moreToggle").addEventListener("click", function () {
-  var c = $("moreItems").classList.toggle("collapsed");
-  $("moreToggle").classList.toggle("collapsed", c);
-});
+/* ponytail: MORE/RECENTS label-toggles, persisted */
+(function initMoreToggle() {
+  var btn = $("moreToggle"), list = $("moreItems");
+  if (!btn || !list) return;
+  var collapsed = !!S.moreCollapsed;
+  list.classList.toggle("collapsed", collapsed);
+  btn.classList.toggle("collapsed", collapsed);
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  btn.addEventListener("click", function () {
+    var c = list.classList.toggle("collapsed");
+    btn.classList.toggle("collapsed", c);
+    btn.setAttribute("aria-expanded", c ? "false" : "true");
+    S.moreCollapsed = c;
+    savePrefs();
+  });
+})();
 /* ponytail: RECENTS collapsible like MORE, persisted */
-(function initRecentsToggle() {
+(function initRecentsToggle() { /* uses shared .label-toggle CSS */
   var btn = $("recentsToggle"), list = $("recentList");
   if (!btn || !list) return;
   var collapsed = !!S.recentsCollapsed;
