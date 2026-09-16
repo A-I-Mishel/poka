@@ -10,6 +10,8 @@ run_tool_loop keeps history clean for Gemini 3.x (no functionCall
 blocks ever go back): tool results return inside fresh human messages.
 """
 
+import json as _json
+import re as _re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -75,6 +77,62 @@ def is_read_only_tool(name: str) -> bool:
 def is_mutating_tool(name: str) -> bool:
     """Check if a tool is mutating (must run serially)."""
     return name in _MUTATING_TOOLS
+
+
+def _fallback_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
+    """Parse JSON tool calls leaked as text (model wrote JSON instead of tool_calls).
+
+    Free tiers often emit {"tool":"read_document","upload_id":"..."} as
+    content; the structured tool_calls list is then empty and the raw
+    JSON leaks to the user. This extracts it so it can be executed
+    normally. Stdlib only, never raises.
+    """
+    if not text or "{" not in text:
+        return []
+    if '"tool"' not in text and '"name"' not in text:
+        return []
+    # ponytail: brace-counting extractor for leaked JSON - upgrade to
+    # full json repair only if free-tier models start emitting broken JSON
+    candidates: List[Dict[str, Any]] = []
+    for m in _re.finditer(r'\{\s*"(?:tool|name)"\s*:', text):
+        start = m.start()
+        depth = 0
+        end = -1
+        for i in range(start, min(len(text), start + 2000)):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            continue
+        snippet = text[start : end + 1]
+        # strip code fences if wrapped
+        snippet = snippet.strip().strip("`")
+        try:
+            obj = _json.loads(snippet)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        name = str(obj.get("tool") or obj.get("name") or "").strip()
+        if not name or name not in TOOL_MAP:
+            continue
+        args = obj.get("args")
+        if not isinstance(args, dict):
+            # flat form: {"tool":"read_document","upload_id":"..."}
+            args = {k: v for k, v in obj.items() if k not in ("tool", "name", "args")}
+            if not isinstance(args, dict):
+                args = {}
+        # keep only string-keyed args
+        args = {str(k): v for k, v in args.items()}
+        candidates.append({"name": name, "args": args})
+        if len(candidates) >= 4:
+            break
+    return candidates
 
 def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_key: Any = None) -> Any:
     """Invoke a tool with the submitting request's user bound.
@@ -469,6 +527,16 @@ def run_tool_loop(
             last_text = text
             last_text_tier = round_tier
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
+        # Fallback: leaked JSON in content (free-tier tool-calling failure)
+        if not tool_calls:
+            try:
+                fb = _fallback_tool_calls_from_text(text)
+                if fb:
+                    tool_calls = fb  # type: ignore[assignment]
+                    # JSON was the tool call, not an answer to show
+                    last_text = ""
+            except Exception:
+                pass
         if on_progress is not None and tool_calls:
             try:
                 names: List[str] = []
