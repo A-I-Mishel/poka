@@ -61,7 +61,7 @@ def rule_route(user_input: str) -> Optional[str]:
     if _GREETING_RE.match(text) and len(text) <= 40:
         return "simple"
     hits = set()
-    if _UPLOAD_ID_RE.search(text) or _signals(text, ["pdf", ".pdf", "read", "summar*", "document", "docx", ".docx", "doc", ".doc", "odt", ".odt", "rtf", ".rtf", "txt", ".txt", "md", ".md", "markdown", "pptx", ".pptx", "ppt", ".ppt", "odp", ".odp", "html", ".html", ".htm", "xml", ".xml", "zip", ".zip", "archive", "webpage", "web page", "text file", "what is it", "what does"]):
+    if _UPLOAD_ID_RE.search(text) or _signals(text, ["pdf", ".pdf", "read", "summar*", "document", "docx", ".docx", "doc", ".doc", "odt", ".odt", "rtf", ".rtf", "txt", ".txt", "md", ".md", "markdown", "pptx", ".pptx", "ppt", ".ppt", "odp", ".odp", "html", ".html", ".htm", "xml", ".xml", "zip", ".zip", "archive", "webpage", "web page", "text file", "what is it", "what does", "teach*", "learn*", "exam", "exams", "recall", "lecture*", "tutor*"]):
         hits.add("research")
     if _signals(text, ["csv", ".csv", "tsv", ".tsv", "xlsx", ".xlsx", "xls", ".xls", "ods", ".ods", "json", ".json", "analyz*", "spreadsheet", "dataset", "chart", "plot", "data table"]):
         hits.add("data")
