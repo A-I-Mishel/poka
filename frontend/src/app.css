@@ -153,8 +153,8 @@ svg{display:block;flex-shrink:0}
 .note{text-align:center;font-size:10.5px;color:var(--t3);margin-top:7px}
 
 .attach-wrap{position:relative}
-.menu{position:absolute;bottom:calc(100% + 8px);left:0;min-width:220px;background:var(--surface);border:1px solid var(--bd2);border-radius:9px;padding:4px;box-shadow:0 10px 28px rgba(0,0,0,.35);opacity:0;transform:translateY(4px);pointer-events:none;transition:opacity .12s,transform .12s;z-index:30}
-.menu.open{opacity:1;transform:none;pointer-events:auto}
+.menu{position:absolute;bottom:calc(100% + 8px);left:0;min-width:220px;background:var(--surface);border:1px solid var(--bd2);border-radius:9px;padding:4px;box-shadow:0 10px 28px rgba(0,0,0,.35);opacity:0;transform:translateY(4px);pointer-events:none;transition:opacity .12s,transform .12s;z-index:30;display:none}
+.menu.open{display:block;opacity:1;transform:none;pointer-events:auto}
 .menu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 8px;border-radius:6px;color:var(--t2);font-size:12.5px;text-align:left}
 .menu button:hover{background:var(--s2);color:var(--tx)}
 .menu button svg{color:var(--t3)}
@@ -267,8 +267,8 @@ svg{display:block;flex-shrink:0}
 }
 /* Tablet + small laptop: drawer sidebar, fluid content */
 @media(max-width:860px){
-  .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:40;width:min(280px,84vw);max-width:84vw;transform:translateX(-105%);transition:transform .18s;box-shadow:0 0 40px rgba(0,0,0,.35)}
-  body:not(.folded) .sidebar{transform:none}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:40;width:min(280px,84vw);max-width:84vw;transform:translateX(-105%);transition:transform .18s,visibility .18s;box-shadow:0 0 40px rgba(0,0,0,.35);visibility:hidden}
+  body:not(.folded) .sidebar{transform:none;visibility:visible}
   body:not(.folded) #backdrop{display:block}
   .chat-col,.composer,.panel-col{max-width:100%}
   .bubble{max-width:88%}
