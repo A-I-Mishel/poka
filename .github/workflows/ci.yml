@@ -31,7 +31,7 @@ jobs:
       - name: "Lint (ruff: pyflakes + runtime errors)"
         run: python -m ruff check backend config.py services agent tools tests
       - name: Run tests with coverage (mocked providers, no API calls)
-        run: python -m pytest tests/ --cov=backend --cov=services --cov=agent --cov=tools --cov=config --cov-report=term-missing
+        run: python -m pytest tests/ --cov=backend --cov=services --cov=agent --cov=tools --cov=config --cov-report=term-missing --cov-fail-under=60
       - name: Validate observability + deploy config
         run: |
           pip install pyyaml
