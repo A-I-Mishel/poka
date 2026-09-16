@@ -40,10 +40,15 @@ are always labeled untrusted data in prompts.
 Requires Python 3.12 and Node 24.
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.lock
 uvicorn backend.main:app --port 8000   # API on http://localhost:8000
 cd frontend && npm install && npm run dev   # UI on http://localhost:5173
 ```
+
+`requirements.txt` holds the loose constraints; `requirements.lock`
+is the hash-pinned build input (regenerate with
+`uv pip compile --generate-hashes --python-version 3.12 -o requirements.lock requirements.txt`).
+CI, Docker, and Render all install from the lock.
 
 Run the test suite (stubbed models, temp directories — no API quota
 spent):
