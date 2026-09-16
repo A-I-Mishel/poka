@@ -87,3 +87,38 @@ def test_should_reflect_failure_keyword_and_modes():
     assert should_reflect("research", "the model failed to find anything here", "", deep_mode=True) is True
     assert should_reflect("research", "fine answer here", "", deep_mode=False) is False
     assert should_reflect("simple", "anything at all", "", deep_mode=True) is False
+
+
+def _capture_reply(monkeypatch, text="[PASS]"):
+    """Stub _invoke_bounded, capturing the prompt; returns the prompt box."""
+    box = {}
+
+    def fake(llm, msgs, **kw):
+        box["prompt"] = str(msgs[-1].content)
+        box["kw"] = kw
+        return types.SimpleNamespace(content=text)
+
+    monkeypatch.setattr(agent, "_invoke_bounded", fake)
+    return box
+
+
+def test_reflect_prompt_carries_task_focus(monkeypatch):
+    box = _capture_reply(monkeypatch)
+    reflect_and_improve(None, "q", "a decent draft answer here", [], task_type="research")
+    assert "training knowledge" in box["prompt"]
+    box = _capture_reply(monkeypatch)
+    reflect_and_improve(None, "q", "a decent draft answer here", [], task_type="data")
+    assert "edge cases" in box["prompt"]
+
+
+def test_reflect_prompt_defaults_focus_for_unknown_task(monkeypatch):
+    box = _capture_reply(monkeypatch)
+    reflect_and_improve(None, "q", "a decent draft answer here", [])
+    assert "accurate, complete, well-structured" in box["prompt"]
+
+
+def test_reflect_prompt_has_severity_rule(monkeypatch):
+    box = _capture_reply(monkeypatch)
+    reflect_and_improve(None, "q", "a decent draft answer here", [], task_type="creative")
+    assert "ONLY when" in box["prompt"]
+    assert "wrong, missing, or unsafe" in box["prompt"]

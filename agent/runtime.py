@@ -469,7 +469,7 @@ def answer_with_fallback(
                     final_tier, on_progress, request_id,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
-                improved = reflect_and_improve(llm, user_input, draft, langchain_history, budget)
+                improved = reflect_and_improve(llm, user_input, draft, langchain_history, budget, task_type)
                 if improved != draft:
                     # The visible answer is the rewrite, produced on this
                     # attempt's tier — not whichever tier ran the draft.

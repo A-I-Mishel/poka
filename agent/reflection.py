@@ -4,7 +4,7 @@ Reflection never restarts the main loop and never discards a good draft:
 any reflection failure returns the draft unchanged.
 """
 
-from typing import Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -21,6 +21,17 @@ from services.limits import (
 )
 
 REFLECTION_ENABLED: bool = True
+
+# Task-typed critique focus: one line per classifier task_type so the
+# single critique pass checks what matters for THIS draft instead of
+# generic quality. Coding lives under "data" (no separate "code" type).
+_TASK_FOCUS: Dict[str, str] = {
+    "research": "claims supported (never pass training knowledge off as fresh fact), complete, cited",
+    "creative": "structure, purpose-fit, consistent formatting",
+    "data": "correct logic, edge cases, error handling, fits the surrounding project; no unsafe ops",
+    "multi_step": "every requested step done, results consistent with each other",
+    "simple": "directly answers what was asked, nothing more",
+}
 
 
 def should_reflect(
@@ -96,6 +107,7 @@ def reflect_and_improve(
     draft_output: str,
     chat_history: Sequence[BaseMessage],
     budget: Optional[RequestBudget] = None,
+    task_type: Optional[str] = None,
 ) -> str:
     """Critique a draft answer; return the improved version or the draft.
 
@@ -113,15 +125,18 @@ def reflect_and_improve(
     truncated = len(draft_output or "") > REFLECT_DRAFT_WINDOW_CHARS
     # Cap original_input to prevent unbounded prompt growth
     capped_input = (original_input or "")[:MAX_QUERY_CHARS]
+    focus = _TASK_FOCUS.get(str(task_type or "").strip().lower(),
+                            "accurate, complete, well-structured")
     try:
         reflection_prompt = (
             "You just produced this output for the user. Critique it honestly: "
-            "is it accurate, complete, well-structured?\n\n"
+            f"is it {focus}?\n\n"
             f"Original request: {capped_input}\n"
             f"Draft output:{' (first part shown; full text was truncated)' if truncated else ''}\n{draft_window}\n\n"
             "If the draft is good, reply with exactly: [PASS]\n"
-            "If it needs improvement, reply with: [IMPROVE] followed by the "
-            "full improved version. The rewrite must be at least as long and "
+            "Reply [IMPROVE] (followed by the full improved version) ONLY when "
+            "a requirement is wrong, missing, or unsafe — never for minor "
+            "wording or style. The rewrite must be at least as long and "
             "complete as the draft — never shorten it."
         )
         reflection = agent._invoke_bounded(

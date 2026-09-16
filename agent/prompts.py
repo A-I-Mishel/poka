@@ -184,6 +184,15 @@ def _build_system_prompt(
             project_context
         )
 
+    # Pre-flight (every answer, zero extra calls): judge the output against
+    # the user's actual request and its real-world purpose — not length.
+    # State uncertainty as uncertainty; never present a guess as a fact.
+    prompt += (
+        "\n\nBefore answering, check: does this answer what was actually "
+        "asked, completely and correctly, in the fitting size? "
+        "If unsure about a fact, say so instead of stating it."
+    )
+
     return prompt
 
 
