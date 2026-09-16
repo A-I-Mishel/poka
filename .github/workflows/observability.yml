@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.lock
-          pip install py-spy scalene
+          pip install py-spy scalene pytest
 
       - name: Run tests with py-spy
         run: |
