@@ -61,22 +61,32 @@ def test_continuation_needs_active_session():
     from backend.chatflow import _is_teaching_continuation
 
     assert _is_teaching_continuation("Next", []) is False
-    hist = [{"role": "assistant", "content": "📘 FILE: Lecture_01 — Slides 1-3\nbla\nSay Next for 4-6."}]
+    hist = [{"role": "assistant", "content": "📘 FILE: Lecture_01\nSlides: 1-3\nbla"}]
     assert _is_teaching_continuation("Next", hist) is True
     assert _is_teaching_continuation("next song", hist) is False
     assert _is_teaching_continuation("x" * 200, hist) is False
+
+
+def test_legacy_header_still_parses():
+    from backend.chatflow import _last_teaching_state, _match_teaching_header
+
+    assert _match_teaching_header("📘 FILE: Deck\nSlides: 2-4") == ("Deck", 2, 4)
+    assert _match_teaching_header("📘 FILE: Deck — Slides 2-4") == ("Deck", 2, 4)
+    assert _match_teaching_header("no header") is None
+    hist = [{"role": "assistant", "content": "📘 FILE: Deck — Slides 2-4\nbla"}]
+    assert _last_teaching_state(hist) == ("Deck", 4)
 
 
 def test_recall_answer_continues_session():
     from backend.chatflow import _is_teaching_continuation
 
     hist = [{"role": "assistant",
-             "content": "📘 FILE: Lecture_01 — Slides 1-3\nConcept: Graph\nRecall: What is a vertex?\nSay Next for 4-6."}]
+             "content": "📘 FILE: Lecture_01\nSlides: 1-3\n## Concept: Graph\n**Recall**\nWhat is a vertex?"}]
     assert _is_teaching_continuation("A vertex is a node", hist) is True
     assert _is_teaching_continuation("next song", hist) is False
     assert _is_teaching_continuation("y" * 400, hist) is False
     # No Recall checkpoint: plain answers do not continue.
-    hist2 = [{"role": "assistant", "content": "📘 FILE: Lecture_01 — Slides 1-3\nbla\nSay Next for 4-6."}]
+    hist2 = [{"role": "assistant", "content": "📘 FILE: Lecture_01\nSlides: 1-3\nbla"}]
     assert _is_teaching_continuation("A vertex is a node", hist2) is False
 
 
@@ -94,8 +104,9 @@ def test_concept_format_in_prompt_and_suffix():
     from agent.prompts import SYSTEM_PROMPT
     from backend.chatflow import TEACHING_SUFFIX
 
-    for token in ("Concept:", "Simple intuition:", "How it works:", "Why:",
-                  "Exam importance:", "Exam trap:", "Recall:", "Source: [slide N]"):
+    for token in ("## Concept:", "**Definition**", "**Simple intuition**",
+                  "**How it works**", "**Why it matters**", "**Example**",
+                  "**Exam importance**", "**Exam trap**", "**Recall**", "**Source**"):
         assert token in SYSTEM_PROMPT
         assert token in TEACHING_SUFFIX
     assert "wait for the learner" in SYSTEM_PROMPT.lower()
@@ -166,7 +177,7 @@ def test_next_advances_window(tmp_path, monkeypatch):
     hist = [
         {"role": "user", "content": "teach me", "attachments": [
             {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-3\nbla\nSay Next for 4-6."},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-3\nbla"},
     ]
     send, _, _ = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
     assert "L1S4" in send and "L1S5" in send
@@ -185,7 +196,7 @@ def test_exhausted_file_advances(tmp_path, monkeypatch):
         {"role": "user", "content": "teach", "attachments": [
             {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"},
             {"id": m2.id, "kind": "document", "name": "Lecture_02.pptx"}]},
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-2\n done."},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-2\n done."},
     ]
     send, _, _ = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
     assert "B1" in send  # advanced to second file
@@ -208,7 +219,7 @@ def test_session_lost_files_short_circuits_no_model_call(tmp_path, monkeypatch):
     ctx = _ctx(tmp_path, monkeypatch, "teach-lost")
     # Prior teaching exists, but no files are available anywhere now.
     hist = [
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-3\nConcept: G\nRecall: Q?"},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-3\n## Concept: G\n**Recall**\nQ?"},
     ]
     send, _, clarify = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
     assert clarify is not None
@@ -295,7 +306,7 @@ def test_router_practice_quiz_research():
 def test_pace_feedback_detection():
     from backend.chatflow import _is_pace_feedback, _pace_direction
 
-    hist = [{"role": "assistant", "content": "📘 FILE: L — Slides 1-3\nConcept: G\nRecall: Q?\nSay Next."}]
+    hist = [{"role": "assistant", "content": "📘 FILE: L\nSlides: 1-3\n## Concept: G\n**Recall**\nQ?"}]
     assert _pace_direction("slow down, simpler please") == "slow"
     assert _pace_direction("got it, give harder problems") == "fast"
     assert _pace_direction("what is a vertex") is None
@@ -312,7 +323,7 @@ def test_pace_note_injected(tmp_path, monkeypatch):
     hist = [
         {"role": "user", "content": "teach me", "attachments": [
             {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-3\nConcept: G\nRecall: Q?\nSay Next."},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-3\n## Concept: G\n**Recall**\nQ?"},
     ]
     send, _, _ = _apply_teaching_session(ctx, "slow down, simpler", hist, [], [], "slow down, simpler")
     assert "slow down" in send.lower()
@@ -338,7 +349,7 @@ def test_exhausted_all_files_exam_mode(tmp_path, monkeypatch):
     hist = [
         {"role": "user", "content": "teach me", "attachments": [
             {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-2\nConcept: G\nRecall: Q?"},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-2\n## Concept: G\n**Recall**\nQ?"},
     ]
     send, _, _ = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
     assert "EXAM MODE" in send
@@ -354,7 +365,7 @@ def test_explicit_reteach_skips_exam_mode(tmp_path, monkeypatch):
     hist = [
         {"role": "user", "content": "teach me", "attachments": [
             {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-2\nConcept: G\nRecall: Q?"},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-2\n## Concept: G\n**Recall**\nQ?"},
     ]
     send, _, _ = _apply_teaching_session(
         ctx, "teach Lecture_01 again", hist, [], [], "teach Lecture_01 again")
@@ -387,7 +398,9 @@ def test_format_logging_metadata_only(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(cf, "obs_event", lambda name, **kw: seen.update({"name": name, **kw}))
     cf._log_teaching_format(
-        "hi [Teaching mode: x]", "📘 FILE: L — Slides 1-2\nConcept: G\nRecall: Q?\nSource: [slide 1]", "Mistral")
+        "hi [Teaching mode: x]",
+        "📘 FILE: L\nSlides: 1-2\n## Concept: G\n**Source**\n[slide 1]\n**Recall**\nQ?",
+        "Mistral")
     assert seen["name"] == "teaching.format"
     assert seen["has_concept"] is True and seen["has_recall"] is True
     assert seen["tier"] == "Mistral"
@@ -400,9 +413,9 @@ def test_format_logging_metadata_only(tmp_path, monkeypatch):
 
 
 _GOOD_DRAFT = (
-    "📘 FILE: Lecture_01.pptx — Slides 4-6\n"
-    "Concept: Graph\nDefinition: A pair (V, E).\nRecall: What is V?\n"
-    "Source: [slide 4]\nSay Next for slides 7-9."
+    "📘 FILE: Lecture_01.pptx\nSlides: 4-6\n"
+    "## Concept: Graph\n**Definition**\nA pair (V, E).\n"
+    "**Source**\n[slide 4]\n**Recall**\nWhat is V?"
 )
 
 
@@ -421,19 +434,33 @@ def test_validator_matrix():
 
     assert _validate_teaching_draft(_GOOD_DRAFT, 4, 6) == []
     assert _validate_teaching_draft("", 4, 6) == ["empty answer"]
-    overflow = _GOOD_DRAFT.replace("Slides 4-6", "Slides 4-10")
+    overflow = _GOOD_DRAFT.replace("Slides: 4-6", "Slides: 4-10")
     assert any("outside window" in r for r in _validate_teaching_draft(overflow, 4, 6))
-    future = _GOOD_DRAFT + "\nSource: [slide 9]"
+    future = _GOOD_DRAFT + "\n[slide 9]"
     assert any("beyond window" in r for r in _validate_teaching_draft(future, 4, 6))
-    nocite = "📘 FILE: L — Slides 4-6\nConcept: G\nRecall: Q?\nSay Next for slides 7-9."
+    rangecite = _GOOD_DRAFT + "\n**Source**\n[slides 4-9]"
+    assert any("beyond window" in r for r in _validate_teaching_draft(rangecite, 4, 6))
+    nocite = ("📘 FILE: L\nSlides: 4-6\n## Concept: G\n**Recall**\nQ?")
     assert any("no slide citations" in r for r in _validate_teaching_draft(nocite, 4, 6))
-    twofoot = _GOOD_DRAFT + "\nSay Next for slides 7-9."
-    assert any("Say-Next" in r for r in _validate_teaching_draft(twofoot, 4, 6))
-    noschema = ("📘 FILE: L — Slides 4-6\nSome table here.\nSource: [slide 4]\n"
-                "Say Next for slides 7-9.")
-    assert any("missing 'concept:'" in r for r in _validate_teaching_draft(noschema, 4, 6))
-    noheader = "Concept: G\nRecall: Q?\nSource: [slide 4]\nSay Next for slides 7-9."
+    foot = _GOOD_DRAFT + "\nSay Next for slides 7-9."
+    assert any("banned footer" in r for r in _validate_teaching_draft(foot, 4, 6))
+    gotit = _GOOD_DRAFT + '\nSay "Got it" when ready.'
+    assert any("banned footer" in r for r in _validate_teaching_draft(gotit, 4, 6))
+    noconcept = ("📘 FILE: L\nSlides: 4-6\nSome table here.\n**Source**\n[slide 4]\n"
+                 "**Recall**\nQ?")
+    assert any("no Concept block" in r for r in _validate_teaching_draft(noconcept, 4, 6))
+    tworecall = _GOOD_DRAFT + "\n**Recall**\nAnother?"
+    assert any("Recall sections" in r for r in _validate_teaching_draft(tworecall, 4, 6))
+    earlyrecall = ("📘 FILE: L\nSlides: 4-6\n**Recall**\nQ?\n## Concept: G\n"
+                   "**Source**\n[slide 4]")
+    assert any("after the last Concept" in r for r in _validate_teaching_draft(earlyrecall, 4, 6))
+    noheader = ("## Concept: G\n**Source**\n[slide 4]\n**Recall**\nQ?")
     assert any("FILE header" in r for r in _validate_teaching_draft(noheader, 4, 6))
+    admin = ("📘 FILE: L\nSlides: 1-3\n### Administrative Information\n"
+             "- Course Code 0613-4125\n**Source:** [slide 2]")
+    assert _validate_teaching_draft(admin, 1, 3) == []
+    adminrecall = admin + "\n**Recall**\nQ?"
+    assert any("admin-only" in r for r in _validate_teaching_draft(adminrecall, 1, 3))
 
 
 def _stub_repair(monkeypatch, text):
@@ -536,7 +563,7 @@ def test_recall_answer_gets_evaluation_note(tmp_path, monkeypatch):
     hist = [
         {"role": "user", "content": "teach me", "attachments": [
             {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx — Slides 1-3\nConcept: Graph\nRecall: What is a vertex?\nSay Next for 4-6."},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-3\n## Concept: Graph\n**Recall**\nWhat is a vertex?"},
     ]
     send, _, _ = _apply_teaching_session(ctx, "A vertex is a node", hist, [], [], "A vertex is a node")
     assert "evaluate" in send.lower()

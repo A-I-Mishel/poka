@@ -149,10 +149,37 @@ TEACHING_WINDOW_CHARS: int = 6000
 TEACHING_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
 TEACHING_CONTINUATION_MAX_CHARS: int = 80
 
+_TEACHING_FILE_RE_NEW = re.compile(
+    r"📘\s*FILE:\s*(.+?)\s*\n\s*Slides?\s*:\s*(\d+)(?:\s*[-–]\s*(\d+))?",
+    re.IGNORECASE,
+)
 _TEACHING_FILE_RE = re.compile(
     r"📘\s*FILE:\s*(.+?)\s*—\s*Slides?\s+(\d+)(?:\s*[-–]\s*(\d+))?",
     re.IGNORECASE,
 )
+
+
+def _match_teaching_header(text: str) -> Optional[Tuple[str, int, int]]:
+    """Parse a teaching source header, canonical or legacy (never raises).
+
+    Canonical: "📘 FILE: <name>\\nSlides: X-Y". Legacy one-line form
+    ("📘 FILE: <name> — Slides X-Y") still parses so in-flight sessions
+    keep their cursor across the format migration. Returns (name, start,
+    end) or None.
+    """
+    try:
+        for pattern in (_TEACHING_FILE_RE_NEW, _TEACHING_FILE_RE):
+            m = pattern.search(str(text or ""))
+            if not m:
+                continue
+            name = str(m.group(1) or "").strip()[:MAX_DISPLAY_NAME_CHARS]
+            start = int(m.group(2))
+            end = int(m.group(3) or m.group(2))
+            if start > 0 and end >= start:
+                return (name or "", start, end)
+        return None
+    except Exception:
+        return None
 _TEACHING_SLIDE_MARK_RE = re.compile(r"\[(?:slide|page)\s+(\d+)\]", re.IGNORECASE)
 _TEACHING_ADMIN_SIGNALS = (
     "course code", "credit", "instructor", "professor", "adjunct",
@@ -189,21 +216,21 @@ _TEACHING_DEEP_SIGNALS = ("in detail", "detailed", "deep dive", "thoroughly",
 TEACHING_SUFFIX = (
     "\n\n[Teaching mode: exam-focused, concept-first. Teach ONLY the verified "
     "slides above from ONE file, in order. Pure-admin slides "
-    "(course code/instructor/schedule/grading/contacts) get EXACTLY one summary "
-    "line each: never full blocks, never markdown tables, never recall questions "
-    "about admin trivia — recall must test an examinable concept or formula. "
-    "Teaching blocks use Concept: headers, never markdown tables. Group slides "
-    "that explain one concept and cite a range. "
-    "For EACH concept output EXACTLY: Concept: <name> / Definition: <1 line> / "
-    "Simple intuition: <beginner> / How it works: <mechanism> / Why: <reason> / "
-    "Example: <worked> / Exam importance: <MUST KNOW/HIGH VALUE/MEDIUM/LOW> / "
-    "Exam trap: <confusion or N/A> / Recall: <one short question> / "
-    "Source: [slide N]. Numerics add Given -> Formula -> Solve -> Answer. "
+    "(course code/instructor/schedule/grading/contacts) use the compact form: "
+    "\"### Administrative Information\" + bullets + \"**Source:** [slide N]\" — "
+    "never fake Definition/Example/Recall blocks for admin, never recall "
+    "questions about admin trivia. Group slides that explain one concept. "
+    "Format: source header as \"📘 FILE: <name>\" newline \"Slides: X-Y\"; then "
+    "for EACH concept \"## Concept: <name>\" with **Definition** / "
+    "**Simple intuition** / **How it works** / **Why it matters** / **Example** / "
+    "**Exam importance** (MUST KNOW/HIGH/MEDIUM/LOW) / **Exam trap** (or N/A) / "
+    "**Source** [slide N]; omit a section only when it adds no value, never "
+    "invent filler. Numerics add Given -> Formula -> Solve -> Answer. "
     "Distinguish source from support: \"Your slide states X. Supporting "
-    "explanation: ...\". Start with \"📘 FILE: <name> — Slides X-Y\" and end "
-    "the whole answer with EXACTLY ONE line of the form "
-    "\"Say Next for slides Y+1..\" — no other Say Next line anywhere, not even "
-    "one per slide. Then STOP and wait for the learner's answer. Never invent "
+    "explanation: ...\". Start with the source header \"📘 FILE: <name>\" "
+    "newline \"Slides: X-Y\". End with EXACTLY ONE terminal \"**Recall**\" "
+    "section (one question) and STOP — never append Say Next, Say Got it, "
+    "Next Steps, another question, or further teaching. Never invent "
     "slides beyond verified content; if truncated or empty, say so and ask "
     "to re-upload.]"
 )
@@ -271,8 +298,9 @@ def _is_admin_block(text: str) -> bool:
 def _last_teaching_state(history: List[Dict[str, Any]]) -> Tuple[Optional[str], int]:
     """Return (filename, last_end_slide) from the most recent teaching header.
 
-    Stateless cursor: parses the last assistant "📘 FILE: <name> — Slides X-Y".
-    Returns (None, 0) when no teaching has happened yet. Never raises.
+    Stateless cursor: parses the last assistant source header (canonical
+    two-line form or the legacy one-line form). Returns (None, 0) when no
+    teaching has happened yet. Never raises.
     """
     try:
         for msg in reversed(history or []):
@@ -281,15 +309,11 @@ def _last_teaching_state(history: List[Dict[str, Any]]) -> Tuple[Optional[str], 
             content = str(msg.get("content", "") or "")
             if "📘 FILE:" not in content:
                 continue
-            m = _TEACHING_FILE_RE.search(content)
-            if not m:
+            parsed = _match_teaching_header(content)
+            if not parsed:
                 # Teaching block without parseable header: still active, start over.
                 return None, 0
-            name = str(m.group(1) or "").strip()[:MAX_DISPLAY_NAME_CHARS]
-            try:
-                end = int(m.group(3) or m.group(2) or 0)
-            except Exception:
-                end = 0
+            name, _start, end = parsed
             return (name or None), max(0, end)
         return None, 0
     except Exception:
@@ -305,7 +329,8 @@ def _last_teaching_ends_with_recall(history: List[Dict[str, Any]]) -> bool:
             content = str(msg.get("content", "") or "")
             if "📘 FILE:" not in content:
                 return False
-            return "recall:" in content.lower()
+            low = content.lower()
+            return "recall:" in low or "**recall**" in low
         return False
     except Exception:
         return False
@@ -1520,8 +1545,11 @@ def _apply_attachment_gate(ctx: UserContext, gate_text: str,
 
 _TEACHING_SCOPE_RE = re.compile(r"teach ONLY slides (\d+)-(\d+)", re.IGNORECASE)
 _TEACHING_CITE_RE = re.compile(r"\[(?:slide|page)\s+(\d+)", re.IGNORECASE)
-_TEACHING_SAY_NEXT_RE = re.compile(r"say\s+next\b", re.IGNORECASE)
-_TEACHING_SCHEMA_HEADINGS = ("concept:", "recall:", "source:")
+_TEACHING_CITE_RANGE_RE = re.compile(r"\[(?:slides|pages)\s+(\d+)\s*[-–]\s*(\d+)\]", re.IGNORECASE)
+_TEACHING_CONCEPT_RE = re.compile(r"^\s*#{0,3}\s*\*{0,2}concept\*{0,2}\s*:", re.IGNORECASE | re.MULTILINE)
+_TEACHING_RECALL_RE = re.compile(r"^\s*#{0,3}\s*\*{0,2}recall\*{0,2}\s*:?\s*$", re.IGNORECASE | re.MULTILINE)
+_TEACHING_BANNED_FOOTER_RE = re.compile(
+    r"^\s*(say\s+next\b|say\s+[\"“']?got\s+it\b|next\s+steps\b)", re.IGNORECASE | re.MULTILINE)
 TEACHING_REPAIR_TIMEOUT_SECONDS: float = 30.0
 
 
@@ -1539,30 +1567,29 @@ def _teaching_scope_from_send(send_text: str) -> Optional[Tuple[int, int]]:
 def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
     """Check a teaching draft against its allowed window (pure, never raises).
 
-    Returns a list of violation reasons; empty means pass. Checks: FILE
-    header range within the window, no citations beyond the window end, at
-    least one citation, exactly one Say-Next line, required schema headings.
+    Canonical rules: source header range within the window; no citations
+    beyond the window end; at least one concept block and one citation;
+    exactly one terminal Recall section after the last concept; no footer
+    lines (Say Next / Say Got it / Next Steps). Returns violation reasons;
+    empty means pass.
     """
     reasons: List[str] = []
     try:
         text = str(output or "")
         if not text.strip():
             return ["empty answer"]
-        try:
-            h_start = h_end = None
-            m = _TEACHING_FILE_RE.search(text)
-            if m:
-                h_start = int(m.group(2))
-                h_end = int(m.group(3) or m.group(2))
-        except Exception:
-            h_start = h_end = None
-        if h_start is None:
+        parsed = _match_teaching_header(text)
+        if parsed is None:
             reasons.append("missing FILE header")
-        elif not (start <= h_start <= end and start <= h_end <= end):
-            reasons.append(f"header slides {h_start}-{h_end} outside window {start}-{end}")
+        else:
+            _h_name, h_start, h_end = parsed
+            if not (start <= h_start <= end and start <= h_end <= end):
+                reasons.append(f"header slides {h_start}-{h_end} outside window {start}-{end}")
         cited: List[int] = []
         try:
             cited = [int(n) for n in _TEACHING_CITE_RE.findall(text)]
+            for a, b in _TEACHING_CITE_RANGE_RE.findall(text):
+                cited.append(int(b))
         except Exception:
             cited = []
         beyond = sorted({n for n in cited if n > end})
@@ -1570,13 +1597,22 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
             reasons.append(f"cites slides beyond window: {beyond}")
         if not cited:
             reasons.append("no slide citations")
-        n_next = len(_TEACHING_SAY_NEXT_RE.findall(text))
-        if n_next != 1:
-            reasons.append(f"{n_next} Say-Next lines (need exactly 1)")
-        low = text.lower()
-        for heading in _TEACHING_SCHEMA_HEADINGS:
-            if heading not in low:
-                reasons.append(f"missing '{heading}' block")
+        concepts = list(_TEACHING_CONCEPT_RE.finditer(text))
+        recalls = list(_TEACHING_RECALL_RE.finditer(text))
+        admin_only = not concepts and "administrative information" in text.lower()
+        if not concepts and not admin_only:
+            reasons.append("no Concept block")
+        if admin_only:
+            # Compact admin form carries citations but no Recall checkpoint.
+            if recalls:
+                reasons.append("no Recall for admin-only turns")
+        elif len(recalls) != 1:
+            reasons.append(f"{len(recalls)} Recall sections (need exactly 1)")
+        elif concepts and recalls[0].start() < concepts[-1].start():
+            reasons.append("Recall must come after the last Concept (no teaching after Recall)")
+        banned = _TEACHING_BANNED_FOOTER_RE.findall(text)
+        if banned:
+            reasons.append("banned footer line (no Say Next / Got it / Next Steps)")
     except Exception:
         pass
     return reasons
@@ -1623,7 +1659,12 @@ def _repair_teaching_draft(
                 "You repair a lesson's formatting. Change ONLY structure to "
                 "satisfy every listed rule. Keep all facts, numbers, and slide "
                 "citations identical. Never add content about other slides. "
-                "Reply with the full corrected lesson only.")},
+                "Use this canonical shape: source header (\"📘 FILE: <name>\" "
+                "newline \"Slides: X-Y\"), then \"## Concept:\" blocks each "
+                "ending with a Source line, then EXACTLY ONE terminal "
+                "\"**Recall**\" section with one question and STOP — no Say "
+                "Next, Say Got it, or Next Steps lines, no teaching after "
+                "Recall. Reply with the full corrected lesson only.")},
             {"role": "user", "content": (
                 "Rules violated:\n- " + "\n- ".join(reasons) +
                 "\n\nVerified slides and instructions:\n" + str(send_text or "")[:12000] +
@@ -1702,13 +1743,18 @@ def _log_teaching_format(send_text: str, output: str, tier: str,
     try:
         if "Teaching mode:" not in str(send_text or "") and "EXAM MODE" not in str(send_text or ""):
             return
-        low = str(output or "").lower()
+        text = str(output or "")
+        low = text.lower()
+        try:
+            n_recalls = len(_TEACHING_RECALL_RE.findall(text))
+        except Exception:
+            n_recalls = 0
         obs_event(
             "teaching.format", tier=str(tier or ""),
             exam_mode=("EXAM MODE" in str(send_text or "")),
             has_header=("📘 file:" in low),
             has_concept=("concept:" in low),
-            has_recall=("recall:" in low),
+            has_recall=(n_recalls == 1),
             has_source=("source:" in low),
             repaired=bool(repaired),
             violations=int(violations or 0),
