@@ -292,16 +292,14 @@ def _usable_tiers(
 ) -> List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]:
     """Central tier policy: preferred order minus cooled-down providers.
 
-    Intentional hammer fallback: when every tier is cooled, `usable` is
-    empty and we return the full `ordered` list instead of stalling.
-    Cooldowns are advisory best-effort (transient/rate-limit windows);
-    returning [] would deadlock the request until a window expires, while
-    hammering lets a recovered provider answer immediately. Callers still
-    record failures and re-cool.
+    Hammer fallback when all cooled: returning [] would deadlock the
+    request until a window expires, while retrying lets a recovered
+    provider answer immediately (transient vs quota cooldowns still
+    recorded). Fail-fast for quota (6h) is handled by callers via
+    friendly error after one hammer attempt.
     """
     ordered = _ordered_tiers(first, tiers)
     usable = [item for item in ordered if not _tier_skipped(item[0])]
-    # Intentional: if all cooled, try ordered anyway rather than returning empty.
     return usable or ordered
 
 

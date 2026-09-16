@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
-from services.limits import MODEL_TIMEOUT_SECONDS
+from services.limits import MODEL_MAX_TOKENS, MODEL_TIMEOUT_SECONDS
 from services.secrets import get_secret
 
 load_dotenv()
@@ -148,6 +148,7 @@ def _make_gemini(model: str, key: str, temperature: float):
         api_key=key,  # type: ignore[arg-type]
         temperature=temperature,
         request_timeout=MODEL_TIMEOUT_SECONDS,
+        max_output_tokens=MODEL_MAX_TOKENS,
     )
     try:
         return ChatGoogleGenerativeAI(
@@ -219,6 +220,7 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
                 temperature=temperature,
                 # Native HTTP timeout: truly aborts hung provider calls.
                 request_timeout=MODEL_TIMEOUT_SECONDS,
+                max_tokens=MODEL_MAX_TOKENS,
             ),
         )
     except Exception:
@@ -270,6 +272,7 @@ def _get_generic_openai_tier(
                 base_url=base_url,
                 temperature=temperature,
                 request_timeout=MODEL_TIMEOUT_SECONDS,
+                max_tokens=MODEL_MAX_TOKENS,
             ),
         )
     except Exception:
@@ -335,6 +338,7 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
                 temperature=temperature,
                 # Native HTTP timeout: truly aborts hung provider calls.
                 request_timeout=MODEL_TIMEOUT_SECONDS,
+                max_tokens=MODEL_MAX_TOKENS,
             ),
         )
     except Exception:

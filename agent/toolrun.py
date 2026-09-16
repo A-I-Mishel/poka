@@ -458,7 +458,37 @@ def run_tool_loop(
         )
     messages.append(HumanMessage(content=user_input))
 
-    bound_fixed = llm_instance.bind_tools(list(tools))
+    def _filtered_tools(hint: str) -> List[Any]:
+        # ponytail: lazy-bind to keep small-context lanes (GitHub 8k) from 400s; expand heuristic when a needed tool is missed
+        low = (hint or "").lower()
+        base: List[Any] = [web_search, search_documents, workspace_list, workspace_read, check_logic]
+        if any(k in low for k in ("pdf", "document", "docx", "pptx", "slide", ".pdf", "upload", "attached", "[content of", "read_document", "read_pdf")):
+            base += [read_document, read_pdf, read_pdf_page, read_output, analyze_csv, csv_inspect]
+        if any(k in low for k in ("csv", "tsv", "xlsx", "data", "table", "spreadsheet", "database", "sql", "query")):
+            base += [analyze_csv, csv_inspect, list_tables, describe_table, query_database, import_csv_table, execute_sql]
+        if any(k in low for k in ("presentation", "slides", "pptx", "powerpoint", "essay", "report", "resume", "create", "build")):
+            base += [create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output]
+        if any(k in low for k in ("code", "python", "workspace", "run_code", "script", "program", "function", "execute")):
+            base += [workspace_write, workspace_delete, run_code, run_python, list_mcp_tools, call_mcp_tool]
+        if any(k in low for k in ("gmail", "email", "mail", "calendar", "event")):
+            base += [search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event]
+        # dedupe
+        seen = set()
+        out: List[Any] = []
+        for t in base:
+            if getattr(t, "name", "") not in seen:
+                seen.add(getattr(t, "name", ""))
+                out.append(t)
+        # ambiguous doc request (e.g. "what is it?") with no keyword but file hint may be weak
+        if len(out) <= 5 and any(k in low for k in ("file", "read", "what is", "summar")):
+            for t in [read_document, read_pdf, read_pdf_page]:
+                if t.name not in seen:
+                    seen.add(t.name)
+                    out.append(t)
+        # fallback: if heuristics added nothing beyond base and hint looks generic, keep base (saves tokens); full set only when hint empty
+        return out if out else list(tools)
+
+    bound_fixed = llm_instance.bind_tools(_filtered_tools(user_input))
     last_text: str = ""
     last_text_tier: Optional[str] = None
     last_results: List[str] = []
@@ -493,7 +523,7 @@ def run_tool_loop(
                 provider_error = e
                 break
             try:
-                bound = round_llm.bind_tools(list(tools))
+                bound = round_llm.bind_tools(_filtered_tools(user_input))
             except BudgetExhausted:
                 raise
             except Exception as e:
@@ -503,7 +533,7 @@ def run_tool_loop(
         try:
             if live is not None:
                 live.reset_for_new_call()
-            response = agent._invoke_bounded(bound, messages, budget=budget, on_token=live)
+            response = agent._invoke_bounded(bound, messages, budget=budget, on_token=live, tier_name=tier_name)
         except BudgetExhausted:
             raise
         except Exception as e:
@@ -592,7 +622,7 @@ def run_tool_loop(
             HumanMessage(
                 content=(
                     "Tool results for your last action:\n"
-                    + "\n".join(last_results)
+                    + "\n".join(last_results)[:6000]
                     + "\nNow write your final answer to the user using these results. "
                     "Only call another tool if you still lack something essential."
                 )
@@ -609,6 +639,8 @@ def run_tool_loop(
     # on the next live tier instead of a salvaged partial. Salvage below
     # is the last resort, and budget exhaustion is never retried (it is
     # our limit, not the provider's).
+    # ponytail: cap synthesis join (was unbounded) — prevents 8k overflow on GitHub lane
+    _synthesis_blob = "\n".join(last_results)[:6000]
     synthesis_messages: List[BaseMessage] = [
         SystemMessage(
             content="Summarize the tool results below into a concise "
@@ -616,7 +648,7 @@ def run_tool_loop(
         ),
         HumanMessage(
             content="Results:\n"
-            + "\n".join(last_results)
+            + _synthesis_blob
             + "\n\nOriginal request:\n"
             + user_input
         ),
@@ -630,6 +662,7 @@ def run_tool_loop(
             timeout=60.0,
             budget=budget,
             on_token=live,
+            tier_name=round_tier,
         )
         text = _as_text(final.content).strip()
         if text:
@@ -654,6 +687,7 @@ def run_tool_loop(
                         timeout=60.0,
                         budget=budget,
                         on_token=live,
+                        tier_name=synthesis_tier,
                     )
                 except BudgetExhausted:
                     break

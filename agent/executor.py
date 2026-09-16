@@ -30,7 +30,7 @@ from typing import Any, Callable, Iterator, List, Optional
 from langchain_core.language_models.base import BaseLanguageModel
 
 from agent.prompts import _as_text, sanitize_messages_for_provider
-from services.limits import FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
+from services.limits import FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS, FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
 from services.obs import event as obs_event
 
 from agent.budget import RequestBudget
@@ -180,6 +180,24 @@ def _first_token_timeout() -> float:
         return FIRST_TOKEN_TIMEOUT_SECONDS
 
 
+def _first_token_timeout_for_tier(tier: Optional[str]) -> float:
+    """Per-tier first-token deadline: OpenRouter free lanes need longer queue."""
+    if tier and str(tier).lower().startswith("openrouter"):
+        try:
+            return max(
+                0.0,
+                float(
+                    os.environ.get(
+                        "PLUTO_FIRST_TOKEN_TIMEOUT_OPENROUTER",
+                        str(FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS),
+                    )
+                ),
+            )
+        except (TypeError, ValueError):
+            return FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS
+    return _first_token_timeout()
+
+
 def _next_chunk_before(iterator: Iterator[Any], deadline: float) -> Any:
     """Return next(iterator), raising TimeoutError past the deadline.
 
@@ -293,6 +311,7 @@ def _invoke_bounded(
     timeout: float = MODEL_TIMEOUT_SECONDS,
     budget: Optional[RequestBudget] = None,
     on_token: Optional[Callable[[str], None]] = None,
+    tier_name: Optional[str] = None,
 ) -> Any:
     """Invoke a model with bounded execution time, charging the budget.
 
@@ -305,6 +324,7 @@ def _invoke_bounded(
     Outgoing history is sanitized first: encrypted provider reasoning
     (bound to the issuing model/key) is stripped so cascade fallback
     to another tier never fails with "was not issued to this caller".
+    tier_name selects the per-tier first-token budget (OpenRouter 20s).
     """
     try:
         messages = sanitize_messages_for_provider(messages)
@@ -313,7 +333,7 @@ def _invoke_bounded(
     if budget is not None:
         budget.count_llm()
     provider = getattr(llm_instance, "model", type(llm_instance).__name__)
-    first_token_timeout = _first_token_timeout()
+    first_token_timeout = _first_token_timeout_for_tier(tier_name) if tier_name else _first_token_timeout()
 
     def _call() -> Any:
         if first_token_timeout > 0:

@@ -58,13 +58,13 @@ def _run_cascade_step_sync(
             # If we're in a running loop, create a new task and wait
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(asyncio.run, _run_cascade_step_async(fn, first, None, attempts))
+                future = executor.submit(asyncio.run, _run_cascade_step_async(fn, first, tiers, attempts))
                 return future.result(timeout=120)
         else:
-            return asyncio.run(_run_cascade_step_async(fn, first, None, attempts))
+            return asyncio.run(_run_cascade_step_async(fn, first, tiers, attempts))
     except RuntimeError:
         # No event loop, create new one
-        return asyncio.run(_run_cascade_step_async(fn, first, None, attempts))
+        return asyncio.run(_run_cascade_step_async(fn, first, tiers, attempts))
 
 MAX_HISTORY_MESSAGES: int = 6
 
@@ -322,7 +322,7 @@ def answer_with_fallback(
     if task_type == "simple":
         def _answer_direct(_name: str, llm: BaseLanguageModel) -> str:
             system_text = _build_system_prompt(
-                combined_notes, relevant_context, project_context)
+                combined_notes, relevant_context, project_context, simple=True)
             with trace_llm_call(request_id, "simple", "simple") as _:
                 response = agent._invoke_bounded(
                     llm,
@@ -333,6 +333,7 @@ def answer_with_fallback(
                     ],
                     budget=budget,
                     on_token=live,
+                    tier_name=_name,
                 )
             return _as_text(response.content)
 

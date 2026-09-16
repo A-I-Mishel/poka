@@ -122,6 +122,14 @@ TOOL_TIMEOUT_SECONDS: float = 90.0
 MCP_TIMEOUT_SECONDS: float = 60.0
 PROBE_TIMEOUT_SECONDS: float = 20.0
 
+# Output cap (tokens) — unbounded completions on 8B lanes ramble and burn budget.
+# ponytail: universal 1800 tok (~5 slides with boxes); split to 1500/3000 per
+# deep_mode when 1800 measurably truncates research answers.
+MODEL_MAX_TOKENS: int = 1800
+MODEL_MAX_TOKENS_DEEP: int = 3000
+# ponytail: OpenRouter free lanes queue longer — 20s first-token vs 12s for Groq/Gemini
+FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS: float = 20.0
+
 # Request budgets (per single user message)
 MAX_LLM_CALLS_PER_REQUEST: int = 12
 MAX_TOOL_CALLS_PER_REQUEST: int = 8
