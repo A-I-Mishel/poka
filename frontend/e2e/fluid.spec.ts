@@ -7,15 +7,25 @@ import { expect, test } from "@playwright/test";
 // Each width boots clean, shows a usable composer, never overflows
 // horizontally, and puts the sidebar in the right mode (drawer below
 // 861px, static dock at and above it).
-for (const width of [360, 768, 1280, 1600]) {
-  test(`fluid layout at ${width}px`, async ({ page }) => {
+for (const [width, height] of [
+  [360, 800],
+  [768, 800],
+  [1280, 800],
+  [1600, 800],
+  // Fringes: tablet landscape, landscape phone (short-height rules),
+  // very small phone (below the 380px breakpoint).
+  [1024, 768],
+  [844, 390],
+  [320, 568],
+] as const) {
+  test(`fluid layout at ${width}x${height}`, async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`pageerror: ${String(e)}`));
     page.on("console", (m) => {
       if (m.type() === "error") errors.push(`console: ${m.text()}`);
     });
 
-    await page.setViewportSize({ width, height: 800 });
+    await page.setViewportSize({ width, height });
     await page.goto("/");
     await expect(page.locator("#authDlg")).toBeVisible({ timeout: 30_000 });
     await page.click("#authCancel");
