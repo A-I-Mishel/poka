@@ -488,6 +488,22 @@ $("moreToggle").addEventListener("click", function () {
   var c = $("moreItems").classList.toggle("collapsed");
   $("moreToggle").classList.toggle("collapsed", c);
 });
+/* ponytail: RECENTS collapsible like MORE, persisted */
+(function initRecentsToggle() {
+  var btn = $("recentsToggle"), list = $("recentList");
+  if (!btn || !list) return;
+  var collapsed = !!S.recentsCollapsed;
+  list.classList.toggle("collapsed", collapsed);
+  btn.classList.toggle("collapsed", collapsed);
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  btn.addEventListener("click", function () {
+    var c = list.classList.toggle("collapsed");
+    btn.classList.toggle("collapsed", c);
+    btn.setAttribute("aria-expanded", c ? "false" : "true");
+    S.recentsCollapsed = c;
+    savePrefs();
+  });
+})();
 $("foldBtn").addEventListener("click", function () {
   document.body.classList.toggle("folded");
   if (window.innerWidth > 860) {

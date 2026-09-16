@@ -33,6 +33,7 @@ svg{display:block;flex-shrink:0}
 .nav .chev{margin-left:auto;transition:transform .15s}
 .nav.collapsed .chev{transform:rotate(-90deg)}
 #moreItems.collapsed{display:none}
+#recentList.collapsed{display:none}
 .recent{display:flex;align-items:center;gap:2px;height:30px;padding:0 4px 0 8px;border-radius:6px;color:var(--t2);font-size:12.5px;cursor:pointer}
 .recent>span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recent:hover{background:var(--s2);color:var(--tx)}
