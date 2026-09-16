@@ -319,6 +319,44 @@ def test_explicit_reteach_skips_exam_mode(tmp_path, monkeypatch):
     assert "Verified content" in send
 
 
+def test_time_pressure_detection():
+    from backend.chatflow import _time_pressure
+
+    assert _time_pressure("exam tomorrow, teach me quickly") == "rush"
+    assert _time_pressure("teach me graphs in detail from scratch") == "deep"
+    assert _time_pressure("teach me these slides") is None
+
+
+def test_rush_modifier_injected(tmp_path, monkeypatch):
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-rush")
+    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"], ["Path simple"]])
+    m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
+    atts = [{"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]
+    send, _, _ = _apply_teaching_session(
+        ctx, "exam tomorrow teach quickly", [], atts, [], "exam tomorrow teach quickly")
+    assert "essentials" in send.lower()
+
+
+def test_format_logging_metadata_only(tmp_path, monkeypatch):
+    import backend.chatflow as cf
+
+    seen = {}
+    monkeypatch.setattr(cf, "obs_event", lambda name, **kw: seen.update({"name": name, **kw}))
+    cf._log_teaching_format(
+        "hi [Teaching mode: x]", "📘 FILE: L — Slides 1-2\nConcept: G\nRecall: Q?\nSource: [slide 1]", "Mistral")
+    assert seen["name"] == "teaching.format"
+    assert seen["has_concept"] is True and seen["has_recall"] is True
+    assert seen["tier"] == "Mistral"
+    # Non-teaching turns log nothing.
+    seen.clear()
+    cf._log_teaching_format("hello", "hi there", "Groq")
+    assert seen == {}
+    # Never raises, even on hostile input.
+    cf._log_teaching_format(None, None, None)
+
+
 def test_subject_templates_in_prompt():
     from agent.prompts import SYSTEM_PROMPT
 

@@ -180,6 +180,11 @@ _TEACHING_PACE_SLOW = ("slow down", "slower", "too fast", "simplify", "simpler",
                        "in detail", "explain again", "once more", "step by step")
 _TEACHING_PACE_FAST = ("faster", "too easy", "too slow", "skip", "got it",
                        "understood", "make it harder", "harder problems")
+_TEACHING_RUSH_SIGNALS = ("exam tomorrow", "exam in", "hours left", "quick revision",
+                          "quickly", "in a hurry", "hurry", "last minute",
+                          "crash course", "tonight", "tomorrow morning", "little time")
+_TEACHING_DEEP_SIGNALS = ("in detail", "detailed", "deep dive", "thoroughly",
+                          "from scratch", "from zero", "master it", "understand deeply")
 
 TEACHING_SUFFIX = (
     "\n\n[Teaching mode: exam-focused, concept-first. Teach ONLY the verified "
@@ -315,6 +320,21 @@ def _pace_direction(text: str) -> Optional[str]:
             return "slow"
         if any(s in t for s in _TEACHING_PACE_FAST):
             return "fast"
+        return None
+    except Exception:
+        return None
+
+
+def _time_pressure(text: str) -> Optional[str]:
+    """'rush' / 'deep' when the learner states time/depth pressure, else None."""
+    try:
+        t = str(text or "").lower()
+        if not t:
+            return None
+        if any(s in t for s in _TEACHING_RUSH_SIGNALS):
+            return "rush"
+        if any(s in t for s in _TEACHING_DEEP_SIGNALS):
+            return "deep"
         return None
     except Exception:
         return None
@@ -1321,6 +1341,22 @@ def _apply_teaching_session(
             )
     except Exception:
         pass
+    # Time/depth pressure stated by the learner (exam soon vs mastery).
+    try:
+        _pressure = _time_pressure(str(gate_text or ""))
+        if _pressure == "rush":
+            send_text += (
+                "\n\n[Time pressure: the exam is soon. Teach essentials and "
+                "HIGH VALUE concepts only, keep blocks tight, rapid pace with "
+                "compact recall. Skip LOW details.]"
+            )
+        elif _pressure == "deep":
+            send_text += (
+                "\n\n[Depth requested: full mechanism, extra worked examples, "
+                "slower pace. Do not skip prerequisites.]"
+            )
+    except Exception:
+        pass
     send_text += (
         "\n\n[Note: the user is in a teaching session for the file above; "
         "use its upload ID and verified window only.]"
@@ -1402,6 +1438,29 @@ def _apply_attachment_gate(ctx: UserContext, gate_text: str,
     return send_text, vision_ids, None
 
 
+def _log_teaching_format(send_text: str, output: str, tier: str) -> None:
+    """Log teaching format compliance as metadata only (never raises).
+
+    Records which §37 blocks a teaching answer carried (header/concept/
+    recall/source) so tier compliance can be measured over time. No content,
+    IDs, or prompts are logged — tier + booleans only. Never modifies output.
+    """
+    try:
+        if "Teaching mode:" not in str(send_text or "") and "EXAM MODE" not in str(send_text or ""):
+            return
+        low = str(output or "").lower()
+        obs_event(
+            "teaching.format", tier=str(tier or ""),
+            exam_mode=("EXAM MODE" in str(send_text or "")),
+            has_header=("📘 file:" in low),
+            has_concept=("concept:" in low),
+            has_recall=("recall:" in low),
+            has_source=("source:" in low),
+        )
+    except Exception:
+        pass
+
+
 def run_chat(ctx: UserContext, content: str,
              upload_ids: Optional[List[str]] = None,
              project_id: Optional[str] = None,
@@ -1481,6 +1540,7 @@ def run_chat(ctx: UserContext, content: str,
         bool(force_search), active_tier, on_token, on_reset,
         on_progress)
 
+    _log_teaching_format(send_text, str(assistant_msg.get("content", "")), tier)
     current = current + [user_msg, assistant_msg]
     store.save_chats(chats, current)
     return {
@@ -1594,6 +1654,7 @@ def regenerate_chat(ctx: UserContext, index: int,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier)
 
+    _log_teaching_format(send_text, str(fresh_msg.get("content", "")), tier)
     current = current + [fresh_msg]
     store.save_chats(chats, current)
     return {
