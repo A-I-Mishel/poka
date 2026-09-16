@@ -14,8 +14,6 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.2
-      - key: OPENCODE_API_KEY
-        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GROQ_API_KEY

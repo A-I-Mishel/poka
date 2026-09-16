@@ -17,10 +17,8 @@ from typing import Optional
 
 
 _PLACEHOLDERS = frozenset({
-    "your_opencode_key_here",
     "your_gemini_key_here",
     "your_groq_key_here",
-    "your_cerebras_key_here",
     "your_openrouter_key_here",
     "your_github_models_token_here",
     "your_mistral_key_here",
@@ -60,14 +58,10 @@ def validate_secrets() -> list[str]:
     mode = os.getenv("PLUTO_AUTH_MODE", "open") or "open"
     if mode.strip().lower() == "private" and not os.getenv("PLUTO_ACCESS_TOKENS"):
         warnings.append("PLUTO_AUTH_MODE=private but PLUTO_ACCESS_TOKENS is empty — no one can log in")
-    for key in ("OPENCODE_API_KEY", "GEMINI_API_KEY"):
-        val = os.getenv(key, "")
-        if is_placeholder(val):
-            continue  # optional — one tier is enough
     # warn if no LLM tier is configured at all
     has_any = any(
         os.getenv(k) and not is_placeholder(os.getenv(k))
-        for k in ("OPENCODE_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
+        for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
                   "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "NVIDIA_API_KEY")
     )
     if not has_any:

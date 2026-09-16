@@ -58,9 +58,7 @@ python -m pytest tests/ -q
 | Variable | Required | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | yes (or Groq/OpenRouter key) | Google Gemini models (free tier) |
-| `OPENCODE_API_KEY` | no (retired) | OpenCode Zen free tier retired Sep 2026 — `MissingSessionID` for API calls; paid Zen works if you re-add slugs |
 | `GROQ_API_KEY` | no | Groq fast-inference tier |
-| `CEREBRAS_API_KEY` | no | Cerebras free-tier (no card; ~1M tokens/day) |
 | `OPENROUTER_API_KEY` | no | OpenRouter fallback tiers (free models) |
 | `GITHUB_MODELS_TOKEN` | no | GitHub Models free tier (PAT with `models:read`) |
 | `MISTRAL_API_KEY` | no | Mistral free evaluation tier (no card) |
