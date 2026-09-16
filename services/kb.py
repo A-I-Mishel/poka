@@ -139,6 +139,11 @@ def _blank_kb() -> Dict[str, Any]:
 # Invalidate on mtime change or explicit write operations
 _KB_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 
+# ponytail: query embedding cache — second search with same query avoids Gemini RTT
+_QUERY_EMBED_CACHE: Dict[tuple, List[float]] = {}
+_QUERY_EMBED_LOCK = __import__("threading").Lock()
+_QUERY_EMBED_MAX = 128
+
 
 def load_kb(user_id: Any) -> Dict[str, Any]:
     """Load a user's knowledge base; blank (never raise) when missing/corrupt.
@@ -918,9 +923,20 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
         return []
     qv: List[float] = []
     try:
-        qvecs = kb_embeddings.embed_texts([q])
-        if qvecs:
-            qv = _l2_normalize(qvecs[0])
+        # ponytail: query embed cache — second identical search avoids Gemini call
+        qkey = (q.strip().lower(), kb_embeddings.default_model())
+        with _QUERY_EMBED_LOCK:
+            hit = _QUERY_EMBED_CACHE.get(qkey)
+        if hit is not None:
+            qv = hit
+        else:
+            qvecs = kb_embeddings.embed_texts([q])
+            if qvecs:
+                qv = _l2_normalize(qvecs[0])
+                with _QUERY_EMBED_LOCK:
+                    if len(_QUERY_EMBED_CACHE) >= _QUERY_EMBED_MAX:
+                        _QUERY_EMBED_CACHE.pop(next(iter(_QUERY_EMBED_CACHE)))
+                    _QUERY_EMBED_CACHE[qkey] = qv
     except Exception:
         # Avoid leaking exception detail that may contain secrets
         obs_event("kb.search_error", reason="embed")

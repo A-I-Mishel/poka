@@ -7,7 +7,15 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from services.files import FileStore
-from services.limits import MAX_PPTX_BULLETS_PER_SLIDE, MAX_PPTX_SLIDES
+from services.limits import (
+    MAX_PPTX_BULLETS_PER_SLIDE,
+    MAX_PPTX_SLIDES,
+    PPTX_BUILD_MAX_BULLET_CHARS,
+    PPTX_BUILD_MAX_BULLETS_PER_CHUNK,
+    PPTX_BUILD_MAX_TABLE_COLS,
+    PPTX_BUILD_MAX_TABLE_ROWS,
+    PPTX_BUILD_MAX_TITLE_CHARS,
+)
 from services.storage import StorageError
 from tools.gating import claim_generation_slot
 
@@ -116,11 +124,13 @@ def create_pptx(topic: str, content: str) -> str:
 
 
 _PPTX_MAX_SLIDES: int = 20
-_PPTX_MAX_BULLETS: int = 7
-_PPTX_MAX_CHARS_PER_BULLET: int = 160
-_PPTX_MAX_TITLE: int = 80
-_PPTX_MAX_TABLE_ROWS: int = 12
-_PPTX_MAX_TABLE_COLS: int = 6
+# ponytail: reuse limits single source of truth — local aliases kept for
+# backward compat within this file
+_PPTX_MAX_BULLETS: int = PPTX_BUILD_MAX_BULLETS_PER_CHUNK
+_PPTX_MAX_CHARS_PER_BULLET: int = PPTX_BUILD_MAX_BULLET_CHARS
+_PPTX_MAX_TITLE: int = PPTX_BUILD_MAX_TITLE_CHARS
+_PPTX_MAX_TABLE_ROWS: int = PPTX_BUILD_MAX_TABLE_ROWS
+_PPTX_MAX_TABLE_COLS: int = PPTX_BUILD_MAX_TABLE_COLS
 _PPTX_SLIDE_TYPES = ("title", "section", "bullets", "two_column", "table")
 
 
