@@ -112,6 +112,30 @@ def test_concept_format_in_prompt_and_suffix():
     assert "wait for the learner" in SYSTEM_PROMPT.lower()
 
 
+def _norm_ws(text):
+    return " ".join(str(text or "").split())
+
+
+def test_texture_sentences_verbatim_in_both_prompts():
+    from agent.prompts import SYSTEM_PROMPT
+    from backend.chatflow import TEACHING_SUFFIX
+
+    example_sentence = (
+        "Never reuse the same conceptual example domain in consecutive turns. "
+        "Rotate across genuinely different domains such as social networks → "
+        "roads → circuits → food webs → databases, rather than merely changing "
+        "names or surface details."
+    )
+    depth_sentence = (
+        "omit any section that adds no meaningful information — do not "
+        "artificially fill the canonical structure"
+    )
+    recall_sentence = "never ask the same recall type twice consecutively"
+    for sentence in (example_sentence, depth_sentence, recall_sentence):
+        assert _norm_ws(sentence) in _norm_ws(SYSTEM_PROMPT), sentence[:40]
+        assert _norm_ws(sentence) in _norm_ws(TEACHING_SUFFIX), sentence[:40]
+
+
 def test_reflection_teaching_focus():
     from agent.reflection import _TASK_FOCUS
 
@@ -410,6 +434,36 @@ def test_format_logging_metadata_only(tmp_path, monkeypatch):
     assert seen == {}
     # Never raises, even on hostile input.
     cf._log_teaching_format(None, None, None)
+
+
+def test_texture_logging_fields(tmp_path, monkeypatch):
+    import backend.chatflow as cf
+
+    seen = {}
+    monkeypatch.setattr(cf, "obs_event", lambda name, **kw: seen.update({"name": name, **kw}))
+    cf._log_teaching_format(
+        "hi [Teaching mode: x]",
+        "📘 FILE: L\nSlides: 1-2\n## Concept: G\n**Definition**\nA pair.\n"
+        "**How it works**\nLinks.\n**Exam importance**\nMEDIUM stuff.\n"
+        "**Source**\n[slide 1]\n**Recall**\nWhy does this hold?",
+        "Groq")
+    assert seen["has_definition"] is True
+    assert seen["has_how"] is True
+    assert seen["has_why"] is False
+    assert seen["has_example"] is False
+    assert seen["importance"] == "MEDIUM"
+    assert seen["recall_type"] == "why"
+
+
+def test_classify_recall_type():
+    from backend.chatflow import _classify_recall_type
+
+    assert _classify_recall_type("**Recall**\nWhat is a vertex?") == "define"
+    assert _classify_recall_type("**Recall**\nCompare paths and cycles") == "compare"
+    assert _classify_recall_type("**Recall**\nFind the mistake: ...") == "mistake"
+    assert _classify_recall_type("**Recall**\nSolve for x") == "apply"
+    assert _classify_recall_type("no recall here") == "unknown"
+    assert _classify_recall_type(None) == "unknown"
 
 
 _GOOD_DRAFT = (

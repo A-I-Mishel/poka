@@ -232,7 +232,21 @@ TEACHING_SUFFIX = (
     "section (one question) and STOP — never append Say Next, Say Got it, "
     "Next Steps, another question, or further teaching. Never invent "
     "slides beyond verified content; if truncated or empty, say so and ask "
-    "to re-upload.]"
+    "to re-upload. Vary depth by importance: MUST KNOW/HIGH get full "
+    "treatment; MEDIUM gets compact treatment (merge How+Why into ≤3 lines "
+    "when both are useful; omit any section that adds no meaningful "
+    "information — do not artificially fill the canonical structure); LOW "
+    "gets 1-2 lines and is excluded from recall weight. Never reuse the "
+    "same conceptual example domain in consecutive turns. Rotate across "
+    "genuinely different domains such as social networks → roads → "
+    "circuits → food webs → databases, rather than merely changing names "
+    "or surface details. Prefer the slide's own example first; label "
+    "supporting analogies as supporting. Rotate recall types across turns "
+    "(define → apply → compare → why → mistake); never ask the same recall "
+    "type twice consecutively. Open with one short continuity sentence "
+    "connecting the previous turn to the current one. Sections may reorder "
+    "or merge when conceptually useful; canonical headings and Source "
+    "attachment are always preserved.]"
 )
 
 
@@ -1737,13 +1751,53 @@ def _maybe_repair_teaching_turn(
         return content, False, []
 
 
+_TEACHING_SECTION_RES = {
+    "definition": re.compile(r"^\s*\*{2}definition\*{2}\s*$", re.IGNORECASE | re.MULTILINE),
+    "how": re.compile(r"^\s*\*{2}how it works\*{2}\s*$", re.IGNORECASE | re.MULTILINE),
+    "why": re.compile(r"^\s*\*{2}why(?: it matters)?\*{2}\s*$", re.IGNORECASE | re.MULTILINE),
+    "example": re.compile(r"^\s*\*{2}example\*{2}\s*$", re.IGNORECASE | re.MULTILINE),
+}
+_TEACHING_IMPORTANCE_RE = re.compile(r"\b(MUST KNOW|HIGH|MEDIUM|LOW)\b", re.IGNORECASE)
+
+
+def _classify_recall_type(output: str) -> str:
+    """Guess the recall-question type from its wording (never raises).
+
+    Returns one of define/apply/compare/why/mistake/unknown. Metadata
+    only — used to measure recall rotation over time.
+    """
+    try:
+        matches = list(_TEACHING_RECALL_RE.finditer(str(output or "")))
+        if len(matches) != 1:
+            return "unknown"
+        question = str(output or "")[matches[0].end():matches[0].end() + 400].lower()
+        if not question.strip():
+            return "unknown"
+        if any(w in question for w in ("mistake", "wrong", "error", "incorrect", "find the")):
+            return "mistake"
+        if any(w in question for w in ("compare", "difference", "differ", " vs ", "versus")):
+            return "compare"
+        if any(w in question for w in ("why", "explain")):
+            return "why"
+        if any(w in question for w in ("calcul", "solve", "compute", "apply", "find", "give an example", "work out")):
+            return "apply"
+        if any(w in question for w in ("what is", "what are", "define", "definition", "state")):
+            return "define"
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _log_teaching_format(send_text: str, output: str, tier: str,
                          repaired: bool = False, violations: int = 0) -> None:
     """Log teaching format compliance as metadata only (never raises).
 
     Records which §37 blocks a teaching answer carried (header/concept/
-    recall/source) so tier compliance can be measured over time. No content,
-    IDs, or prompts are logged — tier + booleans only. Never modifies output.
+    recall/source) so tier compliance can be measured over time. Also
+    records section presence, the stated importance level, and the
+    recall-question type so texture variation can be measured. No content,
+    IDs, or prompts are logged — tier + booleans/labels only. Never
+    modifies output.
     """
     try:
         if "Teaching mode:" not in str(send_text or "") and "EXAM MODE" not in str(send_text or ""):
@@ -1754,6 +1808,16 @@ def _log_teaching_format(send_text: str, output: str, tier: str,
             n_recalls = len(_TEACHING_RECALL_RE.findall(text))
         except Exception:
             n_recalls = 0
+        try:
+            sections = {name: bool(rx.search(text))
+                        for name, rx in _TEACHING_SECTION_RES.items()}
+        except Exception:
+            sections = {}
+        try:
+            m = _TEACHING_IMPORTANCE_RE.search(text)
+            importance = m.group(1).upper() if m else "unknown"
+        except Exception:
+            importance = "unknown"
         obs_event(
             "teaching.format", tier=str(tier or ""),
             exam_mode=("EXAM MODE" in str(send_text or "")),
@@ -1763,6 +1827,12 @@ def _log_teaching_format(send_text: str, output: str, tier: str,
             has_source=("source:" in low),
             repaired=bool(repaired),
             violations=int(violations or 0),
+            has_definition=bool(sections.get("definition")),
+            has_how=bool(sections.get("how")),
+            has_why=bool(sections.get("why")),
+            has_example=bool(sections.get("example")),
+            importance=importance,
+            recall_type=_classify_recall_type(text),
         )
     except Exception:
         pass
