@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend import schemas
-from backend.chatflow import archive_current
+from backend.chatflow import archive_current, maybe_attach_episodic_summary
 from backend.deps import UserContext, current_user
 from services.limits import MAX_CHAT_TITLE_CHARS
 from services.storage import MAX_STORED_CHATS, StorageError
@@ -47,6 +47,7 @@ def new_chat(body: schemas.ArchiveRequest, ctx: UserContext = Depends(current_us
         try:
             record, current = archive_current(
                 current, body.project_id, body.chat_id)
+            record = maybe_attach_episodic_summary(record)
         except ValueError:
             current = []
         else:
@@ -103,6 +104,7 @@ def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_
                     current,
                     selected.get("project_id") if isinstance(selected, dict) else None,
                     origin_id)
+                record = maybe_attach_episodic_summary(record)
                 # same id replaces and moves to top; new id prepends
                 if not any(isinstance(c, dict) and c.get("id") == record.get("id") for c in chats):
                     chats = [record] + chats

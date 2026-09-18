@@ -164,7 +164,6 @@ def get_tier2_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenera
     key: Optional[str] = _get_secret("GEMINI_API_KEY")
     if key is None:
         return None
-    assert key is not None
     try:
         return _cached_client(
             "Gemini 3.6 Flash", temperature, key, GEMINI_36_MODEL,
@@ -179,7 +178,6 @@ def get_tier3_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenera
     key: Optional[str] = _get_secret("GEMINI_API_KEY")
     if key is None:
         return None
-    assert key is not None
     try:
         return _cached_client(
             "Gemini 3.5 Flash", temperature, key, GEMINI_35_MODEL,
@@ -205,7 +203,6 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     key: Optional[str] = _get_secret("GROQ_API_KEY")
     if key is None:
         return None
-    assert key is not None
     try:
         model = _groq_model()
         return _cached_client(
@@ -259,7 +256,6 @@ def _get_generic_openai_tier(
     key: Optional[str] = _get_secret(key_name)
     if key is None:
         return None
-    assert key is not None
     try:
         return _cached_client(
             tier,
@@ -321,7 +317,6 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
     key: Optional[str] = _get_secret("OPENROUTER_API_KEY")
     if key is None:
         return None
-    assert key is not None
     try:
         return _cached_client(
             tier,
@@ -467,6 +462,12 @@ CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Mistral", get_tier_mistral_llm),
     ("NVIDIA", get_tier_nvidia_llm),
 ]
+
+# Tiers that get the strict grounding paragraph (small or nondeterministic
+# models prone to inventing citations/IDs): answer ONLY from tool results.
+STRICT_GROUNDING_TIERS = frozenset({
+    "NVIDIA", "Mistral", "OpenRouter Gemma 26B", "OpenRouter Free Router",
+})
 
 
 TASK_TEMPERATURES: Dict[str, float] = {

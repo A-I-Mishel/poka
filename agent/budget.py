@@ -25,6 +25,15 @@ class BudgetExhausted(Exception):
     """Raised when a request-level budget runs out. Never marks tiers failed."""
 
 
+class TurnCancelled(Exception):
+    """Raised when the client went away mid-turn (stream disconnect).
+
+    Never marks tiers failed, never triggers synthesis or salvage — there
+    is nobody left to read an answer. Every layer must re-raise it
+    untouched (it is not an error, not a budget event, not a fallback).
+    """
+
+
 @dataclass
 class RequestBudget:
     """Bounded resources for one user message (also collects metrics)."""

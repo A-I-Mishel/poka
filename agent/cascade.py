@@ -14,8 +14,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from langchain_core.language_models.base import BaseLanguageModel
 
 import agent  # package-attr routing: tier-table doubles on agent stay effective
-from agent.budget import BudgetExhausted
+from agent.budget import BudgetExhausted, TurnCancelled
 from services.limits import (
+    SLOW_TIER_LATENCY_SECONDS,
     TIER_COOLDOWN_PERMANENT_SECONDS,
     TIER_COOLDOWN_QUOTA_SECONDS,
     TIER_COOLDOWN_TIMEOUT_SECONDS,
@@ -289,9 +290,43 @@ def _ordered_tiers(
     return ordered
 
 
+# Per-tier successful-call latency EMA (seconds) for slow-tier demotion.
+# _LAT_EMA_ALPHA controls how fast one sample moves the average; cold
+# tiers (no samples) sort normally so new providers are never penalized.
+_TIER_LAT_EMA: Dict[str, float] = {}
+_LAT_EMA_ALPHA: float = 0.3
+
+
+def _record_latency(name: str, seconds: float) -> None:
+    """Fold one successful call latency into the tier EMA. Never raises."""
+    try:
+        if not isinstance(name, str) or not name:
+            return
+        secs = float(seconds)
+        if not 0 < secs < 600:
+            return
+        with _STATE_LOCK:
+            prev = _TIER_LAT_EMA.get(name)
+            _TIER_LAT_EMA[name] = secs if prev is None else (
+                _LAT_EMA_ALPHA * secs + (1.0 - _LAT_EMA_ALPHA) * prev)
+    except Exception:
+        pass
+
+
+def _is_slow_tier(name: str) -> bool:
+    """True when the tier's latency EMA exceeds the demotion threshold."""
+    try:
+        with _STATE_LOCK:
+            ema = _TIER_LAT_EMA.get(name)
+        return ema is not None and ema > float(SLOW_TIER_LATENCY_SECONDS)
+    except Exception:
+        return False
+
+
 def _usable_tiers(
     first: Optional[str] = None,
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
+    prefer_fast: bool = False,
 ) -> List[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]:
     """Central tier policy: preferred order minus cooled-down providers.
 
@@ -299,11 +334,86 @@ def _usable_tiers(
     request until a window expires, while retrying lets a recovered
     provider answer immediately (transient vs quota cooldowns still
     recorded). Fail-fast for quota (6h) is handled by callers via
-    friendly error after one hammer attempt.
+    friendly error after one hammer attempt. With prefer_fast, tiers
+    whose latency EMA exceeds SLOW_TIER_LATENCY_SECONDS sort last
+    (stable partition — relative order otherwise preserved, and slow
+    tiers are demoted, never excluded).
     """
     ordered = _ordered_tiers(first, tiers)
     usable = [item for item in ordered if not _tier_skipped(item[0])]
-    return usable or ordered
+    picked = usable or ordered
+    if prefer_fast:
+        try:
+            slow = [item for item in picked if _is_slow_tier(item[0])]
+            if slow and len(slow) < len(picked):
+                fast = [item for item in picked if not _is_slow_tier(item[0])]
+                return fast + slow
+        except Exception:
+            pass
+    return picked
+
+
+def tier_status_snapshot(
+    tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
+) -> List[Dict[str, Any]]:
+    """Point-in-time tier health for ops (never raises, metadata only).
+
+    Per tier: configured (getter resolves), skipped + seconds remaining,
+    fail/timeout streaks, last error kind/detail (truncated at record
+    time). No     prompts, keys, or user data.
+    """
+    snapshot: List[Dict[str, Any]] = []
+    try:
+        table = list(tiers) if tiers is not None else list(agent.TIER_AGENT_GETTERS)
+    except Exception:
+        return snapshot
+    now = time.time()
+    for name, getter in table:
+        entry: Dict[str, Any] = {"name": name}
+        try:
+            entry["configured"] = getter() is not None
+        except Exception:
+            entry["configured"] = False
+        try:
+            with _STATE_LOCK:
+                skip_until = float(_TIER_SKIP_UNTIL.get(name, 0.0) or 0.0)
+                fails = int(_TIER_FAILS.get(name, 0) or 0)
+                timeouts = int(_TIER_TIMEOUTS.get(name, 0) or 0)
+                last = _TIER_LAST_ERROR.get(name)
+            entry["skipped"] = now < skip_until
+            entry["cooldown_remaining_s"] = round(max(0.0, skip_until - now), 1)
+            entry["fail_streak"] = fails
+            entry["timeout_streak"] = timeouts
+            if last is not None:
+                entry["last_error_kind"] = str(last[0])
+                entry["last_error"] = str(last[1])[:200]
+        except Exception:
+            pass
+        snapshot.append(entry)
+    return snapshot
+
+
+def reset_tier_state(name: Optional[str] = None) -> int:
+    """Clear cooldown/failure state for one tier (or all). Returns count cleared.
+
+    Ops escape hatch for fat-fingered keys causing hours-long "permanent"
+    cooldowns: fix the key, force-reset, traffic resumes immediately.
+    """
+    cleared = 0
+    try:
+        with _STATE_LOCK:
+            targets = [name] if name else (
+                list(_TIER_SKIP_UNTIL) + list(_TIER_FAILS)
+                + list(_TIER_TIMEOUTS) + list(_TIER_LAST_ERROR)
+            )
+            for tier_name in dict.fromkeys(t for t in targets if t):
+                for store in (_TIER_SKIP_UNTIL, _TIER_FAILS,
+                              _TIER_TIMEOUTS, _TIER_LAST_ERROR):
+                    if store.pop(tier_name, None) is not None:
+                        cleared += 1
+    except Exception:
+        pass
+    return cleared
 
 
 def _all_skipped_permanent(
@@ -324,6 +434,7 @@ def _run_cascade_step(
     first: Optional[str] = None,
     tiers: Optional[Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]]] = None,
     attempts: Optional[List[str]] = None,
+    prefer_fast: bool = False,
 ) -> Tuple[str, Any]:
     """Run fn(name, llm) on tiers under ONE policy. Returns (tier, result).
 
@@ -332,14 +443,15 @@ def _run_cascade_step(
     selected here, no matter which feature is calling. BudgetExhausted and
     ExecutorBusyError are never swallowed and never cool a tier (they are
     our limits, not theirs). Tried tier names are appended to `attempts`
-    when provided (metrics).
+    when provided (metrics). prefer_fast demotes high-latency-EMA tiers
+    for interactive answers (they still answer if everything else fails).
     """
     ordered = _ordered_tiers(first, tiers)
     if ordered and _all_skipped_permanent(ordered):
         last_kind, last_detail = last_tier_error(ordered[0][0]) or ("rate_limit", "")
         raise RuntimeError(_friendly_cascade_error(f"{last_kind}: {last_detail}"))
     last_error: Exception | None = None
-    for name, getter in _usable_tiers(first, tiers):
+    for name, getter in _usable_tiers(first, tiers, prefer_fast):
         if attempts is not None:
             attempts.append(name)
         try:
@@ -359,6 +471,10 @@ def _run_cascade_step(
             _record_tier_success(name)
             return name, result
         except BudgetExhausted:
+            raise
+        except TurnCancelled:
+            # Client went away: propagate untouched — never cool the tier,
+            # never convert into a fallback. There is nobody to answer to.
             raise
         except Exception as e:
             last_error = e

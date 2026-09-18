@@ -25,6 +25,7 @@ import logging
 import os
 import queue
 import threading
+import time
 from typing import Any, Callable, Iterator, List, Optional
 
 from langchain_core.language_models.base import BaseLanguageModel
@@ -36,6 +37,10 @@ from services.obs import event as obs_event
 from agent.budget import RequestBudget
 
 _BOUNDED_MAX_WORKERS: int = 8
+# Model calls are I/O-bound (network waits) and far more numerous than
+# tool calls, so they get their own larger pool: streaming answer turns
+# no longer pin the small tool pool, and vice versa.
+_BOUNDED_MODEL_WORKERS: int = 32
 # Queue bound: at most 2x workers may wait. Beyond that the server is
 # saturated and callers must fail fast (ExecutorBusyError -> HTTP 503)
 # instead of piling unbounded work into memory.
@@ -146,11 +151,17 @@ class _BoundedExecutor:
 
 
 _bounded_pool = _BoundedExecutor(_BOUNDED_MAX_WORKERS, "pluto-bounded")
+_bounded_model_pool = _BoundedExecutor(_BOUNDED_MODEL_WORKERS, "pluto-model")
 
 
-def _call_bounded(fn: Callable[[], Any], timeout: float, what: str) -> Any:
-    """Run fn with a hard wall-clock bound on the shared daemon pool."""
-    future = _bounded_pool.submit(fn)
+def _call_bounded(fn: Callable[[], Any], timeout: float, what: str,
+                  pool: Any = None) -> Any:
+    """Run fn with a hard wall-clock bound on a daemon pool.
+
+    pool defaults to the tool pool (historical behavior; the overload
+    test swaps this name). Model calls pass the larger model pool.
+    """
+    future = (pool if pool is not None else _bounded_pool).submit(fn)
     try:
         return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError as e:
@@ -344,8 +355,40 @@ def _invoke_bounded(
                 return streamed
         return llm_instance.invoke(messages)
 
+    def _record_outcome(response: Any, elapsed: float) -> Any:
+        # Best-effort telemetry only: usage tokens (when the provider
+        # returns usage_metadata — often absent on free tiers) and a
+        # per-tier latency EMA for slow-tier demotion. Never raises.
+        try:
+            from services.metrics import LLM_TOKEN_USAGE
+        except Exception:
+            LLM_TOKEN_USAGE = None  # type: ignore[assignment]
+        try:
+            meta = getattr(response, "usage_metadata", None) or {}
+            if isinstance(meta, dict) and LLM_TOKEN_USAGE is not None:
+                prompt = int(meta.get("input_tokens", 0) or 0)
+                completion = int(meta.get("output_tokens", 0) or 0)
+                tier = str(tier_name or "unknown")
+                if prompt > 0:
+                    LLM_TOKEN_USAGE.labels(tier, "prompt").inc(prompt)
+                if completion > 0:
+                    LLM_TOKEN_USAGE.labels(tier, "completion").inc(completion)
+        except Exception:
+            pass
+        try:
+            from agent.cascade import _record_latency
+
+            _record_latency(str(tier_name or "unknown"), float(elapsed))
+        except Exception:
+            pass
+        return response
+
+    started = time.monotonic()
     try:
-        return _call_bounded(_call, timeout, "Model request")
+        return _record_outcome(
+            _call_bounded(_call, timeout, "Model request",
+                          pool=_bounded_model_pool),
+            time.monotonic() - started)
     except TimeoutError:
         if budget is not None:
             budget.timeouts += 1

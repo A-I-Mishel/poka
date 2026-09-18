@@ -30,12 +30,12 @@ from services.memory import (
 )
 from services.obs import event as obs_event, trace_llm_call
 
-from agent.budget import BudgetExhausted, RequestBudget
+from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled
 from agent.cascade import ROUTER_STATS, _run_cascade_step, _usable_tiers
 from agent.executor import TokenStream
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.planning import plan_then_execute
-from agent.prompts import _as_text, _build_system_prompt, _memory_data_block, _messages_to_langchain, strip_internal_reasoning
+from agent.prompts import STRICT_GROUNDING_PARAGRAPH, _as_text, _build_system_prompt, _memory_data_block, _messages_to_langchain, is_strict_tier, strip_internal_reasoning
 from agent.reflection import reflect_and_improve, should_reflect
 from agent.router import classify_task, rule_route
 from agent.toolrun import MAX_TOOL_ROUNDS, run_tool_loop
@@ -85,6 +85,69 @@ class AgentResult(TypedDict):
 SHORT_DIRECT_CHARS: int = 60
 _HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
                  "read_pdf", "analyze_csv")
+
+
+def _unknown_cited_urls(output: str, sources: Sequence[Dict[str, str]]) -> List[str]:
+    """URLs in the answer missing from retrieved sources (never raises)."""
+    import re as _re
+
+    try:
+        known = set()
+        for entry in sources or []:
+            try:
+                url = str((entry or {}).get("url", "") or "").lower().rstrip("/.")
+                if url:
+                    known.add(url)
+            except Exception:
+                continue
+        if not known:
+            return []
+        found: List[str] = []
+        for raw in _re.findall(r"https?://[^\s)>\]]+", str(output or "")):
+            norm = raw.lower().rstrip("/.")
+            if norm and norm not in known and norm not in found:
+                found.append(raw.strip()[:300])
+        return found[:10]
+    except Exception:
+        return []
+
+
+def _verify_citations(output: str, sources: Sequence[Dict[str, str]],
+                      budget: Optional[RequestBudget],
+                      cheap_tiers: Optional[Sequence] = None) -> str:
+    """One cheap-model check for unretrieved links (never raises).
+
+    Only runs when the answer links pages absent from this turn's
+    retrieved sources. A flag appends one FIXED caution line (never
+    verifier prose); OK or any failure returns the draft untouched.
+    """
+    try:
+        unknown = _unknown_cited_urls(output, sources)
+        if not unknown or cheap_tiers is None:
+            return output
+        from agent.cascade import _run_cascade_step as _cascade
+
+        ground = "\n".join(
+            f"- {str((s or {}).get('title', ''))[:100]} <{str((s or {}).get('url', ''))[:200]}>"
+            for s in (sources or [])[:6])
+        prompt = (
+            "The draft below cites these URLs that were NOT in the retrieved "
+            f"sources:\n{chr(10).join('- ' + u for u in unknown)}\n\n"
+            f"Retrieved sources:\n{ground}\n\n"
+            "Reply with exactly OK when the draft's claims are consistent "
+            "with these sources, or UNGROUNDED when it leans on the "
+            "unretrieved pages for substantive claims.")
+        _, verdict = _cascade(
+            lambda _n, _llm: _as_text(agent._invoke_bounded(
+                _llm, [HumanMessage(content=prompt)],
+                budget=budget).content).strip(),
+            None, cheap_tiers)
+        if "UNGROUNDED" in str(verdict or "").upper():
+            return (output.rstrip() + "\n\n[Note: this answer links pages "
+                    "beyond what was retrieved this turn — open them critically.]")
+        return output
+    except Exception:
+        return output
 
 
 def _reflect_with_fallback(llm_instance: BaseLanguageModel, user_input: str,
@@ -179,6 +242,7 @@ def answer_with_fallback(
     on_token: Optional[Callable[[str], None]] = None,
     on_reset: Optional[Callable[[], None]] = None,
     on_progress: Optional[Callable[[str], None]] = None,
+    cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Answer with the full stack: memorize, classify, plan, execute, reflect.
 
@@ -212,6 +276,9 @@ def answer_with_fallback(
     on_progress: Receives one status line per tool round (tool names
     only) so stream consumers can show activity while answer tokens
     have not started flowing. Defaults to None (silent).
+    cancel: Polled between tool rounds (and before final synthesis);
+    True raises TurnCancelled, aborting without synthesis or
+    persistence. Defaults to None (historical run-to-completion).
 
     Returns:
         Dict with 'output', 'active_tier', 'task_type', 'request_id',
@@ -227,6 +294,13 @@ def answer_with_fallback(
     started_at: float = time.time()
     user_id = get_current_user_id()
     budget = RequestBudget()
+    try:
+        if cancel is not None and cancel():
+            raise TurnCancelled("client disconnected")
+    except TurnCancelled:
+        raise
+    except Exception:
+        pass
     if deep_mode:
         # Deep Mode chains tools until the model stops asking: raise
         # the round/LLM/tool caps together (the wall-clock deadline
@@ -388,6 +462,8 @@ def answer_with_fallback(
             llm = _size_llm_for_task(_name, llm)
             system_text = _build_system_prompt(
                 combined_notes, relevant_context, project_context, simple=True)
+            if is_strict_tier(_name):
+                system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH
             with trace_llm_call(request_id, "simple", "simple") as _:
                 response = agent._invoke_bounded(
                     llm,
@@ -414,7 +490,8 @@ def answer_with_fallback(
             table = tables.pop(0)
             try:
                 active_tier, output_simple = _run_cascade_step(
-                    _answer_direct, first, table, answer_attempts)
+                    _answer_direct, first, table, answer_attempts,
+                    prefer_fast=True)
                 break
             except BudgetExhausted as e:
                 # Our limit, not the provider's: never retry, never fall back.
@@ -482,9 +559,12 @@ def answer_with_fallback(
         raises a friendly error.
         """
         from agent.cascade import (
+            _all_skipped_permanent,
             _friendly_cascade_error,
+            _ordered_tiers,
             _record_tier_failure,
             classify_provider_error,
+            last_tier_error,
         )
 
         if failed is None:
@@ -499,8 +579,15 @@ def answer_with_fallback(
                 yielded_pinned = True
                 return pinned[0], _size_llm_for_task(pinned[0], pinned[1])
             yielded_pinned = True
+            # Fail fast when every tier is cooled for quota/auth/invalid:
+            # retrying the whole dead table each round burns quota and
+            # latency for zero chance of success.
+            full_table = _ordered_tiers(first, synth_table)
+            if full_table and _all_skipped_permanent(full_table):
+                kind, detail = last_tier_error(full_table[0][0]) or ("rate_limit", "")
+                raise RuntimeError(_friendly_cascade_error(f"{kind}: {detail}"))
             ordered = [
-                item for item in _usable_tiers(first, synth_table)
+                item for item in _usable_tiers(first, synth_table, prefer_fast=True)
                 if item[0] not in failed
             ]
             if not ordered:
@@ -548,6 +635,8 @@ def answer_with_fallback(
                     final_tier, MAX_DEEP_TOOL_ROUNDS, on_progress,
                     tier_name, prefailed, request_id,
                     cheap_tiers=(CHEAP_TIERS if tiers is None else None),
+                    cancel=cancel,
+                    strict=is_strict_tier(tier_name),
                 )
             else:
                 draft = run_tool_loop(
@@ -556,9 +645,17 @@ def answer_with_fallback(
                     MAX_DEEP_TOOL_ROUNDS if deep_mode else MAX_TOOL_ROUNDS,
                     budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
-                    final_tier, on_progress, request_id,
+                    final_tier, on_progress, request_id, cancel,
+                    strict=is_strict_tier(tier_name),
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
+                try:
+                    if cancel is not None and cancel():
+                        raise TurnCancelled("client disconnected")
+                except TurnCancelled:
+                    raise
+                except Exception:
+                    pass
                 improved, writer = _reflect_with_fallback(
                     llm, user_input, draft, langchain_history, budget,
                     task_type, tier_name,
@@ -570,6 +667,12 @@ def answer_with_fallback(
                     final_tier[:] = [writer or tier_name]
             elif not final_tier:
                 final_tier[:] = [tier_name]
+            if task_type == "research":
+                # Grounded-link check: one cheap call only when the answer
+                # links pages absent from retrieved sources.
+                draft = _verify_citations(
+                    draft, used_sources, budget,
+                    cheap_tiers=(CHEAP_TIERS if tiers is None else None))
             return draft
         except Exception:
             del used_tools[mark:]
@@ -586,7 +689,8 @@ def answer_with_fallback(
             _table = _tooled_tables.pop(0)
             try:
                 active_tier, output = _run_cascade_step(
-                    _answer_tooled, first, _table, answer_attempts)
+                    _answer_tooled, first, _table, answer_attempts,
+                    prefer_fast=True)
                 break
             except BudgetExhausted as e:
                 raise RuntimeError(f"{e} (ref {request_id})") from e

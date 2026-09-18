@@ -125,6 +125,37 @@ def test_synthesis_fallback_marks_degraded(monkeypatch):
                                "reason": "synthesis tiers unavailable"}
 
 
+def test_midloop_quota_guard_no_hammer():
+    from agent.cascade import _record_tier_failure
+
+    calls = []
+
+    def _getter():
+        calls.append(1)
+        return FakeLLM([("", [{"name": "check_logic", "args": {
+            "operation": "valid", "premises": "p -> q\np",
+            "conclusion": "q"}, "id": "1"}])])
+
+    def _cool_after_first_round(_text):
+        # Simulate the whole table hitting quota mid-turn: round 2 must
+        # fail fast instead of re-hammering the cooled table every round.
+        _record_tier_failure("solo", "rate_limit", Exception("429 quota exceeded"))
+
+    out = agent.answer_with_fallback(
+        "search the latest logic news", tiers=[("solo", _getter)],
+        raw_messages=[], on_progress=_cool_after_first_round)
+    assert calls == [1]
+    assert isinstance(out["output"], str)
+
+
+def test_config_has_no_dead_asserts():
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    src = (root / "config.py").read_text(encoding="utf-8")
+    assert "assert key is not None" not in src
+
+
 def test_custom_table_single_pass_no_fallback():
     attempts = []
 

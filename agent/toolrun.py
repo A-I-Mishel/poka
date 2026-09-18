@@ -38,7 +38,7 @@ from services.tokens import count_tokens, truncate_tokens
 from tools import web_search, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool
 from tools.search_tool import extract_cited_sources
 
-from agent.budget import BudgetExhausted, RequestBudget
+from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled
 from agent.cascade import (
     _record_tier_failure,
     _record_tier_success,
@@ -47,7 +47,7 @@ from agent.cascade import (
 from agent.executor import TokenStream, _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.prompts import _as_text, _build_system_prompt, strip_internal_reasoning
+from agent.prompts import STRICT_GROUNDING_PARAGRAPH, _as_text, _build_system_prompt, is_strict_tier, strip_internal_reasoning
 
 tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
@@ -362,6 +362,8 @@ def run_tool_loop(
     final_tier: Optional[List[str]] = None,
     on_progress: Optional[Callable[[str], None]] = None,
     request_id: Optional[str] = None,
+    cancel: Optional[Callable[[], bool]] = None,
+    strict: bool = False,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -410,6 +412,11 @@ def run_tool_loop(
     tier for direct answers, the last round's tier for final
     synthesis, or the round behind salvaged partial text. Callers use
     it to attribute the answer truthfully after mid-task failover.
+
+    When cancel is provided, it is polled between rounds (and before
+    final synthesis): a True return raises TurnCancelled, which aborts
+    without synthesis, salvage, tier cooling, or persistence — the
+    client went away, so further quota burn is pure waste.
     """
     if budget is None:
         budget = RequestBudget()
@@ -425,6 +432,10 @@ def run_tool_loop(
         CTX_MEMORY_TOKENS,
     )
     system_text: str = _build_system_prompt(mem_fit, "", project_context)
+    if strict:
+        # Weak-tier attempt: strict grounding for the whole turn (a mid-loop
+        # failover to a stronger tier simply keeps it — harmless).
+        system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH
     fitted_history, _hist_stats = fit_history(chat_history, CTX_HISTORY_TOKENS)
     messages: List[BaseMessage] = [
         SystemMessage(content=system_text),
@@ -562,8 +573,16 @@ def run_tool_loop(
         if final_tier is not None and name:
             final_tier[:] = [name]
 
+    def _cancelled() -> bool:
+        try:
+            return bool(cancel is not None and cancel())
+        except Exception:
+            return False
+
     while rounds_used < max_rounds:
         budget.check_time()
+        if _cancelled():
+            raise TurnCancelled("client disconnected")
         try:
             budget.count_round()
         except BudgetExhausted:
@@ -576,6 +595,8 @@ def run_tool_loop(
         if llm_provider is not None:
             try:
                 tier_name, round_llm = llm_provider()
+            except TurnCancelled:
+                raise
             except Exception as e:
                 # No live tier left: finish from partial results below
                 # (or raise when nothing was produced at all).
@@ -584,6 +605,8 @@ def run_tool_loop(
             try:
                 bound = round_llm.bind_tools(_filtered_tools(user_input))
             except BudgetExhausted:
+                raise
+            except TurnCancelled:
                 raise
             except Exception as e:
                 _note_tier_failure(tier_name, e)
@@ -594,6 +617,8 @@ def run_tool_loop(
                 live.reset_for_new_call()
             response = agent._invoke_bounded(bound, messages, budget=budget, on_token=live, tier_name=tier_name)
         except BudgetExhausted:
+            raise
+        except TurnCancelled:
             raise
         except Exception as e:
             if tier_name is None:
@@ -687,6 +712,8 @@ def run_tool_loop(
                 )
             )
         )
+    if _cancelled():
+        raise TurnCancelled("client disconnected")
     if rounds_used == 0 and not last_results:
         # Every tier failed before producing anything: honest error for
         # the outer cascade (which fails over or reports all-tiers-down).
@@ -700,11 +727,12 @@ def run_tool_loop(
     # our limit, not the provider's).
     # ponytail: cap synthesis join (was unbounded) — prevents 8k overflow on GitHub lane
     _synthesis_blob = "\n".join(last_results)[:6000]
+    _synth_system = ("Summarize the tool results below into a concise "
+                     "final answer. Do not call any tools.")
+    if is_strict_tier(round_tier):
+        _synth_system += " " + STRICT_GROUNDING_PARAGRAPH
     synthesis_messages: List[BaseMessage] = [
-        SystemMessage(
-            content="Summarize the tool results below into a concise "
-            "final answer. Do not call any tools."
-        ),
+        SystemMessage(content=_synth_system),
         HumanMessage(
             content="Results:\n"
             + _synthesis_blob
@@ -729,12 +757,16 @@ def run_tool_loop(
             return _with_sources(text)
     except BudgetExhausted:
         pass
+    except TurnCancelled:
+        raise
     except Exception as e:
         _note_tier_failure(round_tier, e)
         if llm_provider is not None:
             while True:
                 try:
                     synthesis_tier, synthesis_llm = llm_provider()
+                except TurnCancelled:
+                    raise
                 except Exception:
                     break
                 try:

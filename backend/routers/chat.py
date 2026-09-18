@@ -3,14 +3,17 @@
 import json
 import queue
 import threading
-from typing import Any, Dict, Iterator
+from typing import Any, AsyncIterator, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from agent.budget import TurnCancelled
 from backend import schemas
 from backend.chatflow import regenerate_chat, run_chat
 from backend.deps import UserContext, bind_request_user, current_user
+from services.obs import event as obs_event
 from services.storage import StorageError
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -29,6 +32,8 @@ def send(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
             force_search=req.force_search,
             active_tier=req.active_tier,
         )
+    except TurnCancelled:
+        raise HTTPException(status_code=503, detail="Request cancelled.")
     except HTTPException:
         raise
     except ValueError as e:
@@ -66,7 +71,8 @@ _KEEPALIVE_SECONDS = 15.0
 
 
 @router.post("/stream")
-def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
+def stream(req: schemas.SendRequest, request: Request,
+           ctx: UserContext = Depends(current_user)):
     """Run one turn, streaming the answer's real tokens as SSE.
 
     Events (JSON per line): ``token`` (cumulative answer text — genuine
@@ -78,20 +84,24 @@ def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
     /send), ``error``. ``: ping`` comments keep idle connections alive
     during long generations.
     History is persisted exactly once, when the turn completes — a
-    disconnect can never leave partial messages behind.
+    disconnect can never leave partial messages behind. Disconnects
+    are detected every second: the turn aborts between tool rounds
+    (TurnCancelled, no synthesis, no persistence) instead of burning
+    quota for a closed tab.
     """
     user_id = ctx.user_id
     limit_key = ctx.limit_key or ctx.user_id
     source = ctx.source or ""
     params: Dict[str, Any] = req.model_dump()
 
-    def _events() -> Iterator[str]:
+    async def _events() -> AsyncIterator[str]:
         events: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         outcome: Dict[str, Any] = {}
+        cancelled = threading.Event()
 
         def _run() -> None:
-            # Separate worker: the generator thread must stay free to
-            # yield tokens while the pipeline runs. Re-bind the user
+            # Separate worker: the generator must stay free to yield
+            # tokens while the pipeline runs. Re-bind the user
             # (contextvars do not cross threads), then reuse the
             # request's stores (plain path holders, safe across threads).
             bind_request_user(user_id, limit_key, source)
@@ -107,7 +117,10 @@ def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
                     on_token=lambda text: events.put({"type": "token", "text": text}),
                     on_reset=lambda: events.put({"type": "reset"}),
                     on_progress=lambda text: events.put({"type": "status", "text": text}),
+                    cancel=cancelled.is_set,
                 )
+            except TurnCancelled:
+                outcome["cancelled"] = True
             except HTTPException as e:
                 outcome["error"] = str(e.detail)
             except (ValueError, RuntimeError) as e:
@@ -119,24 +132,47 @@ def stream(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
 
         worker = threading.Thread(target=_run, daemon=True)
         worker.start()
-        while True:
+        idle_ticks = 0
+        try:
+            while True:
+                try:
+                    evt = await anyio.to_thread.run_sync(
+                        lambda: events.get(timeout=1.0))
+                except queue.Empty:
+                    idle_ticks += 1
+                    try:
+                        gone = await request.is_disconnected()
+                    except Exception:
+                        gone = False
+                    if gone:
+                        cancelled.set()
+                        break
+                    if idle_ticks >= int(_KEEPALIVE_SECONDS):
+                        idle_ticks = 0
+                        yield ": ping\n\n"
+                    continue
+                idle_ticks = 0
+                kind = evt.get("type")
+                if kind == "end":
+                    break
+                if kind == "reset":
+                    yield "data: " + json.dumps({"type": "reset"}) + "\n\n"
+                elif kind == "token":
+                    yield "data: " + json.dumps(
+                        {"type": "token", "text": evt.get("text", "")}) + "\n\n"
+                elif kind == "status":
+                    yield "data: " + json.dumps(
+                        {"type": "status", "text": evt.get("text", "")}) + "\n\n"
+        finally:
+            # Never block the response on a worker finishing a bounded
+            # provider call after a disconnect; daemon threads die alone.
+            await anyio.to_thread.run_sync(lambda: worker.join(timeout=10.0))
+        if outcome.get("cancelled"):
             try:
-                evt = events.get(timeout=_KEEPALIVE_SECONDS)
-            except queue.Empty:
-                yield ": ping\n\n"
-                continue
-            kind = evt.get("type")
-            if kind == "end":
-                break
-            if kind == "reset":
-                yield "data: " + json.dumps({"type": "reset"}) + "\n\n"
-            elif kind == "status":
-                yield "data: " + json.dumps(
-                    {"type": "status", "text": evt.get("text", "")}) + "\n\n"
-            elif kind == "token":
-                yield "data: " + json.dumps(
-                    {"type": "token", "text": evt.get("text", "")}) + "\n\n"
-        worker.join()
+                obs_event("request.cancelled", user=user_id)
+            except Exception:
+                pass
+            return
         if "error" in outcome:
             yield "data: " + json.dumps(
                 {"type": "error", "detail": outcome["error"]}) + "\n\n"

@@ -15,6 +15,7 @@ from agent.prompts import _as_text
 from services.limits import (
     REFLECT_DRAFT_WINDOW_CHARS,
     REFLECT_FAILURE_KEYWORDS,
+    REFLECT_FAST_DRAFT_CHARS,
     REFLECT_MIN_IMPROVE_RATIO,
     REFLECT_SHORT_DRAFT_CHARS,
     MAX_QUERY_CHARS,
@@ -44,7 +45,10 @@ def should_reflect(
     if not REFLECTION_ENABLED:
         return False
     if not deep_mode:
-        return False
+        # Fast mode: only substantial creative/research drafts earn one
+        # cheap-tier critique (runs on CHEAP_TIERS, never the answer tier).
+        return task_type in ("creative", "research") and len(
+            (draft_output or "").strip()) >= REFLECT_FAST_DRAFT_CHARS
     if task_type == "simple":
         return False
     if task_type in ("creative", "multi_step"):

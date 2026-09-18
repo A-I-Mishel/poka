@@ -203,6 +203,21 @@ def test_prompt_current_request_only():
     assert "explicitly refers to it" in SYSTEM_PROMPT
 
 
+def test_attachment_classifier_deny_safe(monkeypatch):
+    from agent.router import classify_attachment_need
+
+    class _LLM:
+        pass
+
+    import agent as agent_mod
+
+    def _boom(llm, msgs, budget=None):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", _boom)
+    assert classify_attachment_need("what is this?", ["image"], _LLM()) == ("none", 0.0)
+
+
 def test_classifier_parses_intent():
     from agent.router import classify_attachment_need
 

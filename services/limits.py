@@ -150,6 +150,9 @@ MAX_TOTAL_REQUEST_TIME: float = 300.0
 # Short draft or task type triggers re-critique; keywords hint at a failed
 # answer worth one more pass.
 REFLECT_SHORT_DRAFT_CHARS: int = 80
+# Fast-mode reflection floor: only substantial creative/research drafts
+# earn the extra cheap-tier critique call; short answers skip it.
+REFLECT_FAST_DRAFT_CHARS: int = 300
 REFLECT_FAILURE_KEYWORDS: tuple = ("error", "failed", "unable to", "could not")
 # The draft is fed to the critic in a bounded window (chat history stays
 # untruncated): critic quality holds while long research drafts no longer
@@ -221,6 +224,11 @@ RESEARCH_MARKDOWN_CHARS: int = 20000
 RESEARCH_DISPLAY_TITLE_CHARS: int = 60
 RESEARCH_SCOPE_NAME_CHARS: int = 30
 RESEARCH_DOCX_ERROR_CHARS: int = 500
+
+# Slow-tier demotion (agent cascade): a tier whose successful-call latency
+# EMA exceeds this is sorted last for interactive requests (never
+# excluded — availability beats speed). EMA alpha lives in cascade.
+SLOW_TIER_LATENCY_SECONDS: float = 45.0
 
 # Tier cooldowns (agent cascade): driven by classify_provider_error kinds.
 # Timeouts are congestion, not outage (brief cool, 2nd consecutive strike);

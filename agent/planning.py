@@ -4,6 +4,7 @@ Writes a short plan first, then executes it with tools. Any planning
 failure falls back to a plain tool loop instead of breaking the answer.
 """
 
+import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from langchain_core.language_models.base import BaseLanguageModel
@@ -14,6 +15,50 @@ import agent  # package-attr routing: test doubles on agent._invoke_bounded stay
 from agent.prompts import _as_text
 from agent.toolrun import MAX_TOOL_ROUNDS, TOOL_MAP, _note_tier_failure, run_tool_loop
 from services.limits import PLAN_MAX_CHARS
+
+
+# Argument/identifier names that merely look like tools (never flagged).
+_PLAN_NON_TOOL_WORDS = frozenset({
+    "upload_id", "file_id", "chat_id", "message_id", "project_id",
+    "draft_id", "artifact_id", "event_id", "tool_call", "tool_calls",
+    "max_results", "limit_key", "user_id", "request_id", "tool_name",
+})
+_PLAN_TOOL_VERBS = ("use", "using", "call", "calls", "calling", "invoke",
+                    "invokes", "run", "runs", "via", "tool", "with")
+_PLAN_SNAKE_RE = re.compile(r"`([a-z][a-z0-9_]{2,})`|\b([a-z][a-z0-9_]{2,})\b")
+
+
+def _unknown_plan_tools(plan_text: str) -> List[str]:
+    """Snake_case tokens in a plan that are not real tools (never raises).
+
+    Only tokens in backticks or near tool verbs (use/call/run/via/with)
+    are candidates, so prose like variable names and argument IDs rarely
+    trip it; known ID-ish words are allowlisted. Returns unknowns in
+    first-seen order.
+    """
+    try:
+        words = str(plan_text or "").lower().split()
+        found: List[str] = []
+        seen: set = set()
+        for i, raw in enumerate(words):
+            m = _PLAN_SNAKE_RE.search(raw)
+            if not m:
+                continue
+            token = (m.group(1) or m.group(2) or "").strip("_")
+            if not token or "_" not in token or token in TOOL_MAP:
+                continue
+            if token in _PLAN_NON_TOOL_WORDS or token in seen:
+                continue
+            window = " ".join(words[max(0, i - 3):i])
+            quoted = raw.strip().startswith("`")
+            verbed = re.search(
+                r"\b(" + "|".join(_PLAN_TOOL_VERBS) + r")\b", window) is not None
+            if quoted or verbed:
+                seen.add(token)
+                found.append(token)
+        return found
+    except Exception:
+        return []
 
 
 def plan_then_execute(
@@ -37,6 +82,8 @@ def plan_then_execute(
     failed_tiers: Optional[set] = None,
     request_id: Optional[str] = None,
     cheap_tiers: Optional[Sequence] = None,
+    cancel: Optional[Callable[[], bool]] = None,
+    strict: bool = False,
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
@@ -58,7 +105,7 @@ def plan_then_execute(
             relevant_context, False, max_rounds, budget,
             used_tools, used_sources, project_context,
             llm_provider, tier_trace, on_token, on_reset, final_tier,
-            on_progress, request_id,
+            on_progress, request_id, cancel, strict,
         )
 
     if budget is not None:
@@ -67,40 +114,66 @@ def plan_then_execute(
         except BudgetExhausted:
             return _loop(user_input)
 
-    def _ask_plan(p_llm: BaseLanguageModel) -> str:
+    def _ask_plan(p_llm: BaseLanguageModel, prompt: str) -> str:
         plan_response = agent._invoke_bounded(
             p_llm,
             [
                 SystemMessage(content="You are a planning assistant. Be concise."),
                 *chat_history,
-                HumanMessage(content=plan_prompt),
+                HumanMessage(content=prompt),
             ],
             budget=budget,
         )
         return _as_text(plan_response.content)
 
+    def _ask_plan_default(prompt: str) -> str:
+        # Dumb call: cheap tiers first, attempt tier as fallback. Cheap
+        # failures must not implicate the attempt tier (it never ran);
+        # quota exhaustion falls through to the legacy path below,
+        # preserving its exact semantics.
+        if cheap_tiers is not None:
+            from agent.cascade import _run_cascade_step as _cascade
+
+            try:
+                _, text = _cascade(
+                    lambda _n, _llm: _ask_plan(_llm, prompt), None, cheap_tiers)
+                return text
+            except Exception:
+                pass
+        return _ask_plan(llm_instance, prompt)
+
     try:
         tool_names = ", ".join(sorted(TOOL_MAP))
         plan_prompt = (
             "Given this user request, create a short step-by-step plan. "
-            "Do NOT execute tools yet. You may plan around ONLY these tools: "
+            "Do NOT execute tools yet.\n"
+            "Shape your plan exactly like this:\n"
+            "Goal: <one line: what success looks like>\n"
+            "Steps:\n"
+            "1. <step> — tool: <one tool from the list below>\n"
+            "2. ...\n"
+            "Expected output: <shape of the final answer>\n"
+            "You may plan around ONLY these tools: "
             f"{tool_names}\n\n"
+            "Example:\n"
+            "Goal: report average age from the CSV\n"
+            "Steps:\n"
+            "1. Inspect columns — tool: analyze_csv\n"
+            "Expected output: one sentence with the average.\n\n"
             f"Request: {user_input}\nPlan:"
         )
-        if cheap_tiers is not None:
-            # Dumb call: cheap tiers first, attempt tier as fallback. Cheap
-            # failures must not implicate the attempt tier (it never ran);
-            # quota exhaustion falls through to the legacy path below,
-            # preserving its exact semantics.
-            from agent.cascade import _run_cascade_step as _cascade
-
+        plan_text = _ask_plan_default(plan_prompt)
+        unknown = _unknown_plan_tools(plan_text)
+        if unknown:
+            # One bounded replan naming only real tools, then proceed
+            # regardless — a second failure still executes (never loops).
+            correction = (
+                f"{plan_prompt}\n\nCorrection: '{unknown[0]}' is not an "
+                f"available tool. Use ONLY these tools: {tool_names}\nPlan:")
             try:
-                _, plan_text = _cascade(
-                    lambda _n, _llm: _ask_plan(_llm), None, cheap_tiers)
+                plan_text = _ask_plan_default(correction)
             except Exception:
-                plan_text = _ask_plan(llm_instance)
-        else:
-            plan_text = _ask_plan(llm_instance)
+                pass
         # Bounded before injection into the execution prompt: a runaway
         # plan must not crowd the context budget.
         plan_text = plan_text[:PLAN_MAX_CHARS]

@@ -1068,7 +1068,8 @@ def _complete_turn(ctx: UserContext, send_text: str,
                     active_tier: Optional[str],
                     on_token: Any = None,
                     on_reset: Any = None,
-                    on_progress: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
+                    on_progress: Any = None,
+                    cancel: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
     """Run the agent and build the assistant message (no persistence)."""
     from agent.prompts import strip_internal_reasoning
 
@@ -1101,6 +1102,7 @@ def _complete_turn(ctx: UserContext, send_text: str,
         on_token=on_token,
         on_reset=on_reset,
         on_progress=on_progress,
+        cancel=cancel,
     )
     output = strip_internal_reasoning(str(result.get("output", "")))
     tier = str(result.get("active_tier", "") or "")
@@ -1774,7 +1776,8 @@ def run_chat(ctx: UserContext, content: str,
              active_tier: Optional[str] = None,
              on_token: Any = None,
              on_reset: Any = None,
-             on_progress: Any = None) -> Dict[str, Any]:
+             on_progress: Any = None,
+             cancel: Any = None) -> Dict[str, Any]:
     """Run one user turn end-to-end; returns send-response payload.
 
     Persists both messages before returning. Raises HTTPException for
@@ -1782,7 +1785,9 @@ def run_chat(ctx: UserContext, content: str,
     input/attachments, RuntimeError (user-safe message) when every tier
     fails. on_token/on_reset stream live answer tokens (see
     agent.executor.TokenStream); on_progress streams per-tool-round
-    status lines (tool names only).
+    status lines (tool names only). cancel is an optional zero-arg
+    callable polled between tool rounds: a True return raises
+    TurnCancelled, aborting without synthesis or persistence.
     """
     text = str(content or "").strip()
     if not text:
@@ -1843,7 +1848,7 @@ def run_chat(ctx: UserContext, content: str,
         ctx, send_text, prior_history, prior_raw, vision_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier, on_token, on_reset,
-        on_progress)
+        on_progress, cancel)
 
     try:
         fixed, repaired, left = _maybe_repair_teaching_turn(
@@ -1902,7 +1907,8 @@ def _complete_turn_guarded(ctx: UserContext, send_text: str,
                            active_tier: Optional[str],
                            on_token: Any = None,
                            on_reset: Any = None,
-                           on_progress: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
+                           on_progress: Any = None,
+                           cancel: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
     """_complete_turn with saturation mapped to HTTP 503 (fail fast)."""
     from fastapi import HTTPException
 
@@ -1910,7 +1916,7 @@ def _complete_turn_guarded(ctx: UserContext, send_text: str,
         return _complete_turn(
             ctx, send_text, prior_history, prior_raw, image_ids,
             memory_notes, project_context, deep_mode, force_search,
-            active_tier, on_token, on_reset, on_progress)
+            active_tier, on_token, on_reset, on_progress, cancel)
     except ExecutorBusyError:
         raise HTTPException(
             status_code=503,
@@ -2022,6 +2028,51 @@ def regenerate_chat(ctx: UserContext, index: int,
         "fallback": fallback,
         "pending_approvals": live,
     }
+
+
+EPISODIC_MIN_MESSAGES: int = 12
+EPISODIC_SUMMARY_CHARS: int = 2000
+
+
+def maybe_attach_episodic_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach a rolling summary to an archived chat (best-effort, never raises).
+
+    Only chats with at least EPISODIC_MIN_MESSAGES get one, generated on a
+    cheap tier (never the answer tiers). Failures leave the record
+    untouched — archiving must never break. The summary surfaces in
+    recents payloads; model-context injection on reopen is deferred.
+    """
+    try:
+        if not isinstance(record, dict) or record.get("summary"):
+            return record
+        msgs = record.get("messages", [])
+        if not isinstance(msgs, list) or len(msgs) < EPISODIC_MIN_MESSAGES:
+            return record
+        lines = []
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            role = "User" if m.get("role") == "user" else "AI"
+            lines.append(f"{role}: {str(m.get('content', ''))[:200]}")
+        if not lines:
+            return record
+        from agent.cascade import _run_cascade_step
+        from agent.prompts import _as_text
+        from config import CHEAP_TIERS
+
+        prompt = ("Summarize this conversation for future context in at most "
+                  "5 lines: key topics, decisions, and user preferences.\n\n"
+                  + "\n".join(lines))
+        _, summary = _run_cascade_step(
+            lambda _n, llm: _as_text(agent._invoke_bounded(
+                llm, [HumanMessage(content=prompt)], timeout=30.0).content),
+            None, CHEAP_TIERS)
+        summary = str(summary or "").strip()[:EPISODIC_SUMMARY_CHARS]
+        if summary:
+            record["summary"] = summary
+        return record
+    except Exception:
+        return record
 
 
 def archive_current(current: List[Dict[str, Any]],

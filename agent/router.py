@@ -257,7 +257,8 @@ def classify_attachment_need(
         response = agent._invoke_bounded(llm_instance, [HumanMessage(content=prompt)], budget=budget)
         text = _as_text(response.content).strip().lower()
     except Exception:
-        raise
+        # Deny-safe: classifier failure must never take down the turn.
+        return ("none", 0.0)
     intent = "none"
     conf = 0.0
     try:

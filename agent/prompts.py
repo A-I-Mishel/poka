@@ -109,6 +109,23 @@ SYSTEM_PROMPT_SIMPLE = """You are Pluto — warm, sharp, concise. Answer directl
 # Backward-compatible alias: existing code and tests import lowercase.
 system_prompt: str = SYSTEM_PROMPT
 
+STRICT_GROUNDING_PARAGRAPH = (
+    "Grounding rule (strict): answer ONLY from the tool results and "
+    "conversation above. If the tools did not provide it, say you do not "
+    "know instead of guessing. Never invent citations, links, IDs, file "
+    "contents, dates, or actions."
+)
+
+
+def is_strict_tier(name: object) -> bool:
+    """True when a tier needs the strict grounding paragraph (never raises)."""
+    try:
+        from config import STRICT_GROUNDING_TIERS
+
+        return str(name or "") in STRICT_GROUNDING_TIERS
+    except Exception:
+        return False
+
 
 _BOUNDARY_TAGS = (
     "memory-data",
