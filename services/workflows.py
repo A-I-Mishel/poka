@@ -16,8 +16,9 @@ Security rules (enforced here, so every entry point inherits them):
   template-driven code/SQL injection and identifier confusion
   (e.g. untrusted step output becoming a Gmail recipient or a
   calendar-delete target) from untrusted step output.
-- `confirm` must be a real boolean at save time: a templated string
-  would be truthy and forge standing permission for writes.
+- `confirm`/`approval_token` args are rejected outright: approvals are
+  interactive-only and saved runs cannot approve, so pipelines can never
+  authorize destructive actions.
 - Any other `{{...}}` shape is rejected (typos fail loudly at save,
   never silently at run).
 - Post-render args are length-capped; overlong renders fail the step
@@ -158,10 +159,10 @@ def _validate_step(
                 f"Workflow {where}: arg '{key}' must be a string, number, "
                 "boolean, or null (no nested objects)."
             )
-        if key == "confirm" and not isinstance(value, bool):
+        if key in ("confirm", "approval_token"):
             raise ValueError(
-                f"Workflow {where}: 'confirm' must be true/false "
-                "(templated strings would be truthy and forge permission)."
+                f"Workflow {where}: '{key}' is not allowed in pipelines "
+                "(approvals are interactive-only; saved runs cannot approve)."
             )
         if isinstance(value, str):
             if len(value) > MAX_WORKFLOW_ARG_CHARS:

@@ -1,8 +1,8 @@
 """Calendar tools: list upcoming events, create events, delete (gated).
 
 Creating is low-risk (visible on the user's own calendar, trivially
-undoable). Deleting refuses without confirm=true — set it only when
-the user explicitly asked to delete that event.
+undoable). Deleting runs only with a server-minted single-use approval
+token from the authenticated UI — never a model-supplied flag.
 
 Single-account note: the host configures ONE Google calendar via
 GOOGLE_* env vars. Every app user would share it, so these tools are
@@ -122,35 +122,71 @@ def create_calendar_event(summary: str, start: str, end: str = "",
     return f"STATUS=OK tool=create_calendar_event event_id={created['id']}{suffix}"
 
 
-@tool
-def delete_calendar_event(event_id: str, confirm: bool = False) -> str:
-    """Delete a calendar event. confirm=true required.
-
-    Set confirm=true ONLY when the user explicitly asked to delete
-    that event (use an id from list_calendar_events).
-
-    Args:
-        event_id: The event id.
-        confirm: Must be true; false refuses safely.
-
-    Returns:
-        Confirmation, or a structured failure marker.
-    """
+def _execute_delete_calendar_event(event_id: str) -> str:
+    """Delete after authorization (gate + approval already checked)."""
     service, err = _gate("delete_calendar_event")
     if service is None:
         return err
-    if not str(event_id or "").strip():
-        return "STATUS=INVALID tool=delete_calendar_event: empty event id."
-    if confirm is not True:
-        return (
-            "STATUS=DENIED tool=delete_calendar_event: deletion needs "
-            "explicit user confirmation (confirm=true). Deleted nothing."
-        )
     try:
-        deleted = calendar_svc.delete_event(service, str(event_id).strip())
+        deleted = calendar_svc.delete_event(service, event_id)
     except ValueError as e:
         return f"STATUS=INVALID tool=delete_calendar_event: {e}"
     except Exception as e:
         logger.warning("Calendar delete failed: %s", e)
         return f"STATUS=FAILED tool=delete_calendar_event: {e}"
     return f"STATUS=OK tool=delete_calendar_event deleted_id={deleted['deleted']}"
+
+
+@tool
+def delete_calendar_event(event_id: str, approval_token: str = "") -> str:
+    """Delete a calendar event. UI approval required.
+
+    Call WITHOUT approval_token first (use an id from
+    list_calendar_events). If the result is DENIED with an approval_id,
+    describe the deletion and ask the user to approve it in the UI.
+    Never invent an approval token.
+
+    Args:
+        event_id: The event id.
+        approval_token: Server-minted single-use token (UI only).
+
+    Returns:
+        Confirmation, or a structured failure marker.
+    """
+    from services import approvals as approvals_svc
+    from services.context import get_current_user_id
+
+    if auth_mode() != "private":
+        return (
+            "STATUS=DENIED tool=delete_calendar_event: Calendar is disabled "
+            "in open mode (single shared calendar would leak to visitors). "
+            "Set PLUTO_AUTH_MODE=private (trusted/owner use only)."
+        )
+    user_id = get_current_user_id()
+    if not user_id:
+        return "STATUS=DENIED tool=delete_calendar_event: no user context."
+    event_id = str(event_id or "").strip()
+    if not event_id:
+        return "STATUS=INVALID tool=delete_calendar_event: empty event id."
+    action = {"event_id": event_id}
+    if approval_token:
+        ok, stored = approvals_svc.consume_approval(
+            user_id, "delete_calendar_event", action, str(approval_token))
+        if not ok:
+            return (
+                "STATUS=DENIED tool=delete_calendar_event: approval token "
+                f"invalid, expired, or already used ({stored}). Deleted nothing."
+            )
+        action = stored
+    else:
+        summary = f"Delete calendar event {event_id}"
+        approval_id, _token, _created = approvals_svc.request_approval(
+            user_id, "delete_calendar_event", action, summary)
+        if not approval_id:
+            return "STATUS=FAILED tool=delete_calendar_event: could not stage approval."
+        return (
+            "STATUS=DENIED tool=delete_calendar_event: approval required "
+            f"(approval_id={approval_id}). {summary}. Deleted nothing; ask "
+            "the user to approve it in the UI."
+        )
+    return _execute_delete_calendar_event(action["event_id"])

@@ -34,6 +34,11 @@ class SendResponse(BaseModel):
     task_type: str = ""
     warnings: List[str] = Field(default_factory=list)
     fallback: Optional[Dict[str, str]] = None
+    pending_approvals: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ApprovalDecision(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
 
 
 class ChatsResponse(BaseModel):

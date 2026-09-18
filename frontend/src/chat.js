@@ -41,6 +41,49 @@ function chipForAttachment(a) {
   });
   return c;
 }
+/* ---------- human approvals (irreversible tool actions) ---------- */
+var approvalTokens = {};
+var decidedApprovals = {};
+function rememberApprovalTokens(list) {
+  (list || []).forEach(function (a) {
+    if (a && a.id && a.token) approvalTokens[a.id] = a.token;
+  });
+}
+async function approvalTokenFor(id) {
+  if (approvalTokens[id]) return approvalTokens[id];
+  var list = await req("/api/approvals");
+  var found = null;
+  (list.approvals || []).forEach(function (a) {
+    if (a && a.id && a.token) approvalTokens[a.id] = a.token;
+    if (a && a.id === id) found = a;
+  });
+  return found && found.token;
+}
+async function decideApproval(btn, approve, retried) {
+  var id = btn.getAttribute("data-id");
+  if (!id) return;
+  btn.disabled = true;
+  try {
+    var tok = await approvalTokenFor(id);
+    if (!tok) { toast("Already decided or expired."); decidedApprovals[id] = 1; renderChat(); return; }
+    var res = approve
+      ? await req("/api/approvals/" + id + "/approve", { method: "POST", body: JSON.stringify({ token: tok }) })
+      : await req("/api/approvals/" + id + "/reject", { method: "POST" });
+    delete approvalTokens[id];
+    decidedApprovals[id] = 1;
+    if (approve && res && res.result) toast(String(res.result).slice(0, 200));
+    else toast(approve ? "Approved and executed." : "Rejected.");
+    renderChat();
+  } catch (e) {
+    var msg = String((e && e.message) || e);
+    if (!retried && /expired|already used|not found/i.test(msg)) {
+      delete approvalTokens[id];
+      return decideApproval(btn, approve, true);
+    }
+    btn.disabled = false;
+    toast("Approval failed: " + msg);
+  }
+}
 function msgEl(m, idx) {
   var w = document.createElement("div");
   w._i = idx;
@@ -109,6 +152,36 @@ function msgEl(m, idx) {
         sr.appendChild(a);
       });
       body.appendChild(sr);
+    }
+    if (m && m.pending_approvals && m.pending_approvals.length) {
+      var ap = document.createElement("div");
+      ap.className = "chips";
+      m.pending_approvals.forEach(function (p) {
+        if (!p || !p.id || decidedApprovals[p.id]) return;
+        var card = document.createElement("div");
+        card.className = "chip appr-chip";
+        card.title = "Needs your approval — nothing runs until you approve";
+        var badge = document.createElement("span");
+        badge.className = "ext";
+        badge.textContent = "OK?";
+        var nm = document.createElement("span");
+        nm.className = "name";
+        nm.textContent = String(p.tool || "action") + ": " + String(p.summary || "").slice(0, 120);
+        var ok = document.createElement("button");
+        ok.textContent = "Approve";
+        ok.setAttribute("data-act", "approve");
+        ok.setAttribute("data-id", p.id);
+        var no = document.createElement("button");
+        no.textContent = "Reject";
+        no.setAttribute("data-act", "reject");
+        no.setAttribute("data-id", p.id);
+        card.appendChild(badge);
+        card.appendChild(nm);
+        card.appendChild(ok);
+        card.appendChild(no);
+        ap.appendChild(card);
+      });
+      if (ap.childNodes.length) body.appendChild(ap);
     }
     var mt2 = document.createElement("div");
     mt2.className = "meta";
@@ -430,6 +503,7 @@ async function sendText(text, files, reuse) {
       if (meta && meta.active_tier) setActiveTier(meta.active_tier, true, meta.fallback && meta.fallback.reason);
     });
     if (result && result.warnings && result.warnings.length) toast(result.warnings[0]);
+    if (result) rememberApprovalTokens(result.pending_approvals);
     if (result && result.active_tier) setActiveTier(result.active_tier, true, result.fallback && result.fallback.reason);
     await refreshChats();
     if (!$("viewPanel").classList.contains("hidden") && panelBody.getAttribute("data-section") === "artifacts")
@@ -493,6 +567,7 @@ chatCol.addEventListener("click", async function (e) {
   var msg = btn.closest(".msg");
   var i = msg._i;
   var act = btn.getAttribute("data-act");
+  if (act === "approve" || act === "reject") { decideApproval(btn, act === "approve"); return; }
   if (act === "copy") { copyText(msg._raw); }
   else if (act === "speak") { speakText(msg._raw, btn); }
   else if (act === "edit") {

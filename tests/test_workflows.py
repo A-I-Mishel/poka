@@ -131,10 +131,17 @@ def test_confirm_string_rejected():
             "x", [_step("_wf_echo", {"confirm": "{{steps.0.output}}"})], "", KNOWN)
 
 
-def test_confirm_bool_allowed():
-    _n, _d, steps = wf_svc.validate_workflow(
-        "x", [_step("_wf_echo", {"confirm": True})], "", KNOWN)
-    assert steps[0]["args"]["confirm"] is True
+def test_confirm_bool_rejected():
+    # Interactive approval flags have no meaning in saved pipelines.
+    with pytest.raises(ValueError):
+        wf_svc.validate_workflow(
+            "x", [_step("_wf_echo", {"confirm": True})], "", KNOWN)
+
+
+def test_approval_token_rejected():
+    with pytest.raises(ValueError):
+        wf_svc.validate_workflow(
+            "x", [_step("_wf_echo", {"approval_token": "abc"})], "", KNOWN)
 
 
 def test_non_scalar_arg_rejected():

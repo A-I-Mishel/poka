@@ -125,21 +125,34 @@ def test_create_missing_fields(fake):
     assert create_calendar_event.invoke({"summary": "", "start": ""}).startswith("STATUS=INVALID")
 
 
+def _approve_delete(event_id):
+    from services import approvals as approvals_svc
+
+    out = delete_calendar_event.invoke({"event_id": event_id})
+    assert "approval_id=" in out
+    approval_id = out.split("approval_id=")[1].split(")")[0]
+    items = approvals_svc.list_pending("cal-user", rotate_tokens=True)
+    return next(a["token"] for a in items if a["id"] == approval_id)
+
+
 def test_delete_requires_confirmation(fake):
     out = delete_calendar_event.invoke({"event_id": "ev-1"})
     assert out.startswith("STATUS=DENIED")
+    assert "approval_id=" in out
     assert fake.events_obj.deleted == []
 
 
 def test_delete_confirmed(fake):
-    out = delete_calendar_event.invoke({"event_id": "ev-1", "confirm": True})
+    out = delete_calendar_event.invoke(
+        {"event_id": "ev-1", "approval_token": _approve_delete("ev-1")})
     assert "deleted_id=ev-1" in out
     assert fake.events_obj.deleted == ["ev-1"]
 
 
 def test_delete_missing(fake):
     assert delete_calendar_event.invoke(
-        {"event_id": "missing", "confirm": True}).startswith("STATUS=FAILED")
+        {"event_id": "missing",
+         "approval_token": _approve_delete("missing")}).startswith("STATUS=FAILED")
 
 
 def test_unconfigured_degrades(monkeypatch):

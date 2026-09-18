@@ -71,6 +71,11 @@ MAX_LEGACY_STRINGS_CHARS: int = 12000
 # tool reports honestly and points at the Gemini vision workaround.
 MAX_OCR_PAGES: int = 5
 
+# Human approvals for irreversible tool actions (services/approvals.py).
+# Tokens are single-use and short-lived; pending queues stay small.
+APPROVAL_TTL_SECONDS: float = 900.0
+APPROVAL_MAX_PENDING: int = 20
+
 # Saved workflow pipelines (services/workflows.py + agent/workflows.py).
 # Pipelines are owner-saved fixed tool sequences; caps keep registries
 # small and rendered args bounded (templates resolve untrusted step

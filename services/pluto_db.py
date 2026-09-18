@@ -190,7 +190,7 @@ def _is_safe_read_sql(sql: str) -> str:
         # If a write verb appears, it's an injection like WITH ... DELETE or WITH ... PRAGMA.
         # Re-check more precisely: normal SELECT with a column named pragmatically safe?
         # Column names with those words would be without word boundaries due to underscore, so not matched.
-        return "Read path does not allow write operations (use the write path with confirm=true)."
+        return "Read path does not allow write operations (use the approved write path)."
     # Final verb after optional WITH ... must be SELECT or EXPLAIN
     # Remove leading WITH ... by finding the last top-level SELECT/EXPLAIN
     # Heuristic: if stripped starts with WITH, ensure it contains a SELECT keyword after the CTEs
@@ -247,7 +247,7 @@ def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
     except Exception as e:
         # Authorizer denial surfaces as DatabaseError — map to user-safe message.
         if "not authorized" in str(e).lower() or "authorizer" in str(e).lower():
-            return {"error": "Read path does not allow write operations (use the write path with confirm=true)."}
+            return {"error": "Read path does not allow write operations (use the approved write path)."}
         return {"error": _safe_db_error("query", e)}
 
 

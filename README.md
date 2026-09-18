@@ -171,20 +171,21 @@ Gmail (`search_gmail`, `read_gmail`, `create_gmail_draft`,
 `send_gmail`): one configured account via Google OAuth (Desktop app
 client + `scripts/get_google_refresh_token.py` for the refresh
 token). Mail is untrusted DATA; sending is irreversible, so
-`send_gmail` refuses without explicit user confirmation
-(`confirm=true`) — drafts are the safe default. Without credentials
-the tools report unconfigured instead of failing.
+`send_gmail` runs only after the user approves a server-minted,
+single-use approval token in the UI (`/api/approvals`) — drafts are
+the safe default. Without credentials the tools report unconfigured
+instead of failing.
 
 Calendar (`list_calendar_events`, `create_calendar_event`,
 `delete_calendar_event`): same Google OAuth client (refresh token
 must carry the calendar scope — re-run the helper after adding it).
-Creating is low-risk; deletion needs `confirm=true`.
+Creating is low-risk; deletion needs a UI approval token.
 
 Database (`list_tables`, `describe_table`, `query_database`,
 `import_csv_table`, `execute_sql`): per-user SQLite vault file, zero
-setup or credentials. Reads are SELECT-only and capped; writes need
-`confirm=true`; table names are validated identifiers and
-ATTACH/DETACH are rejected.
+setup or credentials. Reads are SELECT-only and capped; writes and
+CSV imports need a UI approval token; table names are validated
+identifiers and ATTACH/DETACH are rejected.
 
 MCP gateway (`list_mcp_tools`, `call_mcp_tool`): use tools from any
 configured MCP server — stdio servers for local dev (need node/npx),

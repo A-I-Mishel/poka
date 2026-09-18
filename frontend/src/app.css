@@ -136,6 +136,10 @@ svg{display:block;flex-shrink:0}
 .chip .ext{font-size:9px;font-weight:600;letter-spacing:.06em;color:var(--t2);border:1px solid var(--bd2);border-radius:4px;padding:2px 4px;line-height:1}
 .chip .name{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip .size{color:var(--t3);font-size:10.5px}
+.appr-chip{height:auto;min-height:28px;padding-top:4px;padding-bottom:4px;border:1px solid var(--bd2)}
+.appr-chip button{padding:3px 8px;border-radius:5px;background:var(--s3,var(--s2));color:var(--tx);font-size:11.5px}
+.appr-chip button:hover{filter:brightness(1.15)}
+.appr-chip button:disabled{opacity:.5;cursor:default}
 .chip-x{width:18px;height:18px;border-radius:4px;display:grid;place-items:center;color:var(--t3);font-size:10px}
 .chip-x:hover{color:var(--tx);background:rgba(128,128,128,.15)}
 .composer-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}

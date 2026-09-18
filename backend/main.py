@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from backend.routers import artifacts, auth, briefs, chat, chats, memory, meta, observability, projects, uploads, workflows  # noqa: E402
+from backend.routers import approvals, artifacts, auth, briefs, chat, chats, memory, meta, observability, projects, uploads, workflows  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +254,7 @@ from backend.middleware.observability import ObservabilityMiddleware  # noqa: E4
 app.add_middleware(ObservabilityMiddleware)
 
 for _router in (
+    approvals.router,
     auth.router,
     chat.router,
     chats.router,

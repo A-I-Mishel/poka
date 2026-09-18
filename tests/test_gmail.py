@@ -152,11 +152,31 @@ def test_draft_and_send():
     assert "draft-1" in create_gmail_draft.invoke(
         {"to": "a@example.com", "subject": "hi", "body": "hello"})
     assert "sent-1" in send_gmail.invoke(
-        {"to": "a@example.com", "subject": "hi", "body": "hello", "confirm": True})
+        {"to": "a@example.com", "subject": "hi", "body": "hello",
+         "approval_token": _approve("send_gmail", "a@example.com")})
 
 
-def test_send_requires_confirmation():
+def _approve(tool, to):
+    from services import approvals as approvals_svc
+
+    out = send_gmail.invoke({"to": to, "subject": "hi", "body": "hello"})
+    assert "approval_id=" in out
+    approval_id = out.split("approval_id=")[1].split(")")[0]
+    items = approvals_svc.list_pending("gmail-user", rotate_tokens=True)
+    token = next(a["token"] for a in items if a["id"] == approval_id)
+    return token
+
+
+def test_send_requires_approval():
     out = send_gmail.invoke({"to": "a@example.com", "subject": "hi", "body": "hello"})
+    assert out.startswith("STATUS=DENIED")
+    assert "approval_id=" in out
+    assert "confirm" not in out
+
+
+def test_send_rejects_forged_token():
+    out = send_gmail.invoke({"to": "a@example.com", "subject": "hi",
+                             "body": "hello", "approval_token": "forged"})
     assert out.startswith("STATUS=DENIED")
 
 

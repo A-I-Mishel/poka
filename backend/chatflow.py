@@ -1856,6 +1856,10 @@ def run_chat(ctx: UserContext, content: str,
             _log_teaching_format(send_text, str(assistant_msg.get("content", "")), tier)
         except Exception:
             pass
+    persisted, live = _turn_approvals(ctx)
+    if persisted:
+        assistant_msg = dict(assistant_msg)
+        assistant_msg["pending_approvals"] = persisted
     current = current + [user_msg, assistant_msg]
     store.save_chats(chats, current)
     return {
@@ -1864,7 +1868,26 @@ def run_chat(ctx: UserContext, content: str,
         "task_type": task_type,
         "warnings": warnings,
         "fallback": fallback,
+        "pending_approvals": live,
     }
+
+
+def _turn_approvals(ctx: UserContext) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Pending approvals for a turn response (never raises).
+
+    Returns (persisted, live): persisted holds id/tool/summary only (safe
+    for chat history — tokens must never reach model context); live holds
+    the same plus single-use tokens for immediate UI delivery.
+    """
+    try:
+        from services import approvals as approvals_svc
+
+        live = approvals_svc.list_pending(ctx.user_id, rotate_tokens=True)
+        persisted = [{k: a.get(k, "") for k in ("id", "tool", "summary")}
+                     for a in live]
+        return persisted, live
+    except Exception:
+        return [], []
 
 
 def _complete_turn_guarded(ctx: UserContext, send_text: str,
@@ -1982,6 +2005,10 @@ def regenerate_chat(ctx: UserContext, index: int,
             _log_teaching_format(send_text, str(fresh_msg.get("content", "")), tier)
         except Exception:
             pass
+    persisted, live = _turn_approvals(ctx)
+    if persisted:
+        fresh_msg = dict(fresh_msg)
+        fresh_msg["pending_approvals"] = persisted
     current = current + [fresh_msg]
     store.save_chats(chats, current)
     return {
@@ -1990,6 +2017,7 @@ def regenerate_chat(ctx: UserContext, index: int,
         "task_type": task_type,
         "warnings": warnings,
         "fallback": fallback,
+        "pending_approvals": live,
     }
 
 

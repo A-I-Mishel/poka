@@ -92,15 +92,16 @@ def _fallback_bracket_calls_from_text(text: str) -> List[Dict[str, Any]]:
     """Parse "[Tool call: name(k=v, ...)]" leaks into real tool calls.
 
     Some tiers narrate actions ("[Tool call: read_document(upload_id=...)]")
-    instead of emitting tool_calls. Only known tools with scalar args
-    (upload_id/page/query-style) are accepted; anything else is ignored.
-    Stdlib only, never raises.
+    instead of emitting tool_calls. Only known READ-ONLY tools with scalar
+    args (upload_id/page/query-style) are accepted; mutating tools parsed
+    from text are never executed (approvals are interactive-only).
+    Anything else is ignored. Stdlib only, never raises.
     """
     candidates: List[Dict[str, Any]] = []
     try:
         for m in _BRACKET_CALL_RE.finditer(text or ""):
             name = str(m.group(1) or "").strip()
-            if not name or name not in TOOL_MAP:
+            if not name or name not in TOOL_MAP or not is_read_only_tool(name):
                 continue
             args: Dict[str, Any] = {}
             for am in _BRACKET_ARG_RE.finditer(m.group(2) or ""):
@@ -123,8 +124,9 @@ def _fallback_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
     Free tiers often emit {"tool":"read_document","upload_id":"..."} as
     content; the structured tool_calls list is then empty and the raw
     JSON leaks to the user. This extracts it so it can be executed
-    normally. Also handles "[Tool call: name(args)]" narration. Stdlib
-    only, never raises.
+    normally. Also handles "[Tool call: name(args)]" narration. Mutating
+    tools parsed from text are never executed (read-only only).
+    Stdlib only, never raises.
     """
     if not text:
         return []
@@ -161,7 +163,7 @@ def _fallback_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
         if not isinstance(obj, dict):
             continue
         name = str(obj.get("tool") or obj.get("name") or "").strip()
-        if not name or name not in TOOL_MAP:
+        if not name or name not in TOOL_MAP or not is_read_only_tool(name):
             continue
         args = obj.get("args")
         if not isinstance(args, dict):

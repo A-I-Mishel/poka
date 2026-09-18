@@ -91,9 +91,24 @@ def test_per_user_isolation():
     assert db.query("other-user", "SELECT * FROM people")["error"].startswith("Database query failed")
 
 
+def _approve(tool, action):
+    from services import approvals as approvals_svc
+
+    method = {"import_csv_table": import_csv_table, "execute_sql": execute_sql}[tool]
+    out = method.invoke(action)
+    assert "approval_id=" in out, out
+    approval_id = out.split("approval_id=")[1].split(")")[0]
+    items = approvals_svc.list_pending("db-user", rotate_tokens=True)
+    return next(a["token"] for a in items if a["id"] == approval_id)
+
+
 def test_tool_flow_end_to_end():
     meta = FileStore("db-user").save_upload(CSV_BYTES, "team.csv")
     out = import_csv_table.invoke({"upload_id": meta.id, "table": "team"})
+    assert out.startswith("STATUS=DENIED") and "approval_id=" in out
+    out = import_csv_table.invoke({
+        "upload_id": meta.id, "table": "team",
+        "approval_token": _approve("import_csv_table", {"upload_id": meta.id, "table": "team"})})
     assert "rows=2" in out
     out = list_tables.invoke({})
     assert "team" in out
@@ -103,7 +118,10 @@ def test_tool_flow_end_to_end():
     assert "bob" in out and "amy" not in out
     denied = execute_sql.invoke({"sql": "DELETE FROM team"})
     assert denied.startswith("STATUS=DENIED")
-    ok = execute_sql.invoke({"sql": "DELETE FROM team WHERE age < 28", "confirm": True})
+    ok = execute_sql.invoke({
+        "sql": "DELETE FROM team WHERE age < 28",
+        "approval_token": _approve(
+            "execute_sql", {"sql": "DELETE FROM team WHERE age < 28"})})
     assert "affected=1" in ok
     assert query_database.invoke({"sql": "SELECT COUNT(*) FROM team"}) is not None
 

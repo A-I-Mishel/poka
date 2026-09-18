@@ -1,7 +1,8 @@
 """Database tools: query the user's SQLite vault, import CSVs, gated writes.
 
-Reads are free-form SELECT (single statement, capped rows); writes
-need confirm=true, set only on explicit user request. Table names are
+Reads are free-form SELECT (single statement, capped rows); writes run
+only with a server-minted single-use approval token from the
+authenticated UI — never a model-supplied flag. Table names are
 validated identifiers; ATTACH/DETACH are rejected everywhere.
 """
 
@@ -88,26 +89,13 @@ def query_database(sql: str, max_results: int = 50) -> str:
     return "\n".join(lines)
 
 
-@tool
-def import_csv_table(upload_id: str, table: str) -> str:
-    """Import an uploaded CSV as a database table (replaces same name).
-
-    Use an upload id from the conversation attachments.
-
-    Args:
-        upload_id: The staged upload id.
-        table: New table name (letters, digits, underscore).
-
-    Returns:
-        Table summary, or a structured failure marker (never silent).
-    """
+def _execute_import_csv_table(upload_id: str, table: str) -> str:
+    """Import after authorization (gate + approval already checked)."""
     user_id, err = _gate("import_csv_table")
     if user_id is None:
         return err
-    if not str(upload_id or "").strip():
-        return "STATUS=INVALID tool=import_csv_table: empty upload id."
     try:
-        path = FileStore(user_id).resolve_upload(str(upload_id).strip())
+        path = FileStore(user_id).resolve_upload(upload_id)
     except Exception as e:
         logger.warning("CSV import resolve failed: %s", e)
         path = None
@@ -118,7 +106,7 @@ def import_csv_table(upload_id: str, table: str) -> str:
             data = f.read()
     except OSError as e:
         return f"STATUS=FAILED tool=import_csv_table: cannot read upload ({e})."
-    result = db.import_csv(user_id, str(table or ""), data)
+    result = db.import_csv(user_id, table, data)
     if "error" in result:
         return f"STATUS=FAILED tool=import_csv_table: {result['error']}"
     return ("STATUS=OK tool=import_csv_table table=%s rows=%d columns=%s"
@@ -126,29 +114,120 @@ def import_csv_table(upload_id: str, table: str) -> str:
 
 
 @tool
-def execute_sql(sql: str, confirm: bool = False) -> str:
-    """Run a write statement (CREATE/INSERT/UPDATE/DELETE). confirm=true required.
+def import_csv_table(upload_id: str, table: str, approval_token: str = "") -> str:
+    """Import an uploaded CSV as a database table (replaces same name).
+    UI approval required.
 
-    Set confirm=true ONLY when the user explicitly asked for that
-    write. SELECT belongs in query_database. ATTACH/DETACH are rejected.
+    Call WITHOUT approval_token first (use an upload id from the
+    conversation attachments). If the result is DENIED with an
+    approval_id, describe the import and ask the user to approve it in
+    the UI. Never invent an approval token.
+
+    Args:
+        upload_id: The staged upload id.
+        table: New table name (letters, digits, underscore).
+        approval_token: Server-minted single-use token (UI only).
+
+    Returns:
+        Table summary, or a structured failure marker (never silent).
+    """
+    from services import approvals as approvals_svc
+    from services.context import get_current_user_id
+
+    user_id = get_current_user_id()
+    if not user_id:
+        return "STATUS=DENIED tool=import_csv_table: no user context."
+    upload_id = str(upload_id or "").strip()
+    if not upload_id:
+        return "STATUS=INVALID tool=import_csv_table: empty upload id."
+    try:
+        known = FileStore(user_id).resolve_upload(upload_id) is not None
+    except Exception:
+        known = False
+    if not known:
+        return "STATUS=FAILED tool=import_csv_table: unknown upload."
+    if not db.valid_identifier(str(table or "")):
+        return "STATUS=INVALID tool=import_csv_table: bad table name."
+    action = {"upload_id": upload_id, "table": str(table or "")}
+    if approval_token:
+        ok, stored = approvals_svc.consume_approval(
+            user_id, "import_csv_table", action, str(approval_token))
+        if not ok:
+            return (
+                "STATUS=DENIED tool=import_csv_table: approval token "
+                f"invalid, expired, or already used ({stored}). Changed nothing."
+            )
+        action = stored
+    else:
+        summary = (f"Import upload into table {action['table'] or '?'} "
+                   "(replaces any existing table of that name)")
+        approval_id, _token, _created = approvals_svc.request_approval(
+            user_id, "import_csv_table", action, summary)
+        if not approval_id:
+            return "STATUS=FAILED tool=import_csv_table: could not stage approval."
+        return (
+            "STATUS=DENIED tool=import_csv_table: approval required "
+            f"(approval_id={approval_id}). {summary}. Changed nothing; ask "
+            "the user to approve it in the UI."
+        )
+    return _execute_import_csv_table(action["upload_id"], action["table"])
+
+
+def _execute_write_sql(sql: str) -> str:
+    """Run a write after authorization (gate + approval already checked)."""
+    user_id, err = _gate("execute_sql")
+    if user_id is None:
+        return err
+    result = db.execute_write(user_id, sql)
+    if "error" in result:
+        return f"STATUS=FAILED tool=execute_sql: {result['error']}"
+    return f"STATUS=OK tool=execute_sql affected={result['affected']}"
+
+
+@tool
+def execute_sql(sql: str, approval_token: str = "") -> str:
+    """Run a write statement (CREATE/INSERT/UPDATE/DELETE). UI approval required.
+
+    Call WITHOUT approval_token first. If the result is DENIED with an
+    approval_id, describe the write and ask the user to approve it in the
+    UI. SELECT belongs in query_database. ATTACH/DETACH are rejected.
+    Never invent an approval token.
 
     Args:
         sql: One write statement.
-        confirm: Must be true; false refuses safely.
+        approval_token: Server-minted single-use token (UI only).
 
     Returns:
         Affected-row count, or a structured failure marker.
     """
-    user_id, err = _gate("execute_sql")
-    if user_id is None:
-        return err
-    if confirm is not True:
+    from services import approvals as approvals_svc
+    from services.context import get_current_user_id
+
+    user_id = get_current_user_id()
+    if not user_id:
+        return "STATUS=DENIED tool=execute_sql: no user context."
+    action = {"sql": str(sql or "")}
+    if not action["sql"].strip():
+        return "STATUS=INVALID tool=execute_sql: empty statement."
+    if approval_token:
+        ok, stored = approvals_svc.consume_approval(
+            user_id, "execute_sql", action, str(approval_token))
+        if not ok:
+            return (
+                "STATUS=DENIED tool=execute_sql: approval token invalid, "
+                f"expired, or already used ({stored}). Changed nothing; use "
+                "query_database for reads."
+            )
+        action = stored
+    else:
+        summary = f"Run write SQL: {action['sql'][:120]}"
+        approval_id, _token, _created = approvals_svc.request_approval(
+            user_id, "execute_sql", action, summary)
+        if not approval_id:
+            return "STATUS=FAILED tool=execute_sql: could not stage approval."
         return (
-            "STATUS=DENIED tool=execute_sql: writes need explicit user "
-            "confirmation (confirm=true). Changed nothing; use "
-            "query_database for reads."
+            "STATUS=DENIED tool=execute_sql: approval required "
+            f"(approval_id={approval_id}). {summary}. Changed nothing; ask "
+            "the user to approve it in the UI, or use query_database for reads."
         )
-    result = db.execute_write(user_id, str(sql or ""))
-    if "error" in result:
-        return f"STATUS=FAILED tool=execute_sql: {result['error']}"
-    return f"STATUS=OK tool=execute_sql affected={result['affected']}"
+    return _execute_write_sql(action["sql"])
