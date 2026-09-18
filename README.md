@@ -127,7 +127,11 @@ Sessions work in both auth modes.
 
 ## Model configuration
 
-Cascade (first live tier wins, failed tiers cool down):
+Role-based tier tables (first live tier wins, failed tiers cool down).
+Final answers use the synthesis table (Gemini-led, no 8B-class tiers);
+dumb calls (classification, summaries, planning, reflection) use the
+cheap table; the full cascade below is the escape hatch when synthesis
+is down (answers then carry a degraded marker):
 1. Groq (fast inference; model via `GROQ_MODEL`)
 2. Gemini 3.6 Flash (Google, free tier ~20 req/day)
 3. Gemini 3.5 Flash (Google fallback)

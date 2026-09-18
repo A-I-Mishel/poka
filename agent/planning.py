@@ -36,6 +36,7 @@ def plan_then_execute(
     attempt_tier: Optional[str] = None,
     failed_tiers: Optional[set] = None,
     request_id: Optional[str] = None,
+    cheap_tiers: Optional[Sequence] = None,
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
@@ -65,6 +66,19 @@ def plan_then_execute(
             budget.count_plan()
         except BudgetExhausted:
             return _loop(user_input)
+
+    def _ask_plan(p_llm: BaseLanguageModel) -> str:
+        plan_response = agent._invoke_bounded(
+            p_llm,
+            [
+                SystemMessage(content="You are a planning assistant. Be concise."),
+                *chat_history,
+                HumanMessage(content=plan_prompt),
+            ],
+            budget=budget,
+        )
+        return _as_text(plan_response.content)
+
     try:
         tool_names = ", ".join(sorted(TOOL_MAP))
         plan_prompt = (
@@ -73,16 +87,20 @@ def plan_then_execute(
             f"{tool_names}\n\n"
             f"Request: {user_input}\nPlan:"
         )
-        plan_response = agent._invoke_bounded(
-            llm_instance,
-            [
-                SystemMessage(content="You are a planning assistant. Be concise."),
-                *chat_history,
-                HumanMessage(content=plan_prompt),
-            ],
-            budget=budget,
-        )
-        plan_text = _as_text(plan_response.content)
+        if cheap_tiers is not None:
+            # Dumb call: cheap tiers first, attempt tier as fallback. Cheap
+            # failures must not implicate the attempt tier (it never ran);
+            # quota exhaustion falls through to the legacy path below,
+            # preserving its exact semantics.
+            from agent.cascade import _run_cascade_step as _cascade
+
+            try:
+                _, plan_text = _cascade(
+                    lambda _n, _llm: _ask_plan(_llm), None, cheap_tiers)
+            except Exception:
+                plan_text = _ask_plan(llm_instance)
+        else:
+            plan_text = _ask_plan(llm_instance)
         # Bounded before injection into the execution prompt: a runaway
         # plan must not crowd the context budget.
         plan_text = plan_text[:PLAN_MAX_CHARS]

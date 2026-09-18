@@ -94,6 +94,39 @@ class _InvokeFake:
         return SimpleNamespace(content=self._text)
 
 
+def test_fallthrough_telemetry_scrubs_and_counts():
+    from agent import router as router_mod
+
+    router_mod._reset_fallthrough_stats()
+    assert router_mod.rule_route("read this pdf") == "research"
+    assert router_mod.rule_route("blargh snazzlequix") is None
+    assert router_mod.rule_route("Contact bob@exampleXcom about invoice 42") is None
+    stats = router_mod.get_fallthrough_stats()
+    assert stats["total"] == 3
+    assert stats["fallthrough"] == 2
+    top = dict(stats["top"])
+    assert "blargh snazzlequix" in top
+    assert not any("@" in k or "42" in k or "bob" in k for k in top)
+    assert any("<n>" in k for k in top)
+    router_mod._reset_fallthrough_stats()
+    assert router_mod.get_fallthrough_stats() == {"total": 0, "fallthrough": 0, "top": []}
+
+
+def test_fallthrough_keys_bounded():
+    from agent import router as router_mod
+
+    router_mod._reset_fallthrough_stats()
+    old_max = router_mod._FALLTHROUGH_MAX_KEYS
+    router_mod._FALLTHROUGH_MAX_KEYS = 3
+    try:
+        for word in ("alpha", "beta", "gamma", "delta"):
+            assert router_mod.rule_route(word) is None
+        assert len(router_mod.get_fallthrough_stats()["top"]) == 3
+    finally:
+        router_mod._FALLTHROUGH_MAX_KEYS = old_max
+        router_mod._reset_fallthrough_stats()
+
+
 def test_classifier_failure_falls_back_to_simple(monkeypatch):
     """A dead classifier must pick the cheap direct path, not research."""
     import agent.runtime as runtime

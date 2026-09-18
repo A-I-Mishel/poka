@@ -1118,16 +1118,19 @@ def _complete_turn(ctx: UserContext, send_text: str,
         for m in fresh
     ]
 
+    reported = result.get("fallback")
+    agent_fallback = dict(reported) if isinstance(reported, dict) else None
+    ui_fallback = _fallback_info(active_tier, tier) or agent_fallback
     assistant_msg: Dict[str, Any] = {
         "role": "assistant",
         "content": output,
         "time": utcnow_iso(),
         **_assistant_meta(tools_used, sources, force_search, deep_mode, tier,
-                          _fallback_info(active_tier, tier)),
+                          ui_fallback),
     }
     if new_artifacts:
         assistant_msg["artifacts"] = new_artifacts
-    return assistant_msg, tier, task_type, _fallback_info(active_tier, tier)
+    return assistant_msg, tier, task_type, ui_fallback
 
 
 def _memory_and_project(store: Any, project_id: Optional[str]) -> Tuple[str, str]:

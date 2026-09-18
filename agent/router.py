@@ -6,7 +6,8 @@ breaking tool use.
 """
 
 import re
-from typing import Optional, Sequence
+import threading
+from typing import Dict, Optional, Sequence
 
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import HumanMessage
@@ -21,6 +22,84 @@ _GREETING_RE = re.compile(
     re.IGNORECASE,
 )
 _UPLOAD_ID_RE = re.compile(r"[0-9a-f]{16}")
+
+
+# --- classifier-fallthrough telemetry (Milestone 1a) ---
+# In-memory counters of rule_route inputs that match nothing, keyed by a
+# scrubbed normalization (lowercase, digits→<n>, tokens containing @
+# dropped, punctuation stripped, 80 chars). Raw user text never reaches
+# persistent logs; read the counters via get_fallthrough_stats() (the ops
+# endpoint will expose them). Bounded and lock-guarded; never raises.
+_FALLTHROUGH_MAX_KEYS: int = 500
+_fallthrough_lock = threading.Lock()
+_fallthrough_total: int = 0
+_fallthrough_counts: Dict[str, int] = {}
+
+
+def _scrub_fallthrough(text: str) -> str:
+    """Normalize an input for pattern mining without keeping PII."""
+    try:
+        parts: list = []
+        for tok in str(text or "").lower().split():
+            if "@" in tok:
+                continue
+            tok = re.sub(r"\d+", "<n>", tok)
+            tok = re.sub(r"[^\w<>\-]", "", tok).strip()
+            if tok:
+                parts.append(tok)
+        return " ".join(parts)[:80]
+    except Exception:
+        return ""
+
+
+def _record_routed() -> None:
+    """Count one deterministically routed input. Never raises."""
+    global _fallthrough_total
+    try:
+        with _fallthrough_lock:
+            _fallthrough_total += 1
+    except Exception:
+        pass
+
+
+def _record_fallthrough(text: str) -> None:
+    """Count one unmatched input (and one total call). Never raises."""
+    global _fallthrough_total
+    try:
+        with _fallthrough_lock:
+            _fallthrough_total += 1
+            key = _scrub_fallthrough(text)
+            if not key:
+                return
+            if key not in _fallthrough_counts and len(_fallthrough_counts) >= _FALLTHROUGH_MAX_KEYS:
+                return
+            _fallthrough_counts[key] = _fallthrough_counts.get(key, 0) + 1
+    except Exception:
+        pass
+
+
+def get_fallthrough_stats(limit: int = 50) -> Dict[str, object]:
+    """Return {total, fallthrough, top: [(pattern, count)]} (copy, never raises)."""
+    try:
+        with _fallthrough_lock:
+            items = sorted(_fallthrough_counts.items(),
+                           key=lambda kv: kv[1], reverse=True)
+            return {"total": _fallthrough_total,
+                    "fallthrough": sum(_fallthrough_counts.values()),
+                    "top": [(k, v) for k, v in items[:max(1, limit)]]}
+    except Exception:
+        return {"total": 0, "fallthrough": 0, "top": []}
+
+
+def _reset_fallthrough_stats() -> None:
+    """Clear counters (tests/ops only)."""
+    global _fallthrough_total
+    try:
+        with _fallthrough_lock:
+            _fallthrough_total = 0
+            _fallthrough_counts.clear()
+    except Exception:
+        pass
 
 
 def _match_keyword(text: str, word: str) -> bool:
@@ -57,8 +136,10 @@ def rule_route(user_input: str) -> Optional[str]:
     """
     text = user_input.lower().strip()
     if not text:
+        _record_routed()
         return "simple"
     if _GREETING_RE.match(text) and len(text) <= 40:
+        _record_routed()
         return "simple"
     hits = set()
     if _UPLOAD_ID_RE.search(text) or _signals(text, ["pdf", ".pdf", "read", "summar*", "document", "docx", ".docx", "doc", ".doc", "odt", ".odt", "rtf", ".rtf", "txt", ".txt", "md", ".md", "markdown", "pptx", ".pptx", "ppt", ".ppt", "odp", ".odp", "html", ".html", ".htm", "xml", ".xml", "zip", ".zip", "archive", "webpage", "web page", "text file", "what is it", "what does", "teach*", "learn*", "exam", "exams", "recall", "lecture*", "tutor*", "practic*", "quiz*"]):
@@ -111,9 +192,12 @@ def rule_route(user_input: str) -> Optional[str]:
             text, ["write", "compose", "draft", "create", "make me", "generate"]):
         hits.add("research")
     if len(hits) == 1:
+        _record_routed()
         return next(iter(hits))
     if len(hits) > 1:
+        _record_routed()
         return "multi_step"
+    _record_fallthrough(user_input)
     return None
 
 

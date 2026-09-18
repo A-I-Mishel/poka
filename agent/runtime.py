@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDi
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from config import TASK_TEMPERATURES, get_tier_llm
+from config import CHEAP_TIERS, SYNTHESIS_TIERS, TASK_TEMPERATURES, get_tier_llm
 from services.context import get_current_user_id
 from services.limits import MAX_DEEP_LLM_CALLS, MAX_DEEP_TOOL_CALLS, MAX_DEEP_TOOL_ROUNDS
 from services.context_budget import CTX_SUMMARY_TOKENS, fit_text
@@ -78,6 +78,48 @@ class AgentResult(TypedDict):
     active_tier: str
     task_type: str
     request_id: str
+
+
+# Short inputs without any attachment/tool hints are answered directly:
+# with no evidence of tool need, an LLM classify call is pure waste.
+SHORT_DIRECT_CHARS: int = 60
+_HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
+                 "read_pdf", "analyze_csv")
+
+
+def _reflect_with_fallback(llm_instance: BaseLanguageModel, user_input: str,
+                           draft: str, chat_history: Sequence[BaseMessage],
+                           budget: Optional[RequestBudget], task_type: str,
+                           tier_name: Optional[str],
+                           cheap_tiers: Optional[Sequence] = None) -> Tuple[str, Optional[str]]:
+    """Reflection on cheap tiers first, attempt tier as fallback.
+
+    Returns (text, rewriter_tier_or_None). Never raises for model
+    failures (returns the draft); BudgetExhausted propagates — it is our
+    limit, not the provider's. cheap_tiers=None keeps the legacy direct
+    path (custom tier tables own their instances).
+    """
+    from agent.cascade import _run_cascade_step as _cascade
+
+    if cheap_tiers is not None:
+        try:
+            name, text = _cascade(
+                lambda _n, _llm: reflect_and_improve(
+                    _llm, user_input, draft, chat_history, budget, task_type),
+                None, cheap_tiers)
+            return text, (name if text != draft else None)
+        except BudgetExhausted:
+            raise
+        except Exception:
+            pass
+    try:
+        text = reflect_and_improve(
+            llm_instance, user_input, draft, chat_history, budget, task_type)
+    except BudgetExhausted:
+        raise
+    except Exception:
+        return draft, None
+    return text, (tier_name if text != draft else None)
 
 
 def summarize_history(
@@ -242,7 +284,9 @@ def answer_with_fallback(
     history: List[BaseMessage] = list(chat_history) if chat_history else []
     history_list: List[Dict[str, Any]] = list(raw_messages) if raw_messages else []
     combined_notes: str = memory_notes
-    logger.info("req=%s start tiers=%s", request_id, [n for n, _ in _usable_tiers(first, tiers)])
+    logger.info("req=%s start tiers=%s", request_id,
+                [n for n, _ in _usable_tiers(
+                    first, SYNTHESIS_TIERS if tiers is None else tiers)])
     obs_event("request.start", request_id=request_id)
 
     try:
@@ -261,14 +305,29 @@ def answer_with_fallback(
     if formatted_memory:
         combined_notes = (combined_notes + "\n" + formatted_memory).strip()
 
+    # Role tables (prod default only): cheap tiers for dumb calls,
+    # synthesis tiers for final answers. Caller-supplied tables (tests,
+    # explicit overrides) keep legacy behavior exactly.
+    cheap_table = CHEAP_TIERS if tiers is None else tiers
+    synth_table = SYNTHESIS_TIERS if tiers is None else tiers
+
     task_type: str = rule_route(user_input) or ""
     if task_type:
         ROUTER_STATS["rule"] += 1
+    elif (len(user_input.strip()) <= SHORT_DIRECT_CHARS
+            and not any(m in user_input for m in _HINT_MARKERS)):
+        # Short input with no evidence of tool need: answering directly is
+        # correct far more often than not, and an LLM classify call here
+        # is pure quota burn. Attachment/tool hints bypass this (the gate
+        # already proved tool relevance, e.g. teaching "Next" turns).
+        ROUTER_STATS["rule"] += 1
+        task_type = "simple"
     else:
         ROUTER_STATS["llm"] += 1
         try:
             _, task_type = _run_cascade_step(
-                lambda _name, llm: classify_task(user_input, llm, budget, tier_name=_name), first, tiers
+                lambda _name, llm: classify_task(user_input, llm, budget, tier_name=_name),
+                first, cheap_table,
             )
         except (RuntimeError, BudgetExhausted):
             # Classifier is down: fall back to the cheapest path (a
@@ -288,7 +347,7 @@ def answer_with_fallback(
                     return summarize_history(history_list, llm, budget=budget, tier_name=_name)
 
                 with trace_llm_call(request_id, "summarize", "summarize") as _:
-                    _, langchain_history = _run_cascade_step(_summarize, first, tiers)
+                    _, langchain_history = _run_cascade_step(_summarize, first, cheap_table)
                 _SUMMARY_CACHE[cache_key] = langchain_history
                 while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
                     _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
@@ -297,14 +356,20 @@ def answer_with_fallback(
     except (RuntimeError, BudgetExhausted):
         langchain_history = history
 
+    def _is_managed_table(table: Any) -> bool:
+        # Managed tables hold real shared getters, so per-task sizing via
+        # get_tier_llm is thread-safe. Caller-supplied tables own their
+        # instances and are used exactly as given (even on name collision).
+        return table is None or table is SYNTHESIS_TIERS or table is CHEAP_TIERS
+
     def _size_llm_for_task(tier_name: str, llm: BaseLanguageModel) -> BaseLanguageModel:
         # Task temperature via a cached client for (tier, temperature):
         # cached instances are never mutated (thread-safe sharing). Only
-        # for the default cascade table -- a caller-supplied tiers table
+        # for managed cascade tables -- a caller-supplied tiers table
         # owns its instances, so those are used exactly as given (with
         # the historical temperature hint) and never swapped for real
         # clients, even on a name collision.
-        if tiers is None:
+        if _is_managed_table(tiers):
             try:
                 sized = get_tier_llm(tier_name, temperature=TASK_TEMPERATURES.get(task_type, 0.5))
             except Exception:
@@ -337,9 +402,32 @@ def answer_with_fallback(
                 )
             return _as_text(response.content)
 
+        # Synthesis table first; the full cascade is the escape hatch when
+        # synthesis is down (answers then carry a degraded marker). Custom
+        # tables run exactly once, as before.
+        tables = [synth_table]
+        if tiers is None:
+            tables.append(None)
+        degraded: Optional[Dict[str, str]] = None
+        answer_attempts: List[str] = []
+        while tables:
+            table = tables.pop(0)
+            try:
+                active_tier, output_simple = _run_cascade_step(
+                    _answer_direct, first, table, answer_attempts)
+                break
+            except BudgetExhausted as e:
+                # Our limit, not the provider's: never retry, never fall back.
+                raise RuntimeError(f"{e} (ref {request_id})") from e
+            except RuntimeError as e:
+                if table is SYNTHESIS_TIERS and tables:
+                    degraded = {"requested": "synthesis",
+                                "reason": "synthesis tiers unavailable"}
+                    continue
+                raise RuntimeError(f"{e} (ref {request_id})") from e
+        else:  # pragma: no cover - loop always breaks or raises
+            raise RuntimeError(f"All LLM tiers failed at runtime. (ref {request_id})")
         try:
-            answer_attempts: List[str] = []
-            active_tier, output_simple = _run_cascade_step(_answer_direct, first, tiers, answer_attempts)
             output_simple = strip_internal_reasoning(output_simple)
             latency_ms = int((time.time() - started_at) * 1000)
             logger.info(
@@ -361,6 +449,7 @@ def answer_with_fallback(
                 "request_id": request_id,
                 "tools_used": [],
                 "sources": [],
+                "fallback": degraded,
             }
         except (RuntimeError, BudgetExhausted) as e:
             logger.warning("req=%s failed: %s", request_id, e)
@@ -411,7 +500,7 @@ def answer_with_fallback(
                 return pinned[0], _size_llm_for_task(pinned[0], pinned[1])
             yielded_pinned = True
             ordered = [
-                item for item in _usable_tiers(first, tiers)
+                item for item in _usable_tiers(first, synth_table)
                 if item[0] not in failed
             ]
             if not ordered:
@@ -458,6 +547,7 @@ def answer_with_fallback(
                     project_context, provider, tooled_tiers, live, on_reset,
                     final_tier, MAX_DEEP_TOOL_ROUNDS, on_progress,
                     tier_name, prefailed, request_id,
+                    cheap_tiers=(CHEAP_TIERS if tiers is None else None),
                 )
             else:
                 draft = run_tool_loop(
@@ -469,12 +559,15 @@ def answer_with_fallback(
                     final_tier, on_progress, request_id,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
-                improved = reflect_and_improve(llm, user_input, draft, langchain_history, budget, task_type)
+                improved, writer = _reflect_with_fallback(
+                    llm, user_input, draft, langchain_history, budget,
+                    task_type, tier_name,
+                    cheap_tiers=(CHEAP_TIERS if tiers is None else None))
                 if improved != draft:
                     # The visible answer is the rewrite, produced on this
                     # attempt's tier — not whichever tier ran the draft.
                     draft = improved
-                    final_tier[:] = [tier_name]
+                    final_tier[:] = [writer or tier_name]
             elif not final_tier:
                 final_tier[:] = [tier_name]
             return draft
@@ -483,9 +576,28 @@ def answer_with_fallback(
             del used_sources[mark_sources:]
             raise
 
+    degraded_tooled: Optional[Dict[str, str]] = None
     try:
         answer_attempts = []
-        active_tier, output = _run_cascade_step(_answer_tooled, first, tiers, answer_attempts)
+        _tooled_tables = [synth_table]
+        if tiers is None:
+            _tooled_tables.append(None)
+        while _tooled_tables:
+            _table = _tooled_tables.pop(0)
+            try:
+                active_tier, output = _run_cascade_step(
+                    _answer_tooled, first, _table, answer_attempts)
+                break
+            except BudgetExhausted as e:
+                raise RuntimeError(f"{e} (ref {request_id})") from e
+            except RuntimeError as e:
+                if _table is SYNTHESIS_TIERS and _tooled_tables:
+                    degraded_tooled = {"requested": "synthesis",
+                                       "reason": "synthesis tiers unavailable"}
+                    continue
+                raise RuntimeError(f"{e} (ref {request_id})") from e
+        else:  # pragma: no cover - loop always breaks or raises
+            raise RuntimeError(f"All LLM tiers failed at runtime. (ref {request_id})")
         # Attribute the tier that produced the visible answer: the final
         # call's tier when tracked, else the last involved tier. The old
         # tooled_tiers[-1] could name a tier whose text was superseded
@@ -518,6 +630,7 @@ def answer_with_fallback(
             "request_id": request_id,
             "tools_used": list(used_tools),
             "sources": [dict(s) for s in used_sources],
+            "fallback": degraded_tooled,
         }
     except (RuntimeError, BudgetExhausted) as e:
         logger.warning("req=%s failed: %s", request_id, e)
