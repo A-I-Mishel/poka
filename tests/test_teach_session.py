@@ -483,6 +483,35 @@ def test_scope_fence_names_window():
     assert _teaching_scope_from_send("no fence here") is None
 
 
+def test_validator_rejects_fabrication_admissions():
+    from backend.chatflow import _validate_teaching_draft
+
+    base = _GOOD_DRAFT
+    assert any("unverified" in r for r in _validate_teaching_draft(
+        base + "\n(Assumes Lecture 5 slides are as follows — adjust if actual slides differ.)", 4, 6))
+    assert any("unverified" in r for r in _validate_teaching_draft(
+        base + "\nAlways verify slides before teaching!", 4, 6))
+    # Legitimate prose about assumptions must not trip the detector.
+    assert _validate_teaching_draft(
+        base + "\nAssume costs are non-negative for this proof.", 4, 6) == []
+
+
+def test_validator_rejects_slide_dump():
+    from backend.chatflow import _validate_teaching_draft
+
+    dump = ("📘 FILE: L\nSlides: 4-6\n## Concept: Big\n**Source**\n[slide 4]\n"
+            "**Source**\n[slide 5]\n**Source**\n[slide 6]\n**Source**\n[slide 7]\n"
+            "**Recall**\nQ?")
+    reasons = _validate_teaching_draft(dump, 4, 6)
+    assert any("beyond window" in r for r in reasons)
+    dump_inside = ("📘 FILE: L\nSlides: 4-6\n## Concept: Big\n**Source**\n[slide 4]\n"
+                   "**Source**\n[slide 5]\n**Source**\n[slide 6]\n**Recall**\nQ?")
+    assert _validate_teaching_draft(dump_inside, 4, 6) == []
+    # Backward references to earlier slides stay allowed (bridges, not dumps).
+    bridged = dump_inside.replace("[slide 6]", "[slide 2]")
+    assert _validate_teaching_draft(bridged, 4, 6) == []
+
+
 def test_validator_matrix():
     from backend.chatflow import _validate_teaching_draft
 

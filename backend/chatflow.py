@@ -1569,6 +1569,15 @@ _TEACHING_CONCEPT_RE = re.compile(r"^\s*#{0,3}\s*\*{0,2}concept\*{0,2}\s*:", re.
 _TEACHING_RECALL_RE = re.compile(r"^\s*#{0,3}\s*\*{0,2}recall\*{0,2}\s*:?\s*$", re.IGNORECASE | re.MULTILINE)
 _TEACHING_BANNED_FOOTER_RE = re.compile(
     r"^\s*(say\s+next\b|say\s+[\"“']?got\s+it\b|next\s+steps\b)", re.IGNORECASE | re.MULTILINE)
+# Admissions that slide contents are guessed, not verified. Each pattern
+# pairs a hedging verb with slide references so legitimate prose (e.g. a
+# slide teaching proof-by-assumption) does not trip it.
+_TEACHING_FABRICATION_RES = (
+    re.compile(r"assum(?:es|ing|ed)\b.{0,60}\bslides?\b", re.IGNORECASE),
+    re.compile(r"adjust if actual slides? differ", re.IGNORECASE),
+    re.compile(r"verify slides before teaching", re.IGNORECASE),
+    re.compile(r"if (?:the )?slides? (?:differ|are different)", re.IGNORECASE),
+)
 TEACHING_REPAIR_TIMEOUT_SECONDS: float = 30.0
 
 
@@ -1587,10 +1596,11 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
     """Check a teaching draft against its allowed window (pure, never raises).
 
     Canonical rules: source header range within the window; no citations
-    beyond the window end; at least one concept block and one citation;
-    exactly one terminal Recall section after the last concept; no footer
-    lines (Say Next / Say Got it / Next Steps). Returns violation reasons;
-    empty means pass.
+    beyond the window end; distinct cited slides within the window span;
+    at least one concept block and one citation; exactly one terminal
+    Recall section after the last concept; no footer lines (Say Next /
+    Say Got it / Next Steps); no admissions of guessed slide contents.
+    Returns violation reasons; empty means pass.
     """
     reasons: List[str] = []
     try:
@@ -1608,7 +1618,8 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
         try:
             cited = [int(n) for n in _TEACHING_CITE_RE.findall(text)]
             for a, b in _TEACHING_CITE_RANGE_RE.findall(text):
-                cited.append(int(b))
+                lo, hi = int(a), int(b)
+                cited.extend(range(min(lo, hi), max(lo, hi) + 1))
         except Exception:
             cited = []
         beyond = sorted({n for n in cited if n > end})
@@ -1616,6 +1627,15 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
             reasons.append(f"cites slides beyond window: {beyond}")
         if not cited:
             reasons.append("no slide citations")
+        distinct = sorted({n for n in cited if start <= n <= end})
+        if len(distinct) > (end - start + 1):
+            reasons.append(
+                f"teaches {len(distinct)} slides, window allows {end - start + 1}")
+        try:
+            if any(rx.search(text) for rx in _TEACHING_FABRICATION_RES):
+                reasons.append("admits guessed slide contents (unverified)")
+        except Exception:
+            pass
         concepts = list(_TEACHING_CONCEPT_RE.finditer(text))
         recalls = list(_TEACHING_RECALL_RE.finditer(text))
         admin_only = not concepts and "administrative information" in text.lower()
