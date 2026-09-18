@@ -50,11 +50,13 @@ def test_clients_cached(monkeypatch):
 
 def test_cascade_position_is_tail(monkeypatch):
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names[-8:] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
+    assert names[-9:-1] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
                           "OpenRouter Nemotron Super", "OpenRouter Nemotron 3.5",
                           "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
                           "OpenRouter Laguna",
                           "OpenRouter Free Router"]
+    # Mistral is the last-resort tier after the OpenRouter block.
+    assert names[-1] == "Mistral"
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert config.get_tier_llm("OpenRouter Gemma", temperature=0.5) is None
 
@@ -63,8 +65,9 @@ def test_provider_table_includes_openrouter():
     from agent import providers
 
     names = [name for name, _ in providers.TIER_AGENT_GETTERS]
-    assert names[-8:] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
+    assert names[-9:-1] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
                           "OpenRouter Nemotron Super", "OpenRouter Nemotron 3.5",
                           "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
                           "OpenRouter Laguna",
                           "OpenRouter Free Router"]
+    assert names[-1] == "Mistral"

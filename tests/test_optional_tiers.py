@@ -2,8 +2,10 @@
 
 Each lane is env-gated: a missing or placeholder key means the tier is
 skipped (None), so unconfigured lanes never disturb the cascade.
-Position: after Gemini 3.5 Flash, before the OpenRouter aggregator block
-(direct providers first, aggregator fallbacks last).
+Position: GitHub Models + NVIDIA are direct providers after Gemini 3.5
+Flash, before the OpenRouter aggregator block (direct providers first,
+aggregator fallbacks last); Mistral is the last-resort tier at the very
+bottom of the cascade.
 """
 
 import os
@@ -86,8 +88,11 @@ def test_getter_by_name(monkeypatch, lane):
 def test_cascade_position_after_gemini_before_openrouter():
     names = [name for name, _ in config.TIER_GETTERS]
     assert names.index("Gemini 3.5 Flash") < names.index("GitHub Models")
-    assert names.index("GitHub Models") < names.index("Mistral") < names.index("NVIDIA")
+    assert names.index("GitHub Models") < names.index("NVIDIA")
     assert names.index("NVIDIA") < names.index("OpenRouter Nemotron Ultra")
+    # Mistral is last resort: after every OpenRouter fallback.
+    assert names.index("OpenRouter Free Router") < names.index("Mistral")
+    assert names[-1] == "Mistral"
 
 
 def test_registered_in_agent_table():

@@ -136,13 +136,13 @@ is down (answers then carry a degraded marker):
 2. Gemini 3.6 Flash (Google, free tier ~20 req/day)
 3. Gemini 3.5 Flash (Google fallback)
 4. GitHub Models (free, no card; `openai/gpt-4o-mini` via `GITHUB_MODELS_MODEL`)
-5. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL`)
-6. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
-7. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
+5. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
+6. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
    + Gemma 26B + Ling Fin + Laguna (free fallbacks; Inkling Small
    and Cerebras retired Sep 2026 — 403/payment_required)
-8. OpenRouter Free Router (`openrouter/free`; smart auto-selection
+7. OpenRouter Free Router (`openrouter/free`; smart auto-selection
    of a free model filtered by request features)
+8. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL` — last resort)
 
 OpenCode Zen free tier (Muse Spark 1.3 contributor-free, Nemotron
 3.5/Ultra, Big Pickle, MiMo, Ling) retired Sep 2026 — provider now

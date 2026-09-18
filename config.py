@@ -422,7 +422,6 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
     ("GitHub Models", get_tier_github_models_llm),
-    ("Mistral", get_tier_mistral_llm),
     ("NVIDIA", get_tier_nvidia_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
@@ -432,6 +431,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),
     ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
+    ("Mistral", get_tier_mistral_llm),
 ]
 
 
@@ -446,7 +446,6 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.5 Flash", get_tier3_llm),
     ("Groq", get_tier_groq_llm),
     ("GitHub Models", get_tier_github_models_llm),
-    ("Mistral", get_tier_mistral_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),
     ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
@@ -455,12 +454,13 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),
     ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
+    ("Mistral", get_tier_mistral_llm),
 ]
 CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),
     ("GitHub Models", get_tier_github_models_llm),
-    ("Mistral", get_tier_mistral_llm),
     ("NVIDIA", get_tier_nvidia_llm),
+    ("Mistral", get_tier_mistral_llm),
 ]
 
 # Tiers that get the strict grounding paragraph (small or nondeterministic

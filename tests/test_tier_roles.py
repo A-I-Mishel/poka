@@ -65,7 +65,7 @@ def test_role_tables_shape():
     assert "NVIDIA" not in synth_names
     assert set(synth_names) | {"NVIDIA"} == {n for n, _ in TIER_GETTERS}
     assert [n for n, _ in CHEAP_TIERS] == [
-        "Groq", "GitHub Models", "Mistral", "NVIDIA"]
+        "Groq", "GitHub Models", "NVIDIA", "Mistral"]
 
 
 def test_classify_uses_cheap_table(monkeypatch):
