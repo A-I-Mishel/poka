@@ -529,18 +529,77 @@ def run_tool_loop(
     messages.append(HumanMessage(content=user_input))
 
     def _filtered_tools(hint: str) -> List[Any]:
-        # ponytail: lazy-bind to keep small-context lanes (GitHub 8k) from 400s; expand heuristic when a needed tool is missed
+        # ponytail: lazy-bind to keep small-context lanes (GitHub 8k) from 400s; expand heuristic when a needed tool is missed.
+        # Typo-tolerant: exact substring first, then token-level fuzzy
+        # (difflib ratio >= 0.85) for len>=4 keywords so "convrt",
+        # "craete", "pyton" still bind the right tools. Stdlib only,
+        # never raises; short tokens stay exact-only to avoid noise
+        # ("do"/"to" must never match "doc").
+        import difflib as _difflib
+
         low = (hint or "").lower()
+        try:
+            tokens = _re.findall(r"[a-z0-9]+", low)
+        except Exception:
+            tokens = []
+
+        def _hit(phrase: str) -> bool:
+            try:
+                p = str(phrase or "").lower()
+                if not p:
+                    return False
+                if " " in p or "[" in p or "." in p or "_" in p:
+                    return p in low
+                if p in low:
+                    return True
+                if len(p) < 4:
+                    return False
+                for tok in tokens:
+                    if len(tok) < 4 or tok == p:
+                        if tok == p:
+                            return True
+                        continue
+                    if abs(len(tok) - len(p)) > 2:
+                        continue
+                    try:
+                        if _difflib.SequenceMatcher(None, tok, p).ratio() >= 0.85:
+                            return True
+                    except Exception:
+                        continue
+                return False
+            except Exception:
+                return False
+
+        def _any(keys: Sequence[str]) -> bool:
+            try:
+                return any(_hit(k) for k in keys)
+            except Exception:
+                return False
+
         base: List[Any] = [web_search, search_documents, workspace_list, workspace_read, check_logic]
-        if any(k in low for k in ("pdf", "document", "docx", "pptx", "slide", ".pdf", "upload", "attached", "[content of", "read_document", "read_pdf")):
+        if _any(("pdf", "document", "doucment", "docx", "pptx", "slide", "slid",
+                 ".pdf", "upload", "uplod", "attached", "attach", "read_document",
+                 "read_pdf", "[content of", "doc", "dco", "word", "wrod", "file",
+                 "read", "open", "view", "show", "lecture", "deck", "notes", "paper")):
             base += [read_document, read_pdf, read_pdf_page, read_output, analyze_csv, csv_inspect]
-        if any(k in low for k in ("csv", "tsv", "xlsx", "data", "table", "spreadsheet", "database", "sql", "query")):
+        if _any(("csv", "tsv", "xlsx", "data", "table", "spreadsheet", "database",
+                 "sql", "query", "sheet", "column", "stats")):
             base += [analyze_csv, csv_inspect, list_tables, describe_table, query_database, import_csv_table, execute_sql]
-        if any(k in low for k in ("presentation", "slides", "pptx", "powerpoint", "essay", "report", "resume", "create", "build")):
+        if _any(("presentation", "presentaion", "slides", "slids", "pptx", "powerpoint",
+                 "essay", "report", "reprot", "resume", "create", "creat", "craete",
+                 "build", "biuld", "convert", "convet", "conver", "convt", "convrt",
+                 "make", "generate", "genrate", "gernate", "export", "download",
+                 "downlod", "draft", "prepare", "prepair", "produce", "save",
+                 "letter", "memo", "handout", "thesis", "write up", "turn", "turn into",
+                 "into doc", "to doc", "as doc", "into pdf", "to pdf", "as pdf",
+                 "into word", "to word")):
             base += [create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output]
-        if any(k in low for k in ("code", "python", "workspace", "run_code", "script", "program", "function", "execute")):
+        if _any(("code", "python", "pyton", "pythno", "workspace", "run_code",
+                 "script", "scrpt", "program", "progam", "function", "funtion",
+                 "execute", "excecute")):
             base += [workspace_write, workspace_delete, run_code, run_python, list_mcp_tools, call_mcp_tool]
-        if any(k in low for k in ("gmail", "email", "mail", "calendar", "event")):
+        if _any(("gmail", "gmal", "email", "emial", "mail", "calendar", "calender",
+                 "event", "meeting", "invite")):
             base += [search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event]
         # dedupe
         seen = set()
@@ -666,6 +725,15 @@ def run_tool_loop(
             except Exception:
                 pass
         if not tool_calls:
+            if not text and llm_provider is not None:
+                # Empty model output with no tool calls: treat as a tier
+                # failure and retry the SAME round on the next live tier
+                # instead of returning a dead-end message. Exceptions already
+                # fail over this way; empty content (common on rate-limited
+                # free tiers) must too. Don't burn the round budget on it.
+                _note_tier_failure(tier_name, RuntimeError("empty model response"))
+                rounds_used = max(0, rounds_used - 1)
+                continue
             _note_final_tier(round_tier)
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")
         try:
