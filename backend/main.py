@@ -33,9 +33,12 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     if _mode == "private":
         _tokens = (get_secret("PLUTO_ACCESS_TOKENS", "") or "").strip()
         if not _tokens:
-            raise RuntimeError(
-                "PLUTO_AUTH_MODE=private but PLUTO_ACCESS_TOKENS is empty — "
-                "no one could log in. Set PLUTO_ACCESS_TOKENS."
+            # Accounts (username/password) can still admit users — don't
+            # fail fast here (would break private+accounts deploys).
+            # secrets.validate_secrets() already warns loudly.
+            logger.warning(
+                "PLUTO_AUTH_MODE=private without PLUTO_ACCESS_TOKENS — "
+                "token login disabled; accounts/sessions still work."
             )
     if _mode == "open":
         logger.warning(

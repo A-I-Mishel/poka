@@ -151,14 +151,17 @@ _QUERY_EMBED_MAX = 128
 def load_kb(user_id: Any) -> Dict[str, Any]:
     """Load a user's knowledge base; blank (never raise) when missing/corrupt.
 
-    Caches parsed KB by mtime for faster subsequent reads.
+    Caches parsed KB by mtime for faster subsequent reads. Returns a deep
+    copy so concurrent ingest/search never share a mutable reference.
     """
+    import copy as _copy
+
     path = _kb_path(user_id)
     try:
         mtime = path.stat().st_mtime
         cached = _KB_CACHE.get(str(user_id))
         if cached and cached[0] == mtime:
-            return cached[1]
+            return _copy.deepcopy(cached[1])
     except OSError:
         mtime = 0.0  # File doesn't exist yet
     try:
@@ -176,7 +179,7 @@ def load_kb(user_id: Any) -> Dict[str, Any]:
             except OSError:
                 mtime = 0.0
     _KB_CACHE[str(user_id)] = (mtime, kb)
-    return kb
+    return _copy.deepcopy(kb)
 
 
 def invalidate_kb_cache(user_id: Any) -> None:
@@ -764,6 +767,24 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
             docs = kb.get("docs")
             if not isinstance(docs, dict):
                 kb["docs"] = docs = {}
+            # Re-validate caps under the same lock (embed took seconds;
+            # concurrent ingests could have filled the vault meanwhile).
+            cur_model = kb_embeddings.default_model()
+            if kb.get("model") and kb.get("model") != cur_model:
+                obs_event("kb.ingest_error", reason="embed-model-changed")
+                return {"ingested": False, "chunks": 0, "reason": "embed-model-changed"}
+            if uid not in docs and len(docs) >= KB_MAX_DOCS_PER_USER:
+                obs_event("kb.ingest_error", reason="kb-full")
+                return {"ingested": False, "chunks": 0, "reason": "kb-full"}
+            total_now = sum(
+                len(d.get("chunks") or [])
+                for d in docs.values() if isinstance(d, dict)
+            )
+            old_now = docs.get(uid)
+            old_n = len(old_now.get("chunks") or []) if isinstance(old_now, dict) else 0
+            if total_now - old_n + len(chunks) > KB_MAX_TOTAL_CHUNKS_PER_USER:
+                obs_event("kb.ingest_error", reason="kb-full")
+                return {"ingested": False, "chunks": 0, "reason": "kb-full"}
             docs[uid] = {
                 "name": str(display_name or "file"),
                 "model": kb_embeddings.default_model(),
@@ -1003,13 +1024,16 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
 def drop_document(user_id: Any, upload_id: Any) -> bool:
     """Forget one document's vectors. True when anything was removed."""
     try:
-        kb = load_kb(user_id)
-        docs = kb.get("docs")
-        if not isinstance(docs, dict) or str(upload_id or "") not in docs:
-            return False
-        del docs[str(upload_id)]
-        _save_kb(user_id, kb)
-        invalidate_kb_cache(user_id)
+        from services.storage import path_lock
+
+        with path_lock(_kb_path(user_id)):
+            kb = load_kb(user_id)
+            docs = kb.get("docs")
+            if not isinstance(docs, dict) or str(upload_id or "") not in docs:
+                return False
+            del docs[str(upload_id)]
+            _save_kb(user_id, kb)
+            invalidate_kb_cache(user_id)
         # Remove from FAISS index
         try:
             from services.kb_index import get_index

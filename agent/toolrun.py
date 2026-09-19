@@ -40,6 +40,7 @@ from tools import web_search, create_pptx, build_presentation, create_docx, buil
 from tools.search_tool import extract_cited_sources
 
 from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled
+from agent.executor import ExecutorBusyError
 from agent.cascade import (
     _record_tier_failure,
     _record_tier_success,
@@ -321,15 +322,19 @@ def _execute_tool_calls_parallel(
                 idx = future_to_idx[future]
                 try:
                     results[idx] = future.result()
+                except (BudgetExhausted, TurnCancelled, ExecutorBusyError):
+                    raise
                 except Exception as e:
-                    results[idx] = f"STATUS=FAILED tool=parallel: {e}"
+                    results[idx] = f"STATUS=FAILED tool=parallel: {str(e)[:200]}"
 
     # Execute mutating tools serially (preserve order)
     for idx, tc in mutating:
         try:
             results[idx] = _execute_tool_call(tc, budget)
+        except (BudgetExhausted, TurnCancelled, ExecutorBusyError):
+            raise
         except Exception as e:
-            results[idx] = f"STATUS=FAILED tool=serial: {e}"
+            results[idx] = f"STATUS=FAILED tool=serial: {str(e)[:200]}"
 
     return results
 

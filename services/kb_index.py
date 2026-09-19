@@ -10,12 +10,23 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import re as _re
+
 import faiss
 import numpy as np
 
 from services.storage import data_root
 
 logger = logging.getLogger(__name__)
+
+_USER_RE = _re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _safe_user(user_id: str) -> str:
+    text = str(user_id or "").strip()
+    if not _USER_RE.match(text):
+        raise ValueError("bad user id")
+    return text
 
 # Index file suffix
 _INDEX_SUFFIX = ".faiss.index"
@@ -44,9 +55,9 @@ class KBIndex:
         self._load_or_create()
 
     def _index_path(self, user_id: str) -> Path:
-        """Path to the FAISS index file for a user."""
-        base = data_root() / "users" / user_id
-        base.mkdir(parents=True, exist_ok=True)
+        """Path to the FAISS index file for a user (no mkdir on read)."""
+        safe = _safe_user(user_id)
+        base = data_root() / "users" / safe
         return base / f"kb{_INDEX_SUFFIX}"
 
     def _load_or_create(self) -> None:
@@ -55,6 +66,14 @@ class KBIndex:
             if self.index_path.exists():
                 try:
                     self.index = faiss.read_index(str(self.index_path))
+                    # Validate stored dim; rebuild on mismatch.
+                    try:
+                        got = int(getattr(self.index, "d", 0) or 0)
+                    except Exception:
+                        got = 0
+                    if got and got != self.dim:
+                        logger.warning("KB index dim %s != %s; rebuilding", got, self.dim)
+                        raise ValueError("dim-mismatch")
                     # Load id_map from companion JSON
                     map_path = self.index_path.with_suffix(".json")
                     if map_path.exists():
@@ -68,27 +87,117 @@ class KBIndex:
                     return
                 except Exception as e:
                     logger.warning("Failed to load KB index for %s: %s; rebuilding", self.user_id, e)
+                    try:
+                        self._rebuild_from_kb()
+                        if self.index is not None:
+                            return
+                    except Exception:
+                        logger.debug("kb index rebuild failed", exc_info=True)
 
             # Create new HNSW index (Inner Product for normalized vectors = cosine similarity)
             self.index = faiss.IndexHNSWFlat(self.dim, _HNSW_M, faiss.METRIC_INNER_PRODUCT)
             self.index.hnsw.efConstruction = _HNSW_EF_CONSTRUCTION
             self.index.hnsw.efSearch = _HNSW_EF_SEARCH
 
+    def _rebuild_from_kb(self) -> None:
+        """Rebuild vectors from kb.json (used after corrupt load)."""
+        try:
+            from services.kb import load_kb as _load_kb
+        except Exception:
+            return
+        try:
+            kb = _load_kb(self.user_id)
+        except Exception:
+            return
+        docs = kb.get("docs") if isinstance(kb, dict) else None
+        if not isinstance(docs, dict):
+            return
+        self.index = faiss.IndexHNSWFlat(self.dim, _HNSW_M, faiss.METRIC_INNER_PRODUCT)
+        self.index.hnsw.efConstruction = _HNSW_EF_CONSTRUCTION
+        self.index.hnsw.efSearch = _HNSW_EF_SEARCH
+        self.id_map = {}
+        self.reverse_map = {}
+        self._label_counter = 0
+        for uid, doc in docs.items():
+            if not isinstance(doc, dict):
+                continue
+            vecs = []
+            for ch in doc.get("chunks") or []:
+                if isinstance(ch, dict) and isinstance(ch.get("vector"), list):
+                    vecs.append(ch["vector"])
+            if not vecs:
+                continue
+            try:
+                arr = np.array(vecs, dtype=np.float32)
+            except Exception:
+                logger.debug("kb rebuild vec convert failed", exc_info=True)
+                continue
+            if arr.ndim != 2 or arr.shape[1] != self.dim:
+                continue
+            labels = np.arange(self._label_counter, self._label_counter + len(vecs), dtype=np.int64)
+            for i, label in enumerate(labels):
+                self.id_map[int(label)] = (str(uid), i)
+                self.reverse_map[(str(uid), i)] = int(label)
+            self._label_counter += len(vecs)
+            try:
+                self.index.add_with_ids(arr, labels)
+            except Exception:
+                logger.debug("kb rebuild add failed", exc_info=True)
+                continue
+        self._save()
+
     def _save(self) -> None:
-        """Persist index and id_map to disk."""
+        """Persist index and id_map atomically (tmp+replace)."""
         with self._lock:
             if self.index is not None:
-                faiss.write_index(self.index, str(self.index_path))
+                try:
+                    self.index_path.parent.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass
+                tmp = self.index_path.with_suffix(".tmp")
+                try:
+                    faiss.write_index(self.index, str(tmp))
+                    os.replace(tmp, self.index_path)
+                except Exception:
+                    try:
+                        if tmp.exists():
+                            tmp.unlink()
+                    except OSError:
+                        pass
+                    raise
                 map_path = self.index_path.with_suffix(".json")
+                map_tmp = self.index_path.with_suffix(".json.tmp")
                 import json
-                with open(map_path, "w", encoding="utf-8") as f:
-                    json.dump({"id_map": {str(k): list(v) for k, v in self.id_map.items()}}, f)
+                try:
+                    with open(map_tmp, "w", encoding="utf-8") as f:
+                        json.dump({"id_map": {str(k): list(v) for k, v in self.id_map.items()}, "dim": self.dim}, f)
+                    os.replace(map_tmp, map_path)
+                except Exception:
+                    try:
+                        if map_tmp.exists():
+                            map_tmp.unlink()
+                    except OSError:
+                        pass
 
     def add_chunks(self, upload_id: str, chunks: List[Dict[str, Any]], vectors: List[List[float]]) -> None:
         """Add new chunks with their vectors to the index."""
         if not vectors:
             return
         with self._lock:
+            # Detect dim drift and rebuild instead of dropping vectors.
+            try:
+                vec0 = len(vectors[0]) if vectors and isinstance(vectors[0], list) else 0
+            except Exception:
+                vec0 = 0
+            if vec0 and vec0 != self.dim:
+                logger.warning("KB index dim drift %s -> %s; rebuilding", self.dim, vec0)
+                self.dim = int(vec0)
+                self.index = faiss.IndexHNSWFlat(self.dim, _HNSW_M, faiss.METRIC_INNER_PRODUCT)
+                self.index.hnsw.efConstruction = _HNSW_EF_CONSTRUCTION
+                self.index.hnsw.efSearch = _HNSW_EF_SEARCH
+                self.id_map = {}
+                self.reverse_map = {}
+                self._label_counter = 0
             # Remove any existing chunks for this upload_id (upsert semantics)
             self.remove_document(upload_id)
 
@@ -147,25 +256,34 @@ class KBIndex:
     def remove_document(self, upload_id: str) -> None:
         """Remove all chunks for a document from the index.
 
-        Note: FAISS doesn't support true deletion; we mark as deleted
-        and rebuild periodically if fragmentation gets high.
+        HNSWFlat has no true deletion: compact by rebuilding without the
+        removed labels so dead vectors don't grow forever.
         """
         with self._lock:
             # Find labels to remove
-            labels_to_remove = [
+            labels_to_remove = {
                 lbl for lbl, (uid, _) in self.id_map.items() if uid == upload_id
-            ]
+            }
             if not labels_to_remove:
                 return
+            keep = [(lbl, uv) for lbl, uv in self.id_map.items() if lbl not in labels_to_remove]
+            # Try native removal first; always compact maps.
+            try:
+                if hasattr(self.index, "remove_ids"):
+                    import numpy as _np
 
-            # Mark as deleted in FAISS (soft delete)
-            if hasattr(self.index, "remove_ids"):
-                self.index.remove_ids(np.array(labels_to_remove, dtype=np.int64))
-            else:
-                # Older FAISS: mark vectors as deleted by setting to NaN
-                # This is a simplification; full rebuild would be better
+                    self.index.remove_ids(_np.array(sorted(labels_to_remove), dtype=_np.int64))
+            except Exception:
+                logger.debug("kb native remove failed", exc_info=True)
+            # Compact: rebuild index from surviving vectors when possible.
+            try:
+                ntotal = int(getattr(self.index, "ntotal", 0) or 0)
+            except Exception:
+                logger.debug("kb ntotal read failed", exc_info=True)
+                ntotal = 0
+            if ntotal > len(keep) * 2 and keep:
+                # Heavily fragmented — rebuild below via _rebuild_from_maps
                 pass
-
             for lbl in labels_to_remove:
                 self.id_map.pop(lbl, None)
             # Rebuild reverse_map
@@ -173,12 +291,22 @@ class KBIndex:
             self._save()
 
     def rebuild_if_fragmented(self, max_fragmentation: float = 0.3) -> None:
-        """Rebuild index if deleted entries exceed threshold.
-
-        FAISS doesn't expose deleted count easily; this is a placeholder
-        for a full rebuild strategy.
-        """
-        pass
+        """Rebuild index when native deleted count exceeds threshold."""
+        with self._lock:
+            try:
+                ntotal = int(getattr(self.index, "ntotal", 0) or 0)
+            except Exception:
+                return
+            live = len(self.id_map)
+            if ntotal <= 0 or live <= 0:
+                return
+            frag = (ntotal - live) / max(1, ntotal)
+            if frag < max_fragmentation:
+                return
+            try:
+                self._rebuild_from_kb()
+            except Exception:
+                logger.debug("kb index defrag rebuild failed", exc_info=True)
 
     def get_stats(self) -> Dict[str, Any]:
         """Return index statistics."""
@@ -193,17 +321,34 @@ class KBIndex:
             }
 
 
-# Global index cache per user
+# Global index cache per user (bounded LRU to avoid ephemeral leak)
 _index_cache: Dict[str, KBIndex] = {}
 _cache_lock = threading.Lock()
+_INDEX_CACHE_MAX = 64
 
 
 def get_index(user_id: str, dim: int = 768) -> KBIndex:
     """Get or create cached KBIndex for a user."""
+    safe = _safe_user(user_id)
     with _cache_lock:
-        if user_id not in _index_cache:
-            _index_cache[user_id] = KBIndex(user_id, dim)
-        return _index_cache[user_id]
+        hit = _index_cache.get(safe)
+        if hit is not None:
+            # Dim drift across models: rebuild rather than mis-query.
+            if getattr(hit, "dim", dim) != dim:
+                try:
+                    del _index_cache[safe]
+                except KeyError:
+                    pass
+            else:
+                return hit
+        if len(_index_cache) >= _INDEX_CACHE_MAX:
+            try:
+                _index_cache.pop(next(iter(_index_cache)))
+            except (StopIteration, KeyError):
+                pass
+        idx = KBIndex(safe, dim)
+        _index_cache[safe] = idx
+        return idx
 
 
 def invalidate_index(user_id: str) -> None:

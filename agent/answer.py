@@ -24,13 +24,16 @@ logger = logging.getLogger(__name__)
 
 MAX_HISTORY_MESSAGES: int = 6
 
-# Shaped-history cache: (user id, history hash) -> messages. Long chats
-# re-summarized every turn otherwise (one wasted LLM call per turn).
-# Keyed by full content hash, not just message count: edits and
-# regenerates can keep the count while changing the text. Bounded FIFO
-# so ephemeral open-mode identities cannot grow it without limit.
+# Shaped-history cache: (user id, history hash) -> (messages, timestamp).
+# Long chats re-summarized every turn otherwise (one wasted LLM call per
+# turn). Keyed by full content hash, not just message count: edits and
+# regenerates can keep the count while changing the text. Bounded to 64
+# entries with 10min TTL; skipped when user_id is None (no cross-user
+# retention). Thread-guarded.
 _SUMMARY_CACHE: Dict[str, tuple] = {}
-_SUMMARY_CACHE_MAX: int = 128
+_SUMMARY_CACHE_MAX: int = 64
+_SUMMARY_CACHE_TTL: float = 600.0
+_SUMMARY_CACHE_LOCK = __import__("threading").Lock()
 
 
 def _history_key(user_id: Any, messages: List[Dict[str, Any]]) -> str:
@@ -49,7 +52,11 @@ def _history_key(user_id: Any, messages: List[Dict[str, Any]]) -> str:
 
 def _clear_summary_cache() -> None:
     """Drop cached shaped histories (tests/ops)."""
-    _SUMMARY_CACHE.clear()
+    try:
+        with _SUMMARY_CACHE_LOCK:
+            _SUMMARY_CACHE.clear()
+    except Exception:
+        _SUMMARY_CACHE.clear()
 
 
 class AgentResult(TypedDict):
@@ -117,7 +124,8 @@ def _verify_citations(output: str, sources: Sequence[Dict[str, str]],
                 _llm, [HumanMessage(content=prompt)],
                 budget=budget).content).strip(),
             None, cheap_tiers)
-        if "UNGROUNDED" in str(verdict or "").upper():
+        text = str(verdict or "").strip().upper()
+        if text == "UNGROUNDED" or text.endswith(" UNGROUNDED"):
             return (output.rstrip() + "\n\n[Note: this answer links pages "
                     "beyond what was retrieved this turn — open them critically.]")
         return output

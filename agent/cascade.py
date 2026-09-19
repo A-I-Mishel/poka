@@ -237,21 +237,34 @@ def _cooldown_for_kind(kind: str, error: Any = None) -> float:
     return TIER_COOLDOWN_TRANSIENT_SECONDS
 
 
+def _redact_detail(detail: str) -> str:
+    """Strip key/token fragments from provider text (never logs secrets)."""
+    try:
+        text = str(detail or "")
+        # sk-..., Bearer xxx, key=xxx, token xxx, account ids
+        text = re.sub(r"\bsk-[A-Za-z0-9-_]{4,}\b", "sk-***", text)
+        text = re.sub(r"(?i)\b(bearer|api[_-]?key|token|secret|password)\b\s*[:=]\s*\S+", r"\1=***", text)
+        text = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "***@***", text)
+        return text[:200]
+    except Exception:
+        return ""
+
+
 def _record_tier_failure(name: str, kind: str = "unknown", error: Any = None) -> None:
     """Count a failure; cool the tier down for its kind's window.
 
     Timeouts are congestion, not outage: the first consecutive timeout
     is a free pass (the tier stays live), the Nth consecutive one cools
     briefly. Any success or non-timeout failure resets the streak.
-    The latest failure (kind + truncated detail) is always remembered
+    The latest failure (kind + redacted detail) is always remembered
     in _TIER_LAST_ERROR — even timeout free passes — so fallbacks can
     be explained for any tier.
     """
     with _STATE_LOCK:
         try:
             if isinstance(name, str) and name:
-                detail = str(error)[:200] if error is not None else kind
-                _TIER_LAST_ERROR[name] = (kind, detail, time.time())
+                raw = str(error)[:500] if error is not None else kind
+                _TIER_LAST_ERROR[name] = (kind, _redact_detail(raw), time.time())
         except Exception:
             logger.debug("tier last-error record failed", exc_info=True)
         if kind == "timeout":
@@ -269,17 +282,16 @@ def _record_tier_failure(name: str, kind: str = "unknown", error: Any = None) ->
 
 def _friendly_cascade_error(last_error: Any) -> str:
     """Translate raw provider errors into a human-readable message."""
-    raw: str = str(last_error)
+    raw: str = _redact_detail(str(last_error))
     lowered: str = raw.lower()
     if re.search(r"\b429\b", raw) is not None or "quota" in lowered or "rate limit" in lowered or "freeusagelimit" in lowered \
             or "usage limit" in lowered or "usagelimit" in lowered:
         return (
             "All model tiers are unavailable right now: the free services are "
             "rate-limited (daily quotas reset tomorrow) or temporarily down. "
-            "Please wait a while and try again. "
-            f"Technical detail: {raw[:200]}"
+            "Please wait a while and try again."
         )
-    return f"All LLM tiers failed at runtime. Last error: {raw[:300]}"
+    return "All LLM tiers failed at runtime. Please try again in a moment."
 
 
 def _ordered_tiers(
@@ -389,7 +401,7 @@ def tier_status_snapshot(
             entry["timeout_streak"] = timeouts
             if last is not None:
                 entry["last_error_kind"] = str(last[0])
-                entry["last_error"] = str(last[1])[:200]
+                entry["last_error"] = _redact_detail(str(last[1]))[:200]
         except Exception:
             logger.debug("tier snapshot entry failed", exc_info=True)
         snapshot.append(entry)
@@ -408,10 +420,12 @@ def reset_tier_state(name: Optional[str] = None) -> int:
             targets = [name] if name else (
                 list(_TIER_SKIP_UNTIL) + list(_TIER_FAILS)
                 + list(_TIER_TIMEOUTS) + list(_TIER_LAST_ERROR)
+                + list(_TIER_LAT_EMA)
             )
             for tier_name in dict.fromkeys(t for t in targets if t):
                 for store in (_TIER_SKIP_UNTIL, _TIER_FAILS,
-                              _TIER_TIMEOUTS, _TIER_LAST_ERROR):
+                              _TIER_TIMEOUTS, _TIER_LAST_ERROR,
+                              _TIER_LAT_EMA):
                     if store.pop(tier_name, None) is not None:
                         cleared += 1
     except Exception:
@@ -454,9 +468,12 @@ def _run_cascade_step(
         last_kind, last_detail = last_tier_error(ordered[0][0]) or ("rate_limit", "")
         raise RuntimeError(_friendly_cascade_error(f"{last_kind}: {last_detail}"))
     last_error: Exception | None = None
+    first_attempt: Optional[str] = None
     for name, getter in _usable_tiers(first, tiers, prefer_fast):
         if attempts is not None:
             attempts.append(name)
+        if first_attempt is None:
+            first_attempt = name
         try:
             llm_instance = getter()
         except BudgetExhausted:
@@ -466,12 +483,25 @@ def _run_cascade_step(
             if _is_shed_load(e):
                 raise
             _record_tier_failure(name, classify_provider_error(e)[0], e)
+            try:
+                from services.obs import record_tier_fallback as _fb
+
+                _fb(first_attempt or name, name, classify_provider_error(e)[0])
+            except Exception:
+                logger.debug("tier fallback metric failed", exc_info=True)
             continue
         if llm_instance is None:
             continue
         try:
             result = fn(name, llm_instance)
             _record_tier_success(name)
+            if first_attempt is not None and name != first_attempt:
+                try:
+                    from services.obs import record_tier_fallback as _fb2
+
+                    _fb2(first_attempt, name, "fallback")
+                except Exception:
+                    logger.debug("tier fallback metric failed", exc_info=True)
             return name, result
         except BudgetExhausted:
             raise
@@ -484,5 +514,11 @@ def _run_cascade_step(
             if _is_shed_load(e):
                 raise
             _record_tier_failure(name, classify_provider_error(e)[0], e)
+            try:
+                from services.obs import record_tier_fallback as _fb3
+
+                _fb3(first_attempt or name, name, classify_provider_error(e)[0])
+            except Exception:
+                logger.debug("tier fallback metric failed", exc_info=True)
             continue
     raise RuntimeError(_friendly_cascade_error(last_error))

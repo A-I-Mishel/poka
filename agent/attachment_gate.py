@@ -116,14 +116,14 @@ def decide(
                 return {"use_images": use_i, "use_docs": use_d,
                         "clarify": None, "reason": "filename"}
 
-        # 2. Slide/page number selects presentation/document only.
+        # 2. Slide/page number selects presentation/document only (most recent).
         if _SLIDE_RE.search(t) and dcs:
             ppts = [e for e in dcs if _PPT_EXT_RE.search(str(e.get("name", "")))]
-            picked = ppts or list(dcs)
+            picked = (ppts or list(dcs))[-1:]
             return {"use_images": [], "use_docs": picked,
                     "clarify": None, "reason": "slide-number"}
         if _PAGE_RE.search(t) and dcs:
-            return {"use_images": [], "use_docs": list(dcs),
+            return {"use_images": [], "use_docs": list(dcs)[-1:],
                     "clarify": None, "reason": "page-number"}
 
         # 3. Explicit type phrases.
@@ -157,12 +157,12 @@ def decide(
             return {"use_images": [], "use_docs": [], "clarify": None,
                     "reason": "new-intent"}
 
-        # 5b. Short continuation reuses available files so "continue" /
+        # 5b. Short continuation reuses most-recent file so "continue" /
         # "next" after a long doc answer keeps teaching instead of
         # restarting blind. Length-guarded: long new questions that
         # happen to contain "next" stay default-deny.
         if len(t) <= 80 and (imgs or dcs) and _signals(t, CONTINUATION_SIGNALS):
-            return {"use_images": list(imgs), "use_docs": list(dcs),
+            return {"use_images": list(imgs)[-1:], "use_docs": list(dcs)[-1:],
                     "clarify": None, "reason": "continuation"}
 
         # 6. Ambiguous pronoun reference.
@@ -171,10 +171,10 @@ def decide(
         )
         if ambiguous:
             if imgs and not dcs:
-                return {"use_images": list(imgs), "use_docs": [],
+                return {"use_images": list(imgs)[-1:], "use_docs": [],
                         "clarify": None, "reason": "ambiguous-single-image"}
             if dcs and not imgs:
-                return {"use_images": [], "use_docs": list(dcs),
+                return {"use_images": [], "use_docs": list(dcs)[-1:],
                         "clarify": None, "reason": "ambiguous-single-doc"}
             if not imgs and not dcs:
                 return {"use_images": [], "use_docs": [], "clarify": None,

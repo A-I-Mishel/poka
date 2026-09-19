@@ -23,6 +23,16 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from config import CHEAP_TIERS, SYNTHESIS_TIERS, TASK_TEMPERATURES, get_tier_llm
 from services.context import get_current_user_id
+
+
+def _hash_user(user_id: Any) -> str:
+    """Short non-reversible hash for logs (stable user_id is PII)."""
+    try:
+        import hashlib as _hl
+
+        return _hl.sha1(str(user_id or "").encode("utf-8", errors="ignore"), usedforsecurity=False).hexdigest()[:8]
+    except Exception:
+        return "?"
 from services.limits import MAX_DEEP_LLM_CALLS, MAX_DEEP_TOOL_CALLS, MAX_DEEP_TOOL_ROUNDS
 from services.memory import (
     format_memory_for_prompt,
@@ -35,8 +45,6 @@ from services.obs import event as obs_event, trace_llm_call
 from agent.answer import (
     AgentResult as AgentResult,
     MAX_HISTORY_MESSAGES,
-    _SUMMARY_CACHE,
-    _SUMMARY_CACHE_MAX,
     _clear_summary_cache as _clear_summary_cache,
     _history_key,
     _reflect_with_fallback,
@@ -276,19 +284,45 @@ def answer_with_fallback(
     langchain_history: List[BaseMessage] = history
     try:
         if history_list and len(history_list) > MAX_HISTORY_MESSAGES:
-            cache_key = _history_key(user_id, history_list)
-            cached = _SUMMARY_CACHE.get(cache_key)
-            if cached is not None:
-                langchain_history = cached
-            else:
-                def _summarize(_name: str, llm: BaseLanguageModel) -> List[BaseMessage]:
-                    return summarize_history(history_list, llm, budget=budget, tier_name=_name)
+            if user_id:
+                from agent.answer import _SUMMARY_CACHE as _SC
+                from agent.answer import _SUMMARY_CACHE_LOCK as _SCL
+                from agent.answer import _SUMMARY_CACHE_MAX as _SCM
+                from agent.answer import _SUMMARY_CACHE_TTL as _SCT
 
-                with trace_llm_call(request_id, "summarize", "summarize") as _:
-                    _, langchain_history = _run_cascade_step(_summarize, first, cheap_table)
-                _SUMMARY_CACHE[cache_key] = langchain_history
-                while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
-                    _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
+                cache_key = _history_key(user_id, history_list)
+                cached = None
+                try:
+                    with _SCL:
+                        hit = _SC.get(cache_key)
+                        if hit is not None:
+                            msgs, ts = hit
+                            if time.time() - float(ts) <= _SCT:
+                                cached = msgs
+                            else:
+                                _SC.pop(cache_key, None)
+                except Exception:
+                    cached = None
+                if cached is not None:
+                    langchain_history = cached
+                else:
+                    def _summarize(_name: str, llm: BaseLanguageModel) -> List[BaseMessage]:
+                        return summarize_history(history_list, llm, budget=budget, tier_name=_name)
+
+                    with trace_llm_call(request_id, "summarize", "summarize") as _:
+                        _, langchain_history = _run_cascade_step(_summarize, first, cheap_table)
+                    try:
+                        with _SCL:
+                            if len(_SC) >= _SCM:
+                                try:
+                                    _SC.pop(next(iter(_SC)))
+                                except (StopIteration, KeyError):
+                                    pass
+                            _SC[cache_key] = (langchain_history, time.time())
+                    except Exception:
+                        logger.debug("summary cache store failed", exc_info=True)
+            else:
+                langchain_history = _messages_to_langchain(history_list)
         elif history_list:
             langchain_history = _messages_to_langchain(history_list)
     except RuntimeError:
@@ -311,14 +345,18 @@ def answer_with_fallback(
         # clients, even on a name collision.
         if _is_managed_table(tiers):
             try:
-                sized = get_tier_llm(tier_name, temperature=TASK_TEMPERATURES.get(task_type, 0.5))
+                from config import TEMPERATURE as _DEFAULT_TEMP2
+
+                sized = get_tier_llm(tier_name, temperature=TASK_TEMPERATURES.get(task_type, _DEFAULT_TEMP2))
             except Exception:
                 sized = None
             if sized is not None:
                 return sized
             return llm
         try:
-            llm.temperature = TASK_TEMPERATURES.get(task_type, 0.5)  # type: ignore[attr-defined]
+            from config import TEMPERATURE as _DEFAULT_TEMP
+
+            llm.temperature = TASK_TEMPERATURES.get(task_type, _DEFAULT_TEMP)  # type: ignore[attr-defined]
         except Exception:
             logger.debug("req=%s task temperature hint failed", request_id, exc_info=True)
         return llm
@@ -387,7 +425,7 @@ def answer_with_fallback(
             latency_ms = int((time.time() - started_at) * 1000)
             logger.info(
                 "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d fallbacks=%d latency_ms=%d",
-                request_id, user_id, task_type, active_tier,
+                request_id, _hash_user(user_id), task_type, active_tier,
                 budget.llm_calls, budget.tool_calls,
                 max(0, len(answer_attempts) - 1), latency_ms,
             )
@@ -605,7 +643,7 @@ def answer_with_fallback(
         logger.info(
             "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d search=%d "
             "reflect=%d plan=%d ext=%d timeouts=%d fallbacks=%d latency_ms=%d",
-            request_id, user_id, task_type, active_tier, budget.llm_calls,
+            request_id, _hash_user(user_id), task_type, active_tier, budget.llm_calls,
             budget.tool_calls, budget.search_calls, budget.reflect_calls,
             budget.plan_calls, budget.external_tokens, budget.timeouts,
             max(0, len(answer_attempts) - 1), latency_ms,

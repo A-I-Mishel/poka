@@ -212,20 +212,34 @@ def _first_token_timeout_for_tier(tier: Optional[str]) -> float:
 def _next_chunk_before(iterator: Iterator[Any], deadline: float) -> Any:
     """Return next(iterator), raising TimeoutError past the deadline.
 
-    The pull runs on a throwaway daemon thread (never the shared pool:
-    submitting pool work from inside a pool worker would deadlock). A
-    late provider orphans only that thread's blocked read — the same
-    exposure as any bounded call that outlives its deadline.
+    The pull runs on a bounded throwaway daemon thread (never the shared
+    pool: submitting pool work from inside a pool worker would deadlock).
+    Concurrency is capped by a semaphore so a burst of slow providers
+    can't spawn unbounded threads.
     """
     box: List[Any] = []
     errors: List[BaseException] = []
+    if not hasattr(_next_chunk_before, "_sema"):
+        import threading as _th
+
+        _next_chunk_before._sema = _th.Semaphore(32)  # type: ignore[attr-defined]
 
     def _pull() -> None:
         try:
             box.append(next(iterator))
         except BaseException as exc:  # captured, re-raised below
             errors.append(exc)
+        finally:
+            try:
+                _next_chunk_before._sema.release()  # type: ignore[attr-defined]
+            except Exception:
+                logger.debug("chunk semaphore release failed", exc_info=True)
 
+    acquired = _next_chunk_before._sema.acquire(timeout=deadline)  # type: ignore[attr-defined]
+    if not acquired:
+        raise TimeoutError(
+            f"Model request first token timed out after {deadline:g}s."
+        )
     worker = threading.Thread(target=_pull, daemon=True)
     worker.start()
     worker.join(deadline)
@@ -245,7 +259,12 @@ def _merge_stream_chunks(chunks: List[Any]) -> Any:
     """Fold streamed message chunks into one response (text + tool calls)."""
     merged = chunks[0]
     for chunk in chunks[1:]:
-        merged = merged + chunk
+        try:
+            merged = merged + chunk
+        except Exception:
+            # Keep already-streamed prefix instead of discarding it.
+            logger.debug("stream chunk merge failed; keeping prefix", exc_info=True)
+            continue
     return merged
 
 

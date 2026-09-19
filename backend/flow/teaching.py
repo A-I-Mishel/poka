@@ -123,6 +123,15 @@ def _apply_teaching_session(
         logger.debug("teaching file pick failed; keeping first candidate", exc_info=True)
     # Cursor: end slide of the active file's last taught window.
     _, last_end = _last_teaching_state(history)
+    # Explicit reteach ("teach X again", "restart") restarts at 1 —
+    # otherwise a past-end cursor yields an empty window (no wrap).
+    try:
+        if _explicit_file:
+            low2 = str(gate_text or "").lower()
+            if any(k in low2 for k in ("again", "restart", "from start", "from the start", "from scratch")):
+                last_end = 0
+    except Exception:
+        logger.debug("reteach cursor reset failed", exc_info=True)
     # If the last header was for a DIFFERENT file, restart at 1.
     try:
         last_name, _ = _last_teaching_state(history)

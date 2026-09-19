@@ -409,8 +409,11 @@ def login(username: Any, password: Any, agent: str = "") -> Tuple[str, Dict[str,
             imposed = _register_fail(record, now)
             try:
                 _save_registry(reg)
-            except Exception:
-                logger.debug("save registry after fail registration failed", exc_info=True)
+            except Exception as e:
+                # Persist failure: fail closed with 503, don't let attacker
+                # retry without ever triggering lockout.
+                obs_event("auth.login", status="error", reason="store-failed")
+                raise AccountUnavailable("Login temporarily unavailable. Try again.") from e
             if imposed > 0:
                 obs_event("auth.login", status="locked")
                 raise AccountLocked(
@@ -534,10 +537,8 @@ def logout_all(user_id: Any) -> int:
             reg = _load_registry()
             revoked = _revoke_user_sessions(reg, target)
             if revoked:
-                try:
-                    _save_registry(reg)
-                except Exception:
-                    return 0
+                # Propagate save failure (don't lie that sessions revoked).
+                _save_registry(reg)
             return revoked
     except AccountUnavailable:
         raise
@@ -565,6 +566,15 @@ def verify_session(token: Any) -> Optional[str]:
         return None
     if created <= 0 or (time.time() - created) > _SESSION_TTL_SECONDS:
         return None
+    # Opportunistic prune so pure-verify workloads don't grow forever.
+    try:
+        if _prune_expired_sessions(reg):
+            try:
+                _save_registry(reg)
+            except Exception:
+                logger.debug("verify prune save failed", exc_info=True)
+    except Exception:
+        logger.debug("verify prune failed", exc_info=True)
     user_id = entry.get("user_id")
     return str(user_id) if user_id else None
 

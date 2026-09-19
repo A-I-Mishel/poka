@@ -33,11 +33,13 @@ _UPLOAD_ID_RE = re.compile(r"[0-9a-f]{16}")
 # scrubbed normalization (lowercase, digits→<n>, tokens containing @
 # dropped, punctuation stripped, 80 chars). Raw user text never reaches
 # persistent logs; read the counters via get_fallthrough_stats() (the ops
-# endpoint will expose them). Bounded and lock-guarded; never raises.
-_FALLTHROUGH_MAX_KEYS: int = 500
+# endpoint will expose them). Bounded LRU (200 keys) + 1h TTL; never raises.
+_FALLTHROUGH_MAX_KEYS: int = 200
+_FALLTHROUGH_TTL: float = 3600.0
 _fallthrough_lock = threading.Lock()
 _fallthrough_total: int = 0
 _fallthrough_counts: Dict[str, int] = {}
+_fallthrough_when: Dict[str, float] = {}
 
 
 def _scrub_fallthrough(text: str) -> str:
@@ -70,14 +72,30 @@ def _record_fallthrough(text: str) -> None:
     """Count one unmatched input (and one total call). Never raises."""
     global _fallthrough_total
     try:
+        import time as _time
+
+        now = _time.time()
         with _fallthrough_lock:
             _fallthrough_total += 1
+            # Opportunistic TTL sweep.
+            if len(_fallthrough_when) > _FALLTHROUGH_MAX_KEYS * 2:
+                for k, ts in list(_fallthrough_when.items()):
+                    if now - ts > _FALLTHROUGH_TTL:
+                        _fallthrough_when.pop(k, None)
+                        _fallthrough_counts.pop(k, None)
             key = _scrub_fallthrough(text)
             if not key:
                 return
             if key not in _fallthrough_counts and len(_fallthrough_counts) >= _FALLTHROUGH_MAX_KEYS:
-                return
+                # Evict oldest.
+                try:
+                    oldest = min(_fallthrough_when, key=lambda k: _fallthrough_when.get(k, now))
+                    _fallthrough_when.pop(oldest, None)
+                    _fallthrough_counts.pop(oldest, None)
+                except ValueError:
+                    return
             _fallthrough_counts[key] = _fallthrough_counts.get(key, 0) + 1
+            _fallthrough_when[key] = now
     except Exception:
         logger.debug("fallthrough counter failed", exc_info=True)
 
@@ -102,6 +120,7 @@ def _reset_fallthrough_stats() -> None:
         with _fallthrough_lock:
             _fallthrough_total = 0
             _fallthrough_counts.clear()
+            _fallthrough_when.clear()
     except Exception:
         logger.debug("fallthrough reset failed", exc_info=True)
 
@@ -187,7 +206,7 @@ def rule_route(user_input: str) -> Optional[str]:
     except Exception:
         text = raw
     hits = set()
-    if _UPLOAD_ID_RE.search(raw) or _UPLOAD_ID_RE.search(text) or _signals(text, ["pdf", ".pdf", "read", "summar*", "document", "docx", ".docx", "doc", ".doc", "odt", ".odt", "rtf", ".rtf", "txt", ".txt", "md", ".md", "markdown", "pptx", ".pptx", "ppt", ".ppt", "odp", ".odp", "html", ".html", ".htm", "xml", ".xml", "zip", ".zip", "archive", "webpage", "web page", "text file", "what is it", "what does", "teach*", "learn*", "exam", "exams", "recall", "lecture*", "tutor*", "practic*", "quiz*"]):
+    if _signals(text, ["pdf", ".pdf", "read", "summar*", "document", "docx", ".docx", "doc", ".doc", "odt", ".odt", "rtf", ".rtf", "txt", ".txt", "md", ".md", "markdown", "pptx", ".pptx", "ppt", ".ppt", "odp", ".odp", "html", ".html", ".htm", "xml", ".xml", "zip", ".zip", "archive", "webpage", "web page", "text file", "what is it", "what does", "teach*", "learn*", "exam", "exams", "recall", "lecture*", "tutor*", "practic*", "quiz*"]):
         hits.add("research")
     if _signals(text, ["csv", ".csv", "tsv", ".tsv", "xlsx", ".xlsx", "xls", ".xls", "ods", ".ods", "json", ".json", "analyz*", "spreadsheet", "dataset", "chart", "plot", "data table"]):
         hits.add("data")
@@ -256,6 +275,7 @@ def rule_route_conf(user_input: str) -> tuple:
     hits score 0.9, multi-bucket 0.7, typo-corrected-only hits 0.6,
     fallthrough 0.0. Callers use <0.6 to ask "Did you mean...?"
     instead of silently defaulting to simple.
+    NOTE: calls rule_route (which records stats) once — no extra counting here.
     """
     try:
         task = rule_route(user_input)
@@ -306,7 +326,8 @@ def classify_task(
     response = agent._invoke_bounded(llm_instance, [HumanMessage(content=prompt)], budget=budget, tier_name=tier_name)
     category = _as_text(response.content).strip().lower()
     valid = ["simple", "research", "creative", "data", "multi_step"]
-    return category if category in valid else "simple"
+    # Fail open to multi_step (keeps tools) rather than simple (disables them).
+    return category if category in valid else "multi_step"
 
 
 _ATTACHMENT_INTENTS = ("vision", "document", "presentation", "web", "none")

@@ -21,7 +21,7 @@ from services.vision import (
     vision_trust_preamble,
 )
 
-from agent.budget import BudgetExhausted, RequestBudget
+from agent.budget import RequestBudget
 from agent.cascade import _all_skipped_permanent, _usable_tiers
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.executor import TokenStream
@@ -39,12 +39,9 @@ def vision_ocr_bytes(blob: bytes, budget: Optional[RequestBudget] = None) -> str
     makes at most one model call per invocation. Returns "" when no
     vision tier is configured or every attempt fails — never raises, so
     tools degrade to an honest STATUS=EMPTY instead of failing.
+    NOTE: budgeting is delegated to _invoke_bounded (don't pre-charge here
+    or callers double-pay).
     """
-    if budget is not None:
-        try:
-            budget.count_llm()
-        except BudgetExhausted:
-            return ""
     try:
         url, _err = encode_image_bytes(blob)
         if not url:
@@ -112,7 +109,7 @@ def _try_vision_answer(
             resolved = resolve_local_image(ref)
             if resolved is None:
                 continue
-            url, err = prepare_image_data_url(ref)
+            url, err = prepare_image_data_url(resolved)
             if url:
                 data_urls.append(url)
     if not data_urls:
@@ -135,7 +132,6 @@ def _try_vision_answer(
         if llm_instance is None:
             continue
         try:
-            budget.count_llm()
             if live is not None:
                 live.reset_for_new_call()
             response = agent._invoke_bounded(

@@ -81,13 +81,20 @@ class UserStore:
 
     def save_chats(self, chats: Any, current: Any) -> None:
         """Persist chats + open conversation. Raises StorageError on failure."""
-        stored: List[Dict[str, Any]] = []
-        if isinstance(chats, list):
-            for c in chats[:MAX_STORED_CHATS]:
-                record = _clean_chat_record(c)
-                if record is not None:
-                    stored.append(record)
-        _write_json(self.chats_path, {"chats": stored, "current": clean_messages(current)})
+        def _fn(data: Any) -> Any:
+            stored: List[Dict[str, Any]] = []
+            if isinstance(chats, list):
+                for c in chats[:MAX_STORED_CHATS]:
+                    record = _clean_chat_record(c)
+                    if record is not None:
+                        stored.append(record)
+            return {"chats": stored, "current": clean_messages(current)}
+
+        # Atomic read-modify-write so concurrent turns don't clobber.
+        with path_lock(self.chats_path):
+            data, _ = _read_json(self.chats_path)
+            result = _fn(data)
+            _write_json(self.chats_path, result)
         # Invalidate store caches for this user
         from backend.deps import invalidate_store_caches
         invalidate_store_caches(self.user_id)
@@ -132,7 +139,8 @@ class UserStore:
                 record = _clean_project_record(entry)
                 if record is not None:
                     stored.append(record)
-        _write_json(self.projects_path, {"version": PROJECTS_VERSION, "projects": stored})
+        with path_lock(self.projects_path):
+            _write_json(self.projects_path, {"version": PROJECTS_VERSION, "projects": stored})
 
     def _mutate_projects(self, fn: Any) -> Any:
         """Read-modify-write the registry under one lock hold."""
@@ -260,7 +268,8 @@ class UserStore:
                 record = _clean_brief_record(entry)
                 if record is not None:
                     stored.append(record)
-        _write_json(self._briefs_path(), {"version": 1, "briefs": stored})
+        with path_lock(self._briefs_path()):
+            _write_json(self._briefs_path(), {"version": 1, "briefs": stored})
 
     def _mutate_briefs(self, fn: Any) -> Any:
         """Read-modify-write the registry under one lock hold."""
@@ -403,7 +412,8 @@ class UserStore:
                 record = _clean_workflow_record(entry)
                 if record is not None:
                     stored.append(record)
-        _write_json(self._workflows_path(), {"version": 1, "workflows": stored})
+        with path_lock(self._workflows_path()):
+            _write_json(self._workflows_path(), {"version": 1, "workflows": stored})
 
     def _mutate_workflows(self, fn: Any) -> Any:
         """Read-modify-write the registry under one lock hold."""
@@ -656,11 +666,12 @@ class UserStore:
     # -- legacy migration ----------------------------------------
     def migrate_legacy(self) -> bool:
         """One-time import from pre-isolation global files. Returns True if moved."""
-        if self.chats_path.exists() or self.memory_path.exists() or self.structured_path.exists():
-            return False
         moved = False
+        has_chats = self.chats_path.exists()
+        has_mem = self.memory_path.exists()
+        has_struct = self.structured_path.exists()
         legacy_chats = Path("memory") / "chats.json"
-        if legacy_chats.exists():
+        if not has_chats and legacy_chats.exists():
             try:
                 data, _ = _read_json(legacy_chats)
             except StorageError:
@@ -672,14 +683,14 @@ class UserStore:
                 except StorageError:
                     pass
         legacy_notes = Path("memory") / "memory.md"
-        if legacy_notes.exists():
+        if not has_mem and legacy_notes.exists():
             try:
                 self.save_notes(legacy_notes.read_text(encoding="utf-8"))
                 moved = True
             except OSError:
                 pass
         legacy_structured = Path("structured_memory.json")
-        if legacy_structured.exists():
+        if not has_struct and legacy_structured.exists():
             try:
                 data, _ = _read_json(legacy_structured)
             except StorageError:

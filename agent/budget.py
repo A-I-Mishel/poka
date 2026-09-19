@@ -49,7 +49,7 @@ class RequestBudget:
     max_reflect: int = MAX_REFLECTION_CALLS
     max_plan: int = MAX_PLANNING_CALLS
     max_rounds: int = MAX_TOOL_ROUNDS
-    deadline: float = field(default_factory=lambda: time.time() + MAX_TOTAL_REQUEST_TIME)
+    deadline: float = field(default_factory=lambda: time.monotonic() + MAX_TOTAL_REQUEST_TIME)
     llm_calls: int = 0
     tool_calls: int = 0
     search_calls: int = 0
@@ -62,7 +62,12 @@ class RequestBudget:
 
     def check_time(self) -> None:
         """Raise BudgetExhausted when the request ran too long."""
-        if time.time() > self.deadline:
+        # Backwards compat: tests/tools may pass a wall-clock deadline
+        # (time.time()-based, >1e9). Detect clock domain by magnitude.
+        if self.deadline > 1e9:
+            if time.time() > self.deadline:
+                raise BudgetExhausted("Request time budget exhausted.")
+        elif time.monotonic() > self.deadline:
             raise BudgetExhausted("Request time budget exhausted.")
 
     def count_llm(self) -> None:
@@ -92,19 +97,22 @@ class RequestBudget:
         request-wide bound still holds. Callers treat exhaustion like
         loop end (synthesize from results), never as a hard error.
         """
-        self.check_time()
-        self.rounds += 1
-        if self.rounds > self.max_rounds:
-            raise BudgetExhausted(f"Tool round budget exhausted ({self.max_rounds}).")
+        with self._lock:
+            self.check_time()
+            self.rounds += 1
+            if self.rounds > self.max_rounds:
+                raise BudgetExhausted(f"Tool round budget exhausted ({self.max_rounds}).")
 
     def count_reflect(self) -> None:
         """Charge one reflection call."""
-        self.reflect_calls += 1
-        if self.reflect_calls > self.max_reflect:
-            raise BudgetExhausted(f"Reflection budget exhausted ({self.max_reflect}).")
+        with self._lock:
+            self.reflect_calls += 1
+            if self.reflect_calls > self.max_reflect:
+                raise BudgetExhausted(f"Reflection budget exhausted ({self.max_reflect}).")
 
     def count_plan(self) -> None:
         """Charge one planning call."""
-        self.plan_calls += 1
-        if self.plan_calls > self.max_plan:
-            raise BudgetExhausted(f"Planning budget exhausted ({self.max_plan}).")
+        with self._lock:
+            self.plan_calls += 1
+            if self.plan_calls > self.max_plan:
+                raise BudgetExhausted(f"Planning budget exhausted ({self.max_plan}).")

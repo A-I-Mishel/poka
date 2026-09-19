@@ -72,7 +72,13 @@ def trace_llm_call(request_id: str, tier: str, task_type: str, prompt_tokens: in
     except Exception as e:
         error = e
         try:
-            LLM_PROVIDER_ERRORS.labels(tier=tier, error_kind=type(e).__name__).inc()
+            from agent.cascade import classify_provider_error as _classify
+
+            kind = _classify(e)[0]
+        except Exception:
+            kind = type(e).__name__
+        try:
+            LLM_PROVIDER_ERRORS.labels(tier=tier, error_kind=kind).inc()
         except Exception:
             logger.debug("provider error metric failed", exc_info=True)
         raise

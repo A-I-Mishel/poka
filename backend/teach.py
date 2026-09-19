@@ -77,7 +77,7 @@ _TEACHING_ADMIN_SIGNALS = (
 )
 
 
-_TEACHING_COURSE_CODE_RE = re.compile(r"\b\d{3,4}\s*[-–]\s*\d{3,4}\b")
+_TEACHING_COURSE_CODE_RE = re.compile(r"\b[A-Za-z]{2,6}\s*\d{3,4}\b")
 
 
 _TEACHING_CONCEPT_SIGNALS = (
@@ -241,7 +241,7 @@ def _last_teaching_state(history: List[Dict[str, Any]]) -> Tuple[Optional[str], 
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
             content = str(msg.get("content", "") or "")
-            if "📘 FILE:" not in content:
+            if "📘 file:" not in content.lower():
                 continue
             parsed = _match_teaching_header(content)
             if not parsed:
@@ -261,7 +261,7 @@ def _last_teaching_ends_with_recall(history: List[Dict[str, Any]]) -> bool:
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
             content = str(msg.get("content", "") or "")
-            if "📘 FILE:" not in content:
+            if "📘 file:" not in content.lower():
                 return False
             low = content.lower()
             return "recall:" in low or "**recall**" in low
@@ -430,7 +430,14 @@ def _extract_teaching_blocks(ctx: UserContext, attach: Dict[str, str]) -> Tuple[
         if kind == "pdf" or ext == "pdf":
             blocks = _extract_pdf_blocks(path)
             if blocks:
-                return blocks, len(blocks), "OK"
+                # Report true page count (not capped blocks) for scope fence.
+                try:
+                    from pypdf import PdfReader as _PR
+
+                    total_pages = len((_PR(str(path)).pages or []))
+                except Exception:
+                    total_pages = len(blocks)
+                return blocks, max(len(blocks), int(total_pages or 0)), "OK"
             return [], 0, (
                 "STATUS=EMPTY teaching: no extractable text in this PDF "
                 "(may be scanned images). Re-upload with OCR or as .pptx."
@@ -476,29 +483,47 @@ def _extract_pptx_blocks(path: Any, ext: str) -> List[Tuple[int, str]]:
         blocks: List[Tuple[int, str]] = []
         for i, slide in enumerate(getattr(prs, "slides", []) or [], start=1):
             lines: List[str] = []
+
+            def _walk_shapes(shapes: Any, out: List[str]) -> None:
+                try:
+                    items = list(shapes or [])
+                except Exception:
+                    return
+                for shape in items:
+                    try:
+                        # Grouped shapes/charts: recurse.
+                        try:
+                            sub = getattr(shape, "shapes", None)
+                        except Exception:
+                            sub = None
+                        if sub:
+                            _walk_shapes(sub, out)
+                    except Exception:
+                        logger.debug("teach grouped-shape walk failed", exc_info=True)
+                    try:
+                        if getattr(shape, "has_text_frame", False) and getattr(shape, "text", ""):
+                            t = str(shape.text or "").strip()
+                            if t:
+                                out.append(t)
+                        if getattr(shape, "has_table", False):
+                            try:
+                                for row in shape.table.rows:
+                                    cells = [(getattr(c, "text", "") or "").strip() for c in row.cells]
+                                    line = " | ".join(c for c in cells if c)
+                                    if line:
+                                        out.append(line)
+                            except Exception:
+                                logger.debug("teach table rows failed; skipping table", exc_info=True)
+                                continue
+                    except Exception:
+                        logger.debug("teach shape extract failed; skipping shape", exc_info=True)
+                        continue
+
             try:
                 shapes = getattr(slide, "shapes", []) or []
             except Exception:
                 shapes = []
-            for shape in shapes:
-                try:
-                    if getattr(shape, "has_text_frame", False) and getattr(shape, "text", ""):
-                        t = str(shape.text or "").strip()
-                        if t:
-                            lines.append(t)
-                    if getattr(shape, "has_table", False):
-                        try:
-                            for row in shape.table.rows:
-                                cells = [(getattr(c, "text", "") or "").strip() for c in row.cells]
-                                line = " | ".join(c for c in cells if c)
-                                if line:
-                                    lines.append(line)
-                        except Exception:
-                            logger.debug("teach table rows failed; skipping table", exc_info=True)
-                            continue
-                except Exception:
-                    logger.debug("teach shape extract failed; skipping shape", exc_info=True)
-                    continue
+            _walk_shapes(shapes, lines)
             text = "\n".join(lines).strip()
             if text:
                 blocks.append((i, text))
@@ -570,7 +595,9 @@ def _select_teaching_window(
     try:
         ordered = sorted(blocks, key=lambda b: b[0])
         # Cursor is a slide/page number; next window starts after it.
-        upcoming = [b for b in ordered if b[0] > start_after] or ordered
+        # Never wrap to start when cursor is past the end — that caused
+        # infinite re-teach. Return empty so the caller can finish.
+        upcoming = [b for b in ordered if b[0] > start_after]
         # If cursor is 0 (fresh), start from the first block.
         if start_after <= 0:
             upcoming = ordered

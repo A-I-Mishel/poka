@@ -127,7 +127,19 @@ def run_workflow(
                 own_budget.check_time()
             except BudgetExhausted as e:
                 return _result("partial", done, used, str(e)[:200], input_truncated)
-            tool_name = step["tool"]
+            if not isinstance(step, dict):
+                done.append({"index": pos, "tool": "?", "ok": False,
+                             "output": "STATUS=INVALID workflow: step is not an object."})
+                return _result("failed", done, used,
+                               f"Step {pos + 1}: step is not an object.",
+                               input_truncated)
+            tool_name = str(step.get("tool", "") or "")
+            if not tool_name:
+                done.append({"index": pos, "tool": "?", "ok": False,
+                             "output": "STATUS=INVALID workflow: missing tool."})
+                return _result("failed", done, used,
+                               f"Step {pos + 1}: missing tool.",
+                               input_truncated)
             rendered, render_error = workflows_svc.render_args(
                 step.get("args", {}) if isinstance(step.get("args", {}), dict) else {},
                 text_input,
@@ -163,6 +175,21 @@ def run_workflow(
                     "pipeline stopped.",
                     input_truncated,
                 )
+        # Charge the caller's budget for what we spent (share, don't reset).
+        if budget is not None and own_budget is not budget:
+            try:
+                for _ in range(max(0, own_budget.tool_calls)):
+                    try:
+                        budget.count_tool()
+                    except BudgetExhausted:
+                        break
+                for _ in range(max(0, own_budget.llm_calls)):
+                    try:
+                        budget.count_llm()
+                    except BudgetExhausted:
+                        break
+            except Exception:
+                logger.debug("workflow budget charge-back failed", exc_info=True)
         return _result("ok", done, used, "", input_truncated)
     except Exception as e:
         logger.warning("workflow run failed: %s", e)
