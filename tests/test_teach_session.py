@@ -418,9 +418,10 @@ def test_rush_modifier_injected(tmp_path, monkeypatch):
 
 def test_format_logging_metadata_only(tmp_path, monkeypatch):
     import backend.chatflow as cf
+    import backend.teach as teach_mod
 
     seen = {}
-    monkeypatch.setattr(cf, "obs_event", lambda name, **kw: seen.update({"name": name, **kw}))
+    monkeypatch.setattr(teach_mod, "obs_event", lambda name, **kw: seen.update({"name": name, **kw}))
     cf._log_teaching_format(
         "hi [Teaching mode: x]",
         "📘 FILE: L\nSlides: 1-2\n## Concept: G\n**Source**\n[slide 1]\n**Recall**\nQ?",
@@ -438,9 +439,10 @@ def test_format_logging_metadata_only(tmp_path, monkeypatch):
 
 def test_texture_logging_fields(tmp_path, monkeypatch):
     import backend.chatflow as cf
+    import backend.teach as teach_mod
 
     seen = {}
-    monkeypatch.setattr(cf, "obs_event", lambda name, **kw: seen.update({"name": name, **kw}))
+    monkeypatch.setattr(teach_mod, "obs_event", lambda name, **kw: seen.update({"name": name, **kw}))
     cf._log_teaching_format(
         "hi [Teaching mode: x]",
         "📘 FILE: L\nSlides: 1-2\n## Concept: G\n**Definition**\nA pair.\n"

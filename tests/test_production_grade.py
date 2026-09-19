@@ -27,9 +27,12 @@ def test_routers_never_import_langchain():
 
 def test_chatflow_single_entrypoint():
     import backend.chatflow as cf
+    import backend.flow as flow_mod
 
     assert hasattr(cf, "run_chat")
-    src = pathlib.Path(cf.__file__).read_text(encoding="utf-8")
+    # Shim re-exports the single implementation home.
+    assert cf.run_chat is flow_mod.run_chat
+    src = pathlib.Path(flow_mod.__file__).read_text(encoding="utf-8")
     assert "answer_with_fallback" in src
 
 

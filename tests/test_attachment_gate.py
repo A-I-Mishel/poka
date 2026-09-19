@@ -63,7 +63,7 @@ def _fake_agent(monkeypatch, seen):
 
 
 def _no_llm(monkeypatch):
-    import backend.chatflow as cf
+    import backend.flow as cf
 
     def _failing(_tier):
         def _call(_text, _kinds):
