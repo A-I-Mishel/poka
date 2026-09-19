@@ -6,7 +6,7 @@
       "type": "graph",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, rate(pluto_llm_call_duration_seconds_bucket{tier=~\"$tier\"}[5m]))",
+          "expr": "histogram_quantile(0.95, sum(rate(pluto_llm_call_duration_seconds_bucket{tier=~\"$tier\"}[5m])) by (le, tier))",
           "legendFormat": "{{tier}} p95"
         }
       ],

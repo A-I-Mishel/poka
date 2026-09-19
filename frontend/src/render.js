@@ -363,7 +363,7 @@ async function refreshChats() {
 async function refreshProjects() {
   var data = await req("/api/projects");
   setProjects(Array.isArray(data) ? data : []);
-  if (S.projectId && !projects.some(function (p) { return p && p.id === S.projectId; })) S.projectId = null;
+  if (S.projectId && !projects.some(function (p) { return p && p.id === S.projectId; })) setPref("projectId", null);
   renderProjects();
 }
 /* ---------- message actions ---------- */
@@ -423,10 +423,12 @@ function speakText(text, btn) {
 /* ---------- recents / projects ---------- */
 var ctxId = null;
 function renderRecents() {
-  var f = $("sideSearch").value.toLowerCase();
+  var searchEl = $("sideSearch");
+  var f = searchEl && searchEl.value ? searchEl.value.toLowerCase() : "";
   var el = $("recentList");
+  if (!el) return;
   el.innerHTML = "";
-  chats.forEach(function (c) {
+  (Array.isArray(chats) ? chats : []).forEach(function (c) {
     var title = String((c && c.title) || "Untitled");
     if (f && title.toLowerCase().indexOf(f) < 0) return;
     var d = document.createElement("div");
@@ -467,17 +469,18 @@ function renderRecents() {
 var projId = null;
 function renderProjects() {
   var el = $("projList");
+  if (!el) return;
   el.innerHTML = "";
+  var list = Array.isArray(projects) ? projects : [];
   function addRow(id, name) {
     var wrap = document.createElement("div");
     wrap.className = "prow";
     var b = document.createElement("button");
     b.className = "nav" + ((S.projectId || null) === id ? " active" : "");
-    b.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/></svg>';
+    b.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>';
     b.appendChild(document.createTextNode(name));
     b.addEventListener("click", function () {
-      S.projectId = id;
-      savePrefs();
+      setPref("projectId", id);
       renderProjects();
       toast(id ? "Project: " + name : "Project: Personal");
       if (window.innerWidth < 861) document.body.classList.add("folded");
@@ -502,7 +505,7 @@ function renderProjects() {
     el.appendChild(wrap);
   }
   addRow(null, "Personal");
-  projects.forEach(function (p) { if (p && p.id) addRow(p.id, p.name || "Untitled"); });
+  list.forEach(function (p) { if (p && p.id) addRow(p.id, p.name || "Untitled"); });
 }
 function chatMarkdown(title, messages) {
   var lines = ["# " + title, ""];
@@ -524,8 +527,9 @@ function downloadMarkdown(title, text) {
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = (String(title || "").replace(/[^\w\- ]+/g, "").trim() || "chat") + ".md";
+  document.body.appendChild(a);
   a.click();
-  setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 /* ---------- models (server-driven) ---------- */
 var _lastFallbackKey = "";

@@ -6,7 +6,7 @@
       "type": "graph",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, rate(pluto_sqlite_query_duration_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.95, sum(rate(pluto_sqlite_query_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "{{operation}}"
         }
       ],
@@ -40,7 +40,7 @@
       "title": "Bucket State (sample)",
       "type": "graph",
       "targets": [
-        {"expr": "pluto_rate_limit_bucket_state", "legendFormat": "{{action}} {{identity}} {{metric}}"}
+        {"expr": "topk(20, pluto_rate_limit_bucket_state)", "legendFormat": "{{action}} {{identity}} {{metric}}"}
       ],
       "gridPos": {"x": 0, "y": 16, "w": 24, "h": 8}
     }

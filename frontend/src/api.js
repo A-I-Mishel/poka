@@ -44,10 +44,20 @@ async function req(path, init, retried) {
   }
   if (!res.ok) {
     var detail = res.statusText;
-    try { detail = (await res.json()).detail || detail; } catch (e) {}
+    try {
+      var txt = await res.text();
+      if (txt) {
+        try { detail = (JSON.parse(txt)).detail || detail; } catch (e) {}
+      }
+    } catch (e) {}
     throw new Error(detail);
   }
-  return await res.json();
+  try {
+    var body = await res.text();
+    return body ? JSON.parse(body) : null;
+  } catch (e) {
+    throw new Error("Bad server response.");
+  }
 }
 /* ---------- raw client (no 401 dialog) ----------
  * Same timeout/credentials/authHeaders as req(), but never pops the

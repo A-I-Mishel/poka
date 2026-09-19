@@ -28,8 +28,14 @@ _start_time = time.time()
 
 
 @router.get("/metrics")
-def metrics(ctx: UserContext = Depends(current_user)):
-    """Prometheus metrics exposition (authenticated to avoid cardinality scraping)."""
+def metrics():
+    """Prometheus metrics exposition endpoint (public, like /api/health).
+
+    Stays unauthenticated for orchestrators/scrapers (see
+    test_detailed_health_private_requires_auth). Cardinality risk from
+    per-user labels is handled in dashboards (topk) — a scrape-auth
+    proxy is future work, not a silent contract break.
+    """
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 

@@ -24,7 +24,7 @@ function renderAcct() {
   renderLoginBtn();
 }
 async function refreshMe() {
-  ACCT.username = "";
+  var prev = ACCT.username;
   /* rawReq (not req()): req() would pop a nested login dialog on
    * 401, and a stale/revoked/wiped cookie session must not loop the
    * dialog on every call. The session is an HttpOnly cookie (never in
@@ -40,9 +40,9 @@ async function refreshMe() {
     var me = await res.json();
     ACCT.username = (me && me.username) || "";
   } catch (e) {
-    /* Network failure: report logged-out until the next successful
-     * check (the cookie may still be good). */
-    ACCT.username = "";
+    /* Network failure: preserve prior username (offline looks like
+     * logged-out otherwise). Only clear on explicit 401 above. */
+    ACCT.username = prev;
   }
   renderAcct();
 }
@@ -64,8 +64,9 @@ async function authCall(path, body) {
   return await res.json();
 }
 var authResolve = null;
+var authQueue = [];
 function authDismissed() {
-  try { return localStorage.getItem(AUTH_SEEN_KEY) === "1"; } catch (e) { return true; }
+  try { return localStorage.getItem(AUTH_SEEN_KEY) === "1"; } catch (e) { return false; }
 }
 function markAuthSeen() {
   try { localStorage.setItem(AUTH_SEEN_KEY, "1"); } catch (e) {}
@@ -86,17 +87,20 @@ function hideAuth() {
  * login dialog — not a bare token prompt — is what logged-out users see. */
 function authAsync(title) {
   return new Promise(function (resolve) {
-    authResolve = resolve;
-    showAuth(title);
+    authQueue.push(resolve);
+    if (!authResolve) {
+      authResolve = true;
+      showAuth(title);
+    }
   });
 }
 function settleAuth(ok) {
   hideAuth();
   markAuthSeen();
-  if (authResolve) {
-    var r = authResolve;
-    authResolve = null;
-    r(ok ? true : null);
+  authResolve = null;
+  var q = authQueue.splice(0, authQueue.length);
+  for (var i = 0; i < q.length; i++) {
+    try { q[i](ok ? true : null); } catch (e) {}
   }
 }
 async function authSubmit(path) {

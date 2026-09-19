@@ -67,13 +67,20 @@ function fmtSize(b) {
   return (b / 1048576).toFixed(1) + " MB";
 }
 /** @param {string} msg */
+var _toastSeen = {};
 function toast(msg) {
+  var key = String(msg || "").slice(0, 120);
+  var now = Date.now();
+  // Dedupe + cap: refresh-loop failures must not flood #toasts.
+  if (_toastSeen[key] && now - _toastSeen[key] < 3000) return;
+  _toastSeen[key] = now;
+  var host = $("toasts");
+  if (!host) return;
+  while (host.children.length >= 5) host.removeChild(host.firstChild);
   var t = document.createElement("div");
   t.className = "toast";
   t.setAttribute("role", "status");
   t.textContent = msg;
-  var host = $("toasts");
-  if (!host) return;
   host.appendChild(t);
   setTimeout(function () { t.style.opacity = "0"; t.style.transition = "opacity .3s"; }, 2200);
   setTimeout(function () { t.remove(); }, 2600);
@@ -94,7 +101,15 @@ function trapTab(e, overlay) {
   var f = overlay.querySelectorAll("button, input, textarea, select, a[href], [tabindex]");
   var vis = [];
   for (var i = 0; i < f.length; i++) {
-    if (!f[i].disabled && f[i].offsetParent !== null) vis.push(f[i]);
+    var el = f[i];
+    if (el.disabled) continue;
+    var rect = null;
+    try { rect = el.getBoundingClientRect(); } catch (err) { rect = null; }
+    var style = null;
+    try { style = window.getComputedStyle(el); } catch (err) { style = null; }
+    if (rect && (rect.width === 0 && rect.height === 0)) continue;
+    if (style && (style.display === "none" || style.visibility === "hidden")) continue;
+    vis.push(el);
   }
   if (!vis.length) { e.preventDefault(); return; }
   var first = vis[0], last = vis[vis.length - 1];

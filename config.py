@@ -16,7 +16,10 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from services.limits import MODEL_MAX_TOKENS, MODEL_TIMEOUT_SECONDS
 from services.secrets import get_secret
 
-load_dotenv()
+import os as _os
+
+if _os.getenv("PLUTO_DOTENV", "1").strip().lower() not in ("0", "false", "no", "off"):
+    load_dotenv(override=False)
 
 GEMINI_36_MODEL: str = "gemini-3.6-flash"
 GEMINI_35_MODEL: str = "gemini-3.5-flash"
@@ -110,6 +113,12 @@ def _cached_client(tier: str, temperature: float, key: str, model: str, make: Ca
                 pass
         _CLIENT_CACHE[cache_key] = (fingerprint, client)
     return client
+
+
+def _clear_client_cache() -> None:
+    """Clear cached LLM clients (tests; prevents test-key poisoning)."""
+    with _CLIENT_CACHE_LOCK:
+        _CLIENT_CACHE.clear()
 
 
 def _get_secret(name: str) -> Optional[str]:

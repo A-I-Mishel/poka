@@ -58,6 +58,15 @@ def count_tokens(text: str) -> int:
     return _count_tokens_small(text)
 
 
+# Keep the historical cache API: count_tokens.cache_clear()/cache_info()
+# delegate to the small-input LRU (large inputs bypass the cache).
+try:
+    count_tokens.cache_clear = _count_tokens_small.cache_clear  # type: ignore[attr-defined]
+    count_tokens.cache_info = _count_tokens_small.cache_info  # type: ignore[attr-defined]
+except Exception:  # noqa: S110 -- best-effort compat shim
+    pass
+
+
 def prewarm_tokenizer() -> None:
     """Pre-warm tiktoken encoder and token counting cache."""
     _encoder()

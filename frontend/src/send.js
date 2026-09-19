@@ -45,7 +45,7 @@ function restoreComposer(text, files) {
   (files || []).forEach(function (f) { if (have.indexOf(f) === -1) addChip(f); });
   if (restored || (files && files.length)) input.focus();
 }
-async function uploadPending(files) {
+async function uploadPending(files, retried) {
   var list = files || getPendingFiles();
   var out = [];
   for (var i = 0; i < list.length; i++) {
@@ -53,12 +53,13 @@ async function uploadPending(files) {
     form.append("file", list[i]);
     var upHeaders = authHeaders();
     var res = await fetch(apiUrl("/api/uploads"), { method: "POST", headers: upHeaders, credentials: "include", body: form });
-    if (res.status === 401) {
+    if (res.status === 401 && !retried) {
       var ok = await authAsync("Log in to continue");
       if (!ok) throw new Error("Authentication required.");
       try { await refreshMe(); } catch (e) {}
-      return uploadPending(files);
+      return uploadPending(files, true);
     }
+    if (res.status === 401) throw new Error("Authentication required.");
     if (!res.ok) {
       var detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch (e) {}
@@ -87,7 +88,20 @@ function streamInto(bodyEl, onMeta) {
       body: JSON.stringify(payload),
       signal: controller.signal
     }).then(function (res) {
-      if (!res.ok || !res.body) throw new Error("Stream failed: " + res.statusText);
+      if (res.status === 401) {
+        return authAsync("Log in to continue").then(function (ok) {
+          if (!ok) throw new Error("Authentication required.");
+          try { if (typeof refreshMe === "function") return refreshMe().then(function () { throw new Error("Session refreshed — please resend."); }); } catch (e) {}
+          throw new Error("Authentication required.");
+        });
+      }
+      if (!res.ok || !res.body) {
+        return res.text().then(function (t) {
+          var detail = res.statusText;
+          try { detail = (t && JSON.parse(t).detail) || detail; } catch (e) {}
+          throw new Error("Stream failed: " + detail);
+        });
+      }
       var reader = res.body.getReader();
       var decoder = new TextDecoder();
       var buf = "";
