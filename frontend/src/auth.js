@@ -290,14 +290,6 @@ if ($("loginBtn")) $("loginBtn").addEventListener("click", function () {
   showAuth("Log in to Pluto");
 });
 $("authCancel").addEventListener("click", function () { settleAuth(null); });
-$("authTokenBtn").addEventListener("click", function () {
-  // Legacy access-token entry is retired with HttpOnly cookies: access
-  // tokens are now sent via Authorization header by non-browser clients
-  // only. Browsers use account cookies; point users at login instead.
-  hideAuth();
-  toast("Use Log in / Sign up — browser sessions are cookies now.");
-  settleAuth(null);
-});
 $("authLogin").addEventListener("click", function () { authSubmit("/api/auth/login"); });
 $("authSignup").addEventListener("click", function () { authSubmit("/api/auth/signup"); });
 $("authPass").addEventListener("input", function () {
