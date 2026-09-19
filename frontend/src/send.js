@@ -12,7 +12,7 @@ import { openSection } from "./panels.js";
 import { addChip, getPendingFiles, clearPendingFiles } from "./composer.js";
 import { msgEl, hydrateUploadImages, scrollBottom, maybeScroll, rememberApprovalTokens, setActiveTier, refreshChats, stopSpeaking } from "./render.js";
 
-var panelBody = $("panelBody"), viewPanel = $("viewPanel");
+var panelBody = $("panelBody"), chatCol = $("chatCol");
 
 /* ---------- send (real SSE stream) ---------- */
 var input = $("input"), attachments = $("attachments");

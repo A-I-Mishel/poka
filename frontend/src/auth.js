@@ -4,7 +4,7 @@
 import { $, toast } from "./ui.js";
 import { escHtml } from "./markdown.js";
 import { apiUrl, AUTH_SEEN_KEY } from "./config.js";
-import { S, AUTH_MODE, savePrefs } from "./state.js";
+import { S, AUTH_MODE } from "./state.js";
 import { authHeaders } from "./auth-store.js";
 
 var _authHooks = {};

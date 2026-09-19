@@ -8,7 +8,6 @@ import { API_BASE } from "./config.js";
 import { S, TIERS, savePrefs, setTIERS, setAuthMode } from "./state.js";
 import { req } from "./api.js";
 import { setApiHooks } from "./api.js";
-import { authHeaders } from "./auth-store.js";
 import { ACCT, refreshMe, authAsync, authDismissed } from "./auth.js";
 import { setAuthHooks } from "./auth.js";
 import { renderProjects, renderRecents, renderChat, refreshProjects, refreshChats, setActiveTier, stopSpeaking } from "./chat.js";

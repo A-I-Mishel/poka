@@ -56,6 +56,10 @@ jobs:
         run: for f in src/*.js; do node --check "$f" || exit 1; done
       - name: Unit tests (vitest)
         run: npm test
+      - name: Lint (eslint: no-undef/unused/redeclare)
+        run: npm run lint
+      - name: Typecheck (tsc, @ts-check pure modules)
+        run: npm run typecheck
       - name: Module wiring smoke (node stubs)
         run: npm run smoke
       - name: Production build

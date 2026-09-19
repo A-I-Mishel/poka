@@ -1,3 +1,4 @@
+// @ts-check
 /* Pluto web client module: ui (DOM helpers, formatting, toasts; no app imports).
  * Split from the vanilla-JS monolith; behavior preserved.
  */

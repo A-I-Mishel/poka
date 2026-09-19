@@ -12,9 +12,7 @@ import { authHeaders } from "./auth-store.js";
 import { renderAcct } from "./auth.js";
 import { showChat, openTitle } from "./panels.js";
 
-var chatCol = $("chatCol"), chatScroll = $("chatScroll"), chatTitle = $("chatTitle"),
-  backBtn = $("backBtn"), panelBody = $("panelBody"),
-  viewChat = $("viewChat"), viewPanel = $("viewPanel");
+var chatCol = $("chatCol"), chatScroll = $("chatScroll"), chatTitle = $("chatTitle");
 function chipForAttachment(a) {
   var c = document.createElement("div");
   c.className = "chip art-chip";

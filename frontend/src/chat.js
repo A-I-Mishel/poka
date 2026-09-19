@@ -111,19 +111,19 @@ chatCol.addEventListener("click", async function (e) {
         body: JSON.stringify({ index: i, project_id: S.projectId || null })
       });
       toast("Saved to Research");
-      if (!$("viewPanel").classList.contains("hidden") && panelBody.getAttribute("data-section") === "research")
+      if (!$("viewPanel").classList.contains("hidden") && $("panelBody").getAttribute("data-section") === "research")
         openSection("research");
     } catch (err) { toast("Cannot save brief: " + err.message); }
   }
 });
 $("projRename").addEventListener("click", function () {
   $("projMenu").classList.add("hidden");
-  var p = projects.filter(function (x) { return x && x.id === projId; })[0];
+  var p = projects.filter(function (x) { return x && x.id === getProjId(); })[0];
   if (!p) return;
   ask("Rename project", p.name || "", async function (v) {
     if (!v) return;
     try {
-      await req("/api/projects/" + projId, { method: "PATCH", body: JSON.stringify({ name: v }) });
+      await req("/api/projects/" + getProjId(), { method: "PATCH", body: JSON.stringify({ name: v }) });
       await refreshProjects();
       toast("Renamed");
     } catch (err) { toast("Rename failed: " + err.message); }
@@ -131,18 +131,18 @@ $("projRename").addEventListener("click", function () {
 });
 $("projContext").addEventListener("click", function () {
   $("projMenu").classList.add("hidden");
-  if (!projId) return;
-  S.projectId = projId;
+  if (!getProjId()) return;
+  S.projectId = getProjId();
   savePrefs();
   renderProjects();
   openSection("project");
 });
 $("projArchive").addEventListener("click", async function () {
   $("projMenu").classList.add("hidden");
-  if (!projId) return;
+  if (!getProjId()) return;
   try {
-    await req("/api/projects/" + projId + "/archive", { method: "POST" });
-    if (S.projectId === projId) { S.projectId = null; savePrefs(); }
+    await req("/api/projects/" + getProjId() + "/archive", { method: "POST" });
+    if (S.projectId === getProjId()) { S.projectId = null; savePrefs(); }
     await refreshProjects();
     toast("Project archived");
   } catch (err) { toast("Archive failed: " + err.message); }
@@ -162,12 +162,12 @@ function debounce(fn, ms) { var t; return function () { var a = arguments, c = t
 $("sideSearch").addEventListener("input", debounce(renderRecents, 150));
 $("ctxRename").addEventListener("click", function () {
   $("ctxMenu").classList.add("hidden");
-  var c = chats.filter(function (x) { return x && x.id === ctxId; })[0];
+  var c = chats.filter(function (x) { return x && x.id === getCtxId(); })[0];
   if (!c) return;
   ask("Rename chat", c.title || "", async function (v) {
     if (!v) return;
     try {
-      var data = await req("/api/chats/" + ctxId, { method: "PATCH", body: JSON.stringify({ title: v }) });
+      var data = await req("/api/chats/" + getCtxId(), { method: "PATCH", body: JSON.stringify({ title: v }) });
       setChats(data.chats || chats);
       renderRecents();
       toast("Renamed");
@@ -176,10 +176,10 @@ $("ctxRename").addEventListener("click", function () {
 });
 $("ctxDelete").addEventListener("click", async function () {
   $("ctxMenu").classList.add("hidden");
-  if (!ctxId) return;
+  if (!getCtxId()) return;
   if (!window.confirm("Delete this chat? This cannot be undone.")) return;
   try {
-    var data = await req("/api/chats/" + ctxId, { method: "DELETE" });
+    var data = await req("/api/chats/" + getCtxId(), { method: "DELETE" });
     setChats(data.chats || []);
     setCurrent(data.current || current);
     renderRecents();
@@ -218,9 +218,9 @@ $("exportBtn").addEventListener("click", function () {
 /* Export any archived chat without opening it (read-only endpoint). */
 $("ctxExport").addEventListener("click", async function () {
   $("ctxMenu").classList.add("hidden");
-  if (!ctxId) return;
+  if (!getCtxId()) return;
   try {
-    var data = await req("/api/chats/" + ctxId + "/messages");
+    var data = await req("/api/chats/" + getCtxId() + "/messages");
     var title = (data && data.title) || "chat";
     downloadMarkdown(title, chatMarkdown(title, (data && data.messages) || []));
     toast("Chat exported");

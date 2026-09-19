@@ -1,3 +1,4 @@
+// @ts-check
 /* Pluto web client module: config (env-driven constants, never hardcoded).
  * Split from the vanilla-JS monolith; behavior preserved.
  */

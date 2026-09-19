@@ -1,3 +1,4 @@
+// @ts-check
 /* Pluto web client module: state (prefs + shared server state; sole owner of mutable globals).
  * Split from the vanilla-JS monolith; behavior preserved.
  */

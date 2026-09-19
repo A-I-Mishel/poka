@@ -1,3 +1,4 @@
+// @ts-check
 /* Pluto web client module: markdown (pure message rendering; testable in node).
  * Split from the vanilla-JS monolith; behavior preserved.
  */

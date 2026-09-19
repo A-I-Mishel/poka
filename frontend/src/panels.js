@@ -1,7 +1,7 @@
 /* Pluto web client module: panels (view switching, server-data panels, mode toggles).
  * Split from the vanilla-JS monolith; behavior preserved.
  */
-import { $, toast, esc, escapeAttr, fmtStamp, fmtSize } from "./ui.js";
+import { $, toast, esc, escapeAttr, fmtStamp } from "./ui.js";
 import { ic, IC, artIcon } from "./markdown.js";
 import { req, authedDownload } from "./api.js";
 import { S, chats, current, projects, savePrefs } from "./state.js";
@@ -524,9 +524,7 @@ $("foldBtn").addEventListener("click", function () {
   }
 });
 $("backdrop").addEventListener("click", function () { document.body.classList.add("folded"); });
-/* ---------- toggles ---------- */
-var modeToggle = $("modeToggle"), thumb = modeToggle.querySelector(".seg-thumb"),
-  modeBtns = modeToggle.querySelectorAll("button"), webBtn = $("webSearchBtn");
+/* ---------- toggles (refs owned once at module top, lines 24-26) ---------- */
 function updatePlaceholder() {
   var deep = S.mode === "deep", web = webBtn.classList.contains("active");
   if (deep) input.placeholder = "Ask something complex — take your time…";

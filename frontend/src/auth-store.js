@@ -1,3 +1,4 @@
+// @ts-check
 /* Pluto web client module: auth-store (visitor storage + cookie-session headers).
  * Sessions live in an HttpOnly `pluto_session` cookie (set/cleared by
  * /api/auth/*) so injected JS cannot exfiltrate them. This module never
