@@ -19,21 +19,18 @@ describe("auth-store", () => {
     globalThis.localStorage = store;
   });
 
-  it("returns empty token when logged out", () => {
-    expect(getToken()).toBe("");
-  });
-
-  it("round-trips tokens", () => {
+  it("never persists sessions in JS (HttpOnly cookie mode)", () => {
     setToken("abc");
-    expect(getToken()).toBe("abc");
-    setToken("");
     expect(getToken()).toBe("");
+    expect(store.getItem("pluto_token")).toBe(null);
+    expect(store.getItem("poka_token")).toBe(null);
   });
 
-  it("migrates the legacy token once", () => {
+  it("clears legacy tokens once", () => {
     store.setItem("poka_token", "legacy-1");
-    expect(getToken()).toBe("legacy-1");
-    expect(store.getItem("pluto_token")).toBe("legacy-1");
+    store.setItem("pluto_token", "legacy-2");
+    expect(getToken()).toBe("");
+    expect(store.getItem("pluto_token")).toBe(null);
     expect(store.getItem("poka_token")).toBe(null);
   });
 
@@ -43,10 +40,10 @@ describe("auth-store", () => {
     expect(getVisitor()).toBe(v1);
   });
 
-  it("builds auth headers", () => {
-    setToken("t");
+  it("builds cookie-session headers (visitor + CSRF, no Bearer)", () => {
     const h = authHeaders();
-    expect(h.Authorization).toBe("Bearer t");
+    expect(h.Authorization).toBe(undefined);
+    expect(h["X-Pluto-Csrf"]).toBe("1");
     expect(h["X-Pluto-Visitor"]).toMatch(/^[0-9a-f]{32}$/);
   });
 });

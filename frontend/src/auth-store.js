@@ -1,33 +1,37 @@
-/* Pluto web client module: auth-store (pure token/visitor storage; imports config only).
- * Split from the vanilla-JS monolith; behavior preserved.
+/* Pluto web client module: auth-store (visitor storage + cookie-session headers).
+ * Sessions live in an HttpOnly `pluto_session` cookie (set/cleared by
+ * /api/auth/*) so injected JS cannot exfiltrate them. This module never
+ * stores the session — getToken/setToken remain as migration shims that
+ * clear any legacy localStorage token once, then report logged-out.
  */
 import { TOKEN_KEY, LEGACY_TOKEN_KEY, VISITOR_KEY } from "./config.js";
 
-function getToken() {
+function _clearLegacyTokens() {
   try {
-    var t = localStorage.getItem(TOKEN_KEY) || "";
-    if (t) return t;
-    var legacy = localStorage.getItem(LEGACY_TOKEN_KEY) || "";
-    if (legacy) {
-      localStorage.setItem(TOKEN_KEY, legacy);
-      localStorage.removeItem(LEGACY_TOKEN_KEY);
-      return legacy;
-    }
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch (e) {}
+}
+
+function getToken() {
+  // Migration shim: drop legacy Bearer tokens persisted before the
+  // HttpOnly-cookie switch, then always report empty (cookie is the
+  // source of truth; JS cannot read it by design).
+  _clearLegacyTokens();
   return "";
 }
-function setToken(t) {
-  try {
-    if (t) localStorage.setItem(TOKEN_KEY, t);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch (e) {}
+function setToken() {
+  // No-op by design (kept for call-site compat): the session cookie is
+  // written by the server via Set-Cookie, not by JS.
+  _clearLegacyTokens();
 }
 function authHeaders() {
   var h = {};
-  var t = getToken();
-  if (t) h.Authorization = "Bearer " + t;
   var v = getVisitor();
   if (v) h["X-Pluto-Visitor"] = v;
+  // Required for cookie-authenticated POST/PUT/PATCH/DELETE (see
+  // backend/deps.py _require_csrf). Safe to send always.
+  h["X-Pluto-Csrf"] = "1";
   return h;
 }
 function getVisitor() {

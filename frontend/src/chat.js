@@ -6,7 +6,7 @@ import { md, planet, ic, artIcon } from "./markdown.js";
 import { apiUrl, MAX_MSG_CHARS } from "./config.js";
 import { S, TIERS, chats, current, projects, savePrefs, setChats, setCurrent, setProjects } from "./state.js";
 import { req, authedDownload } from "./api.js";
-import { getToken, setToken, authHeaders } from "./auth-store.js";
+import { authHeaders } from "./auth-store.js";
 import { renderAcct, refreshMe, authAsync, showAuth, signOut, ask } from "./auth.js";
 import { openSection, showChat, openTitle } from "./panels.js";
 import { addChip, getPendingFiles, clearPendingFiles } from "./composer.js";
@@ -216,7 +216,7 @@ function hydrateUploadImages() {
     if (uploadBlobCache[id]) { attach(uploadBlobCache[id]); return; }
     if (inflightImgs[id]) return;
     inflightImgs[id] = true;
-    fetch(apiUrl("/api/uploads/" + id + "/file"), { headers: authHeaders() }).then(function (res) {
+    fetch(apiUrl("/api/uploads/" + id + "/file"), { headers: authHeaders(), credentials: "include" }).then(function (res) {
       if (!res.ok) throw new Error("gone");
       return res.blob();
     }).then(function (blob) {
@@ -371,13 +371,10 @@ async function uploadPending(files) {
     var form = new FormData();
     form.append("file", list[i]);
     var upHeaders = authHeaders();
-    var upHadToken = !!upHeaders.Authorization;
-    var res = await fetch(apiUrl("/api/uploads"), { method: "POST", headers: upHeaders, body: form });
+    var res = await fetch(apiUrl("/api/uploads"), { method: "POST", headers: upHeaders, credentials: "include", body: form });
     if (res.status === 401) {
-      if (upHadToken) setToken("");
-      var tok2 = await authAsync("Log in to continue");
-      if (!tok2) throw new Error("Authentication required.");
-      setToken(tok2);
+      var ok = await authAsync("Log in to continue");
+      if (!ok) throw new Error("Authentication required.");
       try { await refreshMe(); } catch (e) {}
       return uploadPending(files);
     }
@@ -405,6 +402,7 @@ function streamInto(bodyEl, onMeta) {
     fetch(apiUrl("/api/chat/stream"), {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      credentials: "include",
       body: JSON.stringify(payload),
       signal: controller.signal
     }).then(function (res) {

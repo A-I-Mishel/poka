@@ -5,7 +5,7 @@ import { $, toast } from "./ui.js";
 import { escHtml } from "./markdown.js";
 import { apiUrl, AUTH_SEEN_KEY } from "./config.js";
 import { S, AUTH_MODE, savePrefs } from "./state.js";
-import { getToken, setToken, getVisitor, authHeaders } from "./auth-store.js";
+import { authHeaders } from "./auth-store.js";
 
 var _authHooks = {};
 export function setAuthHooks(h) { _authHooks = h || {}; }
@@ -25,17 +25,13 @@ function renderAcct() {
 }
 async function refreshMe() {
   ACCT.username = "";
-  if (!getToken()) { renderAcct(); return; }
   /* Direct fetch (not req()): req() would pop a nested login dialog on
-   * 401, and a stale/revoked/wiped session must not loop the dialog on
-   * every call. A 401 here means the stored session is dead (logout,
-   * server data reset without a persistent disk, ...) — drop it so the
-   * next action retries cleanly as logged-out instead of re-sending a
-   * known-bad token forever. */
+   * 401, and a stale/revoked/wiped cookie session must not loop the
+   * dialog on every call. The session is an HttpOnly cookie (never in
+   * JS); a 401 here just means logged-out. */
   try {
-    var res = await fetch(apiUrl("/api/auth/me"), { headers: authHeaders() });
+    var res = await fetch(apiUrl("/api/auth/me"), { headers: authHeaders(), credentials: "include" });
     if (res.status === 401) {
-      setToken("");
       ACCT.username = "";
       renderAcct();
       return;
@@ -44,9 +40,8 @@ async function refreshMe() {
     var me = await res.json();
     ACCT.username = (me && me.username) || "";
   } catch (e) {
-    /* Network failure: keep the stored token (it may still be good) but
-     * report logged-out until the next successful check. Only a definite
-     * 401 above clears it. */
+    /* Network failure: report logged-out until the next successful
+     * check (the cookie may still be good). */
     ACCT.username = "";
   }
   renderAcct();
@@ -56,7 +51,8 @@ async function authCall(path, body) {
   try {
     res = await fetch(apiUrl(path), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      credentials: "include",
       body: JSON.stringify(body)
     });
   } catch (e) {
@@ -96,13 +92,13 @@ function authAsync(title) {
     showAuth(title);
   });
 }
-function settleAuth(token) {
+function settleAuth(ok) {
   hideAuth();
   markAuthSeen();
   if (authResolve) {
     var r = authResolve;
     authResolve = null;
-    r(token);
+    r(ok ? true : null);
   }
 }
 async function authSubmit(path) {
@@ -130,12 +126,13 @@ async function authSubmit(path) {
   }
   err.classList.add("hidden");
   try {
-    var out = await authCall(path, { username: u, password: p });
-    setToken(out.token);
-    ACCT.username = out.username || "";
-    settleAuth(out.token);
-    renderAcct();
-    toast("Signed in as " + (out.username || "you"));
+    // Server sets the HttpOnly pluto_session cookie; the JSON token is
+    // ignored by the browser client (non-browser clients may use it as
+    // Bearer). Success = cookie present, so re-read /me for the name.
+    await authCall(path, { username: u, password: p });
+    await refreshMe();
+    settleAuth(true);
+    toast("Signed in as " + (ACCT.username || "you"));
     try { if (_authHooks.onSessionChangedToast) await _authHooks.onSessionChangedToast(); } catch (e) {}
   } catch (e) {
     var msg = String((e && e.message) || "Sign in failed.");
@@ -149,8 +146,7 @@ async function authSubmit(path) {
   }
 }
 async function signOut() {
-  try { await fetch(apiUrl("/api/auth/logout"), { method: "POST", headers: authHeaders(), body: "{}" }); } catch (e) {}
-  setToken("");
+  try { await fetch(apiUrl("/api/auth/logout"), { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()), credentials: "include", body: "{}" }); } catch (e) {}
   ACCT.username = "";
   renderAcct();
   toast("Signed out");
@@ -194,7 +190,7 @@ function hideAcct() {
 async function loadSessions() {
   var box = $("acctSessions");
   try {
-    var res = await fetch(apiUrl("/api/auth/sessions"), { headers: authHeaders() });
+    var res = await fetch(apiUrl("/api/auth/sessions"), { headers: authHeaders(), credentials: "include" });
     if (!res.ok) throw new Error(res.statusText);
     var data = await res.json();
     var list = (data && data.sessions) || [];
@@ -224,6 +220,7 @@ async function submitPasswordChange() {
     var res = await fetch(apiUrl("/api/auth/change-password"), {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      credentials: "include",
       body: JSON.stringify({ current_password: cur, new_password: nw })
     });
     if (!res.ok) {
@@ -231,8 +228,7 @@ async function submitPasswordChange() {
       try { detail = (await res.json()).detail || detail; } catch (e) {}
       throw new Error(detail);
     }
-    var out = await res.json();
-    setToken(out.token);
+    await res.json();
     hideAcct();
     toast("Password changed — other devices signed out");
   } catch (e) {
@@ -242,7 +238,7 @@ async function submitPasswordChange() {
 }
 async function signOutEverywhere() {
   try {
-    await fetch(apiUrl("/api/auth/logout-all"), { method: "POST", headers: authHeaders(), body: "{}" });
+    await fetch(apiUrl("/api/auth/logout-all"), { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()), credentials: "include", body: "{}" });
   } catch (e) {
     toast("Could not sign out everywhere: " + e.message);
     return;
@@ -288,14 +284,12 @@ if ($("loginBtn")) $("loginBtn").addEventListener("click", function () {
 });
 $("authCancel").addEventListener("click", function () { settleAuth(null); });
 $("authTokenBtn").addEventListener("click", function () {
+  // Legacy access-token entry is retired with HttpOnly cookies: access
+  // tokens are now sent via Authorization header by non-browser clients
+  // only. Browsers use account cookies; point users at login instead.
   hideAuth();
-  ask("Access token (empty clears it)", "", function (v) {
-    if (v === null) { settleAuth(null); return; }
-    setToken(v);
-    refreshMe();
-    toast(v ? "Token saved" : "Token cleared");
-    settleAuth(v || null);
-  });
+  toast("Use Log in / Sign up — browser sessions are cookies now.");
+  settleAuth(null);
 });
 $("authLogin").addEventListener("click", function () { authSubmit("/api/auth/login"); });
 $("authSignup").addEventListener("click", function () { authSubmit("/api/auth/signup"); });

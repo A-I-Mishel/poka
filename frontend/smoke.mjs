@@ -107,6 +107,8 @@ check("setTIERS live binding", state2.TIERS.join() === "t1");
 state.setTIERS([]);
 
 // 4. api 401 flow uses hooks (dependency inversion): first 401, then ok.
+// Cookie sessions: no Bearer juggling — the hook re-prompts login,
+// then the retry succeeds with the fresh cookie attached by the browser.
 let calls = 0;
 globalThis.fetch = async () => {
   calls += 1;
@@ -115,14 +117,13 @@ globalThis.fetch = async () => {
   }
   return { status: 200, ok: true, json: async () => ({ ok: true }) };
 };
-authStore.setToken("dead-token");
 api.setApiHooks({
-  onUnauthorized: async () => "fresh-token",
+  onUnauthorized: async () => true,
   onSessionRefreshed: async () => {},
 });
 const out = await api.req("/api/chats", { method: "GET" });
 check("401 hook retry succeeds", out && out.ok === true);
-check("fresh token stored", authStore.getToken() === "fresh-token");
+check("no Bearer token in JS (cookie mode)", authStore.getToken() === "");
 check("fetch called twice", calls === 2);
 
 // 5. Pure rendering still correct through the module graph.

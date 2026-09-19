@@ -3,7 +3,16 @@
  */
 function $(id) { return document.getElementById(id); }
 /* ---------- misc helpers ---------- */
+/* esc(): text-node only — does NOT escape quotes. NEVER use inside
+ * double/single-quoted attributes (data-*, title, value). Use
+ * escapeAttr() there instead, otherwise `"` breaks out (self-XSS). */
 function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+/* escapeAttr(): safe for double-quoted attribute values. */
+function escapeAttr(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
 function fmtTime(ts) {
   if (!ts) return "";
   try {
@@ -64,4 +73,4 @@ function trapTab(e, overlay) {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
-export { $, esc, fmtTime, fmtDay, fmtStamp, fmtSize, toast, DIALOG_IDS, openOverlay, trapTab };
+export { $, esc, escapeAttr, fmtTime, fmtDay, fmtStamp, fmtSize, toast, DIALOG_IDS, openOverlay, trapTab };

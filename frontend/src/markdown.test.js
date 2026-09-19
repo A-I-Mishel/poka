@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { artIcon, escHtml, ic, md, planet } from "./markdown.js";
-import { esc } from "./ui.js";
+import { esc, escapeAttr } from "./ui.js";
 
 describe("esc", () => {
   it("escapes angle brackets and amps", () => {
@@ -16,6 +16,22 @@ describe("esc", () => {
 describe("escHtml", () => {
   it("also escapes quotes", () => {
     expect(escHtml(`a"b'c`)).toBe("a&quot;b&#39;c");
+  });
+});
+
+describe("escapeAttr", () => {
+  it("escapes double quotes so attributes cannot break out", () => {
+    expect(escapeAttr(`a"b`)).toBe("a&quot;b");
+    expect(escapeAttr(`" onmouseover="alert(1)`)).toBe(
+      "&quot; onmouseover=&quot;alert(1)",
+    );
+  });
+  it("escapes single quotes, angle brackets and amps", () => {
+    expect(escapeAttr(`a'b<c>&d`)).toBe("a&#39;b&lt;c&gt;&amp;d");
+  });
+  it("coerces nullish to empty string", () => {
+    expect(escapeAttr(null)).toBe("");
+    expect(escapeAttr(undefined)).toBe("");
   });
 });
 

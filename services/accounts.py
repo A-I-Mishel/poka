@@ -86,6 +86,10 @@ class AccountWeakPassword(AccountError):
     """New password fails the strength check (signup/change only)."""
 
 
+class AccountUnavailable(AccountError):
+    """Storage/infra failure (maps to 503, never to blank state)."""
+
+
 def _accounts_path():
     return data_root() / _ACCOUNTS_FILE
 
@@ -115,18 +119,48 @@ def _prune_expired_sessions(reg: Dict[str, Any], now: Optional[float] = None) ->
 
 
 def _load_registry() -> Dict[str, Any]:
-    """Load the registry; blank (never raise) when missing/corrupt."""
+    """Load the registry; blank on missing/corrupt, raise on infra failure.
+
+    Malformed JSON is already quarantined by storage._read_json
+    (returns was_corrupt=True). Structurally invalid payloads
+    (wrong shape) are quarantined here the same way instead of
+    silently wiping all accounts. Permission/IO errors propagate
+    as AccountUnavailable and must surface as 503, never as empty state.
+    """
+    from services.storage import StorageError
     try:
-        data, _ = _read_json(_accounts_path())
-    except Exception:
+        data, was_corrupt = _read_json(_accounts_path())
+    except StorageError as e:
+        raise AccountUnavailable("Account storage unavailable. Try again.") from e
+    if data is None:
+        # Missing -> blank; corrupt -> blank (file already quarantined).
         return _blank_registry()
     if not isinstance(data, dict):
+        _quarantine_registry("not-a-dict")
         return _blank_registry()
     users = data.get("users")
     sessions = data.get("sessions")
     if not isinstance(users, dict) or not isinstance(sessions, dict):
+        _quarantine_registry("bad-shape")
         return _blank_registry()
     return {"version": 1, "users": users, "sessions": sessions}
+
+
+def _quarantine_registry(reason: str) -> None:
+    """Move a structurally invalid accounts.json aside (best-effort)."""
+    import os
+    import time
+    from services.storage import path_lock
+    try:
+        path = _accounts_path()
+        stamp = "%d-%d-%s" % (int(time.time() * 1000), os.getpid(), reason)
+        backup = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
+        with path_lock(path):
+            if path.exists():
+                os.replace(path, backup)
+        obs_event("accounts.quarantine", reason=reason)
+    except Exception:
+        pass
 
 
 def _save_registry(reg: Dict[str, Any]) -> None:
@@ -458,6 +492,8 @@ def list_sessions(user_id: Any, current_token: Any = None) -> List[Dict[str, Any
         digest = ""
     try:
         reg = _load_registry()
+    except AccountUnavailable:
+        raise
     except Exception:
         return []
     now = time.time()
@@ -499,6 +535,8 @@ def logout_all(user_id: Any) -> int:
                 except Exception:
                     return 0
             return revoked
+    except AccountUnavailable:
+        raise
     except Exception:
         return 0
 
@@ -510,6 +548,8 @@ def verify_session(token: Any) -> Optional[str]:
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
     try:
         reg = _load_registry()
+    except AccountUnavailable:
+        raise
     except Exception:
         return None
     entry = reg["sessions"].get(digest)
@@ -548,6 +588,8 @@ def logout(token: Any) -> bool:
                 _save_registry(reg)
             except Exception:
                 return False
+    except AccountUnavailable:
+        raise
     except Exception:
         return False
     return True
@@ -560,6 +602,8 @@ def username_for_user(user_id: Any) -> Optional[str]:
         return None
     try:
         reg = _load_registry()
+    except AccountUnavailable:
+        raise
     except Exception:
         return None
     for record in reg["users"].values():

@@ -8,8 +8,8 @@ import { API_BASE } from "./config.js";
 import { S, TIERS, savePrefs, setTIERS, setAuthMode } from "./state.js";
 import { req } from "./api.js";
 import { setApiHooks } from "./api.js";
-import { getToken, authHeaders } from "./auth-store.js";
-import { refreshMe, authAsync, authDismissed } from "./auth.js";
+import { authHeaders } from "./auth-store.js";
+import { ACCT, refreshMe, authAsync, authDismissed } from "./auth.js";
 import { setAuthHooks } from "./auth.js";
 import { renderProjects, renderRecents, renderChat, refreshProjects, refreshChats, setActiveTier, stopSpeaking } from "./chat.js";
 import { applyTheme, setMode, setWeb, updatePlaceholder, placeThumb, webBtn } from "./panels.js";
@@ -95,7 +95,7 @@ window.addEventListener("resize", placeThumb);
   savePrefs();
   setActiveTier(S.model, false);
   try { await refreshMe(); } catch (err) {}
-  if (!getToken() && !authDismissed()) {
+  if (!ACCT.username && !authDismissed()) {
     /* Logged out: show the login dialog once so the account entry
      * point is visible; Cancel/Escape dismisses it for good and the
      * footer button reopens it anytime. */

@@ -1,8 +1,10 @@
 /* Pluto web client module: api (fetch client; 401 flow via hooks wired in app.js).
- * Split from the vanilla-JS monolith; behavior preserved.
+ * Sessions are HttpOnly cookies: every request uses credentials:"include"
+ * so the browser attaches pluto_session automatically. No Bearer tokens
+ * are stored in JS (see auth-store.js).
  */
 import { apiUrl, API_BASE } from "./config.js";
-import { authHeaders, setToken } from "./auth-store.js";
+import { authHeaders } from "./auth-store.js";
 import { toast } from "./ui.js";
 
 var _apiHooks = {};
@@ -12,8 +14,6 @@ export function setApiHooks(h) { _apiHooks = h || {}; }
 async function req(path, init, retried) {
   var opts = init || {};
   var headers = Object.assign({ "Content-Type": "application/json" }, authHeaders(), opts.headers || {});
-  var hadToken = !!headers.Authorization;
-  var res;
   // ponytail: 120s abort — Render free sleeps + Deep+PPTX runs exceed 30s
   var timeoutId = null, ctrl = null;
   if (!opts.signal && typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
@@ -23,8 +23,9 @@ async function req(path, init, retried) {
     opts.signal = ctrl.signal;
     timeoutId = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 120000);
   }
+  var res;
   try {
-    res = await fetch(apiUrl(path), Object.assign({}, opts, { headers: headers }));
+    res = await fetch(apiUrl(path), Object.assign({}, opts, { headers: headers, credentials: "include" }));
   } catch (e) {
     if (timeoutId) clearTimeout(timeoutId);
     if (e && (e.name === "AbortError" || e.name === "TimeoutError")) throw new Error("Pluto is waking up (Render sleeps) or the reply is long — wait a minute and retry.");
@@ -32,18 +33,12 @@ async function req(path, init, retried) {
   }
   if (timeoutId) clearTimeout(timeoutId);
   if (res.status === 401 && !retried) {
-    /* A 401 with a presented token means that token is dead (revoked,
-     * or the server lost data/accounts.json after a restart without a
-     * persistent disk). Drop it before prompting: otherwise Cancel leaves
-     * the known-bad token behind and every later request 401-loops back
-     * into the dialog, which feels like "login never works, I must sign
-     * up again". After clearing, Cancel continues logged-out (visitor
-     * vault in open mode); a successful login stores the fresh token. */
-    if (hadToken) setToken("");
+    /* Cookie session is dead (logout, expiry, server data reset without
+     * a persistent disk). Prompt once via the login dialog; Cancel
+     * continues logged-out (visitor vault in open mode). */
     if (!_apiHooks.onUnauthorized) throw new Error("Authentication required.");
-    var tok = await _apiHooks.onUnauthorized("Log in to continue");
-    if (!tok) throw new Error("Authentication required.");
-    setToken(tok);
+    var ok = await _apiHooks.onUnauthorized("Log in to continue");
+    if (!ok) throw new Error("Authentication required.");
     try { if (_apiHooks.onSessionRefreshed) await _apiHooks.onSessionRefreshed(); } catch (e) {}
     return req(path, init, true);
   }
@@ -55,7 +50,7 @@ async function req(path, init, retried) {
   return await res.json();
 }
 function authedDownload(url, filename) {
-  fetch(apiUrl(url), { headers: authHeaders() }).then(function (res) {
+  fetch(apiUrl(url), { headers: authHeaders(), credentials: "include" }).then(function (res) {
     if (!res.ok) throw new Error(res.statusText);
     return res.blob();
   }).then(function (blob) {

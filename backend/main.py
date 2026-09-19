@@ -35,15 +35,61 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             "Public deployments must set PLUTO_AUTH_MODE=private and "
             "PLUTO_ACCESS_TOKENS."
         )
+        # Fail-closed on public hosts: open mode is for localhost/dev only.
+        # Operators who truly want a public open instance must opt in via
+        # PLUTO_ALLOW_OPEN=true (documented footgun, never the default).
+        try:
+            _allow_open = (os.getenv("PLUTO_ALLOW_OPEN", "") or "").strip().lower() in (
+                "1", "true", "yes", "on",
+            )
+            _on_hosted = bool((os.getenv("PORT", "") or "").strip()
+                              or (os.getenv("RENDER", "") or "").strip())
+            _origin = (os.getenv("PLUTO_FRONTEND_ORIGIN", "") or "").strip()
+            _public_origin = bool(_origin) and not any(
+                h in _origin for h in ("localhost", "127.0.0.1", "[::1]")
+            )
+            if (_on_hosted or _public_origin) and not _allow_open:
+                raise RuntimeError(
+                    "Refusing to start PLUTO_AUTH_MODE=open on a public host "
+                    "(PORT/RENDER set or non-localhost PLUTO_FRONTEND_ORIGIN). "
+                    "Set PLUTO_AUTH_MODE=private + PLUTO_ACCESS_TOKENS, or "
+                    "explicitly opt in with PLUTO_ALLOW_OPEN=true for a "
+                    "public demo."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
         try:
             from services.secrets import get_secret as _get_secret
 
             if (_get_secret("PLUTO_USER_ID", "") or "").strip():
+                _allow_shared = (os.getenv("PLUTO_ALLOW_SHARED_VAULT", "") or "").strip().lower() in (
+                    "1", "true", "yes", "on",
+                )
+                if not _allow_shared:
+                    # Shared vault in open mode on a public host silently
+                    # merges every logged-out visitor into one vault.
+                    _origin2 = (os.getenv("PLUTO_FRONTEND_ORIGIN", "") or "").strip()
+                    _hosted2 = bool((os.getenv("PORT", "") or "").strip()
+                                    or (os.getenv("RENDER", "") or "").strip())
+                    _public2 = bool(_origin2) and not any(
+                        h in _origin2 for h in ("localhost", "127.0.0.1", "[::1]")
+                    )
+                    if _hosted2 or _public2:
+                        raise RuntimeError(
+                            "PLUTO_USER_ID is set while PLUTO_AUTH_MODE=open on a "
+                            "public host — every logged-out visitor would share "
+                            "that vault. Unset PLUTO_USER_ID or opt in with "
+                            "PLUTO_ALLOW_SHARED_VAULT=true."
+                        )
                 logger.warning(
                     "PLUTO_USER_ID is set while PLUTO_AUTH_MODE=open — "
                     "every logged-out visitor without a Bearer token shares "
                     "that vault. Unset PLUTO_USER_ID on shared hosts."
                 )
+        except RuntimeError:
+            raise
         except Exception:
             pass
     try:
@@ -59,6 +105,16 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             "for hard abuse/billing enforcement.",
             _workers,
         )
+        _allow_mem = (os.getenv("PLUTO_ALLOW_MEMORY_LIMITER", "") or "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if not (os.getenv("REDIS_URL", "") or "").strip() and not _allow_mem:
+            raise RuntimeError(
+                "UVICORN_WORKERS>1 without REDIS_URL uses per-process "
+                "in-memory rate limits (over-blocks NAT, under-blocks "
+                "distributed abuse). Set REDIS_URL or explicitly opt in "
+                "with PLUTO_ALLOW_MEMORY_LIMITER=true for local dev."
+            )
         if _mode == "private" and not (os.getenv("REDIS_URL", "") or "").strip():
             raise RuntimeError(
                 "PLUTO_AUTH_MODE=private with UVICORN_WORKERS>1 requires REDIS_URL "
@@ -209,7 +265,7 @@ _ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 # Note: X-Forwarded-For is intentionally NOT allowlisted. Browsers must
 # never spoof it (rate-limit bypass when PLUTO_TRUST_PROXY=true);
 # proxies add it outside CORS, and the server still reads it.
-_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-Pluto-Visitor", "X-Request-Id"]
+_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-Pluto-Visitor", "X-Request-Id", "X-Pluto-Csrf"]
 
 app.add_middleware(
     CORSMiddleware,

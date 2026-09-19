@@ -76,15 +76,20 @@ def verify_access_token(token: object) -> Optional[str]:
 def verify_session_token(token: object) -> Optional[str]:
     """Verify an account session token; return its user id or None.
 
-    Never raises: registry trouble reads as "no session" (callers fall
-    through to the access-token check, then to the mode chain).
+    Registry trouble reads as "no session" (callers fall through to
+    the access-token check, then to the mode chain) — EXCEPT storage
+    outages (AccountUnavailable), which propagate so callers can 503
+    instead of silently logging the user out.
     """
     try:
         from services import accounts as accounts_svc
+        from services.accounts import AccountUnavailable
     except Exception:
         return None
     try:
         return accounts_svc.verify_session(token)
+    except AccountUnavailable:
+        raise
     except Exception:
         return None
 

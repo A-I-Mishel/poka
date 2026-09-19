@@ -1,7 +1,7 @@
 /* Pluto web client module: panels (view switching, server-data panels, mode toggles).
  * Split from the vanilla-JS monolith; behavior preserved.
  */
-import { $, toast, esc, fmtStamp, fmtSize } from "./ui.js";
+import { $, toast, esc, escapeAttr, fmtStamp, fmtSize } from "./ui.js";
 import { ic, IC, artIcon } from "./markdown.js";
 import { req, authedDownload } from "./api.js";
 import { S, chats, current, projects, savePrefs } from "./state.js";
@@ -108,7 +108,7 @@ var SECTIONS = {
         var title = x.query || x.title || "Untitled brief";
         var nsrc = (x.sources || []).length;
         var sub = (fmtStamp(x.created) ? fmtStamp(x.created) + " · " : "") + nsrc + " source" + (nsrc === 1 ? "" : "s");
-        return '<div class="card" data-title="' + esc(String(title).toLowerCase()) + '" data-bid="' + esc(x.id) + '">' + ic("flask") +
+        return '<div class="card" data-title="' + escapeAttr(String(title).toLowerCase()) + '" data-bid="' + escapeAttr(x.id) + '">' + ic("flask") +
           '<div class="g"><div class="t">' + esc(title) + '</div><div class="s">' + esc(sub) + "</div></div>" +
           '<span class="pill">Saved</span>' +
           '<button class="row-btn" data-brief="docx" title="Download Word document">' + IC.down + "</button>" +
@@ -133,12 +133,12 @@ var SECTIONS = {
       var rows = list.map(function (w) {
         var nsteps = (w.steps || []).length;
         var sub = nsteps + " step" + (nsteps === 1 ? "" : "s") + (w.description ? " · " + w.description : "");
-        return '<div class="card" data-wfid="' + esc(w.id) + '">' + ic("flask") +
+        return '<div class="card" data-wfid="' + escapeAttr(w.id) + '">' + ic("flask") +
           '<div class="g"><div class="t">' + esc(w.name || "Untitled") + '</div><div class="s">' + esc(sub) + "</div></div>" +
-          '<button class="row-btn second" data-wfrun="' + esc(w.id) + '" title="Run">▶</button>' +
-          '<button class="row-btn second" data-wfedit="' + esc(w.id) + '" title="Edit">✎</button>' +
-          '<button class="row-btn second" data-wfdup="' + esc(w.id) + '" title="Duplicate">⧉</button>' +
-          '<button class="row-btn" data-wfdel="' + esc(w.id) + '" title="Delete">✕</button></div>';
+          '<button class="row-btn second" data-wfrun="' + escapeAttr(w.id) + '" title="Run">▶</button>' +
+          '<button class="row-btn second" data-wfedit="' + escapeAttr(w.id) + '" title="Edit">✎</button>' +
+          '<button class="row-btn second" data-wfdup="' + escapeAttr(w.id) + '" title="Duplicate">⧉</button>' +
+          '<button class="row-btn" data-wfdel="' + escapeAttr(w.id) + '" title="Delete">✕</button></div>';
       }).join("");
       if (!list.length) rows = '<div class="sub" style="margin-top:16px">No workflows yet. Save a fixed tool sequence below and run it anytime.</div>';
       return "<h2>Workflows</h2><div class=\"sub\">Saved tool pipelines. Steps are JSON with {{input}} and {{steps.N.output}} templates; send_gmail is blocked.</div>" +
@@ -164,7 +164,7 @@ var SECTIONS = {
         return "<h2>" + esc(p.name || "Project") + "</h2><div class=\"sub\">Cannot load context: " + esc(e.message) + "</div>";
       }
       return "<h2>" + esc(p.name || "Project") + "</h2><div class=\"sub\">Context is sent with every message in this project.</div>" +
-        '<textarea class="notes-ta" id="projCtxTa" data-projid="' + esc(p.id) + '">' + esc(text) + "</textarea>" +
+        '<textarea class="notes-ta" id="projCtxTa" data-projid="' + escapeAttr(p.id) + '">' + esc(text) + "</textarea>" +
         '<div class="notes-actions"><button class="btn solid" id="projCtxSave">Save context</button></div>';
     }
   },
@@ -198,10 +198,10 @@ var SECTIONS = {
       var list = await req("/api/uploads");
       if (!Array.isArray(list)) list = [];
       var rows = list.map(function (f) {
-        return '<div class="card" data-up="' + esc(f.id) + '">' + ic("doc") +
+        return '<div class="card" data-up="' + escapeAttr(f.id) + '">' + ic("doc") +
           '<div class="g"><div class="t">' + esc(f.name) + '</div><div class="s">' + esc(f.kind || "file") + "</div></div>" +
           '<button class="row-btn" title="Download">' + IC.down + "</button>" +
-          '<button class="row-btn" data-delup="' + esc(f.id) + '" title="Delete">✕</button></div>';
+          '<button class="row-btn" data-delup="' + escapeAttr(f.id) + '" title="Delete">✕</button></div>';
       }).join("");
       if (!list.length) rows = '<div class="sub" style="margin-top:16px">No files yet. Attach one from the composer.</div>';
       return "<h2>Files</h2><div class=\"sub\">Documents shared in this workspace.</div><div class=\"cards\">" + rows + "</div>";
@@ -214,10 +214,10 @@ var SECTIONS = {
       if (!Array.isArray(list)) list = [];
       var rows = list.map(function (a) {
         var hint = (a.kind === "html") ? "HTML — download, then open in browser to run" : (a.sub || a.kind || "");
-        return '<div class="art" data-art="' + esc(a.id) + '" data-name="' + esc(a.name || "file") + '"><div class="th">' + IC[artIcon(a.kind)] + "</div>" +
+        return '<div class="art" data-art="' + escapeAttr(a.id) + '" data-name="' + escapeAttr(a.name || "file") + '"><div class="th">' + IC[artIcon(a.kind)] + "</div>" +
           '<div class="b"><div class="t">' + esc(a.name || "file") + '</div><div class="s">' + esc(hint) + "</div></div>" +
-          '<button class="row-btn second" data-regen="' + esc(a.id) + '" title="Regenerate">↻</button>' +
-          '<button class="row-btn" data-delart="' + esc(a.id) + '" title="Delete">✕</button></div>';
+          '<button class="row-btn second" data-regen="' + escapeAttr(a.id) + '" title="Regenerate">↻</button>' +
+          '<button class="row-btn" data-delart="' + escapeAttr(a.id) + '" title="Delete">✕</button></div>';
       }).join("");
       if (!list.length) rows = '<div class="sub" style="margin-top:16px">No artifacts yet. Ask Pluto to build a presentation or document.</div>';
       return "<h2>Artifacts</h2><div class=\"sub\">Generated documents, code, and visuals. Click to download.</div><div class=\"grid\">" + rows + "</div>";
@@ -239,7 +239,7 @@ var SECTIONS = {
         var label = x.title || x.url;
         return '<div class="card"><div class="card-ic">' + esc(String(label).charAt(0).toUpperCase()) + "</div>" +
           '<div class="g"><div class="t">' + esc(label) + '</div><div class="s">' + esc(x.domain || x.url) + "</div></div>" +
-          '<button class="row-btn" data-open="' + esc(x.url) + '" title="Open">' + IC.open + "</button></div>";
+          '<button class="row-btn" data-open="' + escapeAttr(x.url) + '" title="Open">' + IC.open + "</button></div>";
       }).join("");
       if (!items.length) rows = '<div class="sub" style="margin-top:16px">No cited sources yet. Use Search for answers with citations.</div>';
       return "<h2>Sources</h2><div class=\"sub\">Cited sources from your conversations.</div><div class=\"cards\">" + rows + "</div>";

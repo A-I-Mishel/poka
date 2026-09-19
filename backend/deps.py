@@ -235,14 +235,66 @@ def bearer_token(authorization: Optional[str]) -> Optional[str]:
     return value.strip()
 
 
+#: HttpOnly session cookie name (set by /api/auth/*, read here as
+#: Bearer fallback). Raw value is the same opaque `pluto_` token;
+#: only its SHA-256 persists server-side.
+SESSION_COOKIE = "pluto_session"
+
+#: Header required for cookie-authenticated unsafe methods (CSRF).
+CSRF_HEADER = "x-pluto-csrf"
+
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def session_token_from(request: Request, authorization: Optional[str]) -> tuple[Optional[str], str]:
+    """Resolve the session token: Bearer first, HttpOnly cookie fallback.
+
+    Returns (token, via) where via is "bearer", "cookie", or "".
+    Bearer stays for compat (tests, access tokens, migration); cookies
+    are the browser default so XSS cannot exfiltrate the session via
+    localStorage.
+    """
+    token = bearer_token(authorization)
+    if token:
+        return token, "bearer"
+    try:
+        cookie = request.cookies.get(SESSION_COOKIE)
+    except Exception:
+        cookie = None
+    if cookie and cookie.strip():
+        return cookie.strip(), "cookie"
+    return None, ""
+
+
+def _require_csrf(request: Request, via: str) -> None:
+    """Require a CSRF marker for cookie-authenticated unsafe methods."""
+    if via != "cookie":
+        return
+    if request.method.upper() not in _UNSAFE_METHODS:
+        return
+    try:
+        marker = (request.headers.get("x-pluto-csrf", "") or "").strip()
+    except Exception:
+        marker = ""
+    if marker != "1":
+        raise HTTPException(
+            status_code=403,
+            detail="Missing CSRF marker (send X-Pluto-Csrf: 1).",
+        )
+
+
 async def current_user(
     request: Request,
     authorization: Optional[str] = Header(default=None),
     x_pluto_visitor: Optional[str] = Header(default=None),
 ) -> UserContext:
     """FastAPI dependency: authenticate and bind the request user."""
+    presented, via = session_token_from(request, authorization)
+    # Cookie sessions on unsafe methods need an explicit CSRF marker —
+    # the cookie alone is not enough (cross-site form POSTs carry it).
+    _require_csrf(request, via)
     try:
-        result = authenticate(bearer_token(authorization))
+        result = authenticate(presented)
     except AuthRequired as e:
         raise HTTPException(status_code=401, detail=str(e))
     if result.identity.source == "ephemeral":
