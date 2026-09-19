@@ -6,6 +6,7 @@ import { escHtml } from "./markdown.js";
 import { AUTH_SEEN_KEY } from "./config.js";
 import { S, AUTH_MODE } from "./state.js";
 import { rawReq } from "./api.js";
+import { setToken, clearToken } from "./auth-store.js";
 
 var _authHooks = {};
 export function setAuthHooks(h) { _authHooks = h || {}; }
@@ -27,8 +28,9 @@ async function refreshMe() {
   var prev = ACCT.username;
   /* rawReq (not req()): req() would pop a nested login dialog on
    * 401, and a stale/revoked/wiped cookie session must not loop the
-   * dialog on every call. The session is an HttpOnly cookie (never in
-   * JS); a 401 here just means logged-out. */
+   * dialog on every call. Transport is cookie-first with a Bearer
+   * fallback (see auth-store.js): rawReq sends both, so a 401 here
+   * just means logged-out on every transport. */
   try {
     var res = await rawReq("/api/auth/me");
     if (res.status === 401) {
@@ -128,22 +130,22 @@ async function authSubmit(path) {
   }
   err.classList.add("hidden");
   try {
-    // Server sets the HttpOnly pluto_session cookie; the JSON token is
-    // ignored by the browser client (non-browser clients may use it as
-    // Bearer). Success = cookie present, so re-read /me for the name.
-    // A login 200 alone proves nothing when the cookie never sticks
-    // (cross-site SameSite=None;Secure, third-party cookies blocked, or
-    // a wiped server store): /me still 401s and ACCT.username stays "".
-    // Never report success in that case, or the caller retries once,
-    // 401s again, and the "Log in to continue" dialog loops forever
-    // behind a bogus "Signed in as you" toast.
-    await authCall(path, { username: u, password: p });
+    // Primary transport is the HttpOnly pluto_session cookie. The server
+    // ALSO returns the raw session token once in JSON: persist it as a
+    // Bearer fallback for cross-site deploys (Vercel + Render) where
+    // third-party cookies are blocked. Backend accepts Bearer first,
+    // cookie second (backend/deps.py session_token_from), so storing the
+    // token makes /me succeed even when the cookie never sticks.
+    var data = await authCall(path, { username: u, password: p });
+    if (data && data.token) setToken(data.token);
     await refreshMe();
     if (!ACCT.username) {
+      clearToken();
       throw new Error(
-        "Login succeeded but the session did not stick. The browser did not send the session cookie back — " +
-        "allow third-party cookies, check Vercel VITE_API_URL points at this API, " +
-        "and set Render PLUTO_TRUST_PROXY=true so SameSite=None; Secure is issued."
+        "Login succeeded but the session did not stick, even via the fallback token. " +
+        "The account may have been wiped by a server redeploy without persistent storage — " +
+        "try Sign up again with the same name. If it persists, check Vercel VITE_API_URL " +
+        "points at this API."
       );
     }
     settleAuth(true);
@@ -162,6 +164,7 @@ async function authSubmit(path) {
 }
 async function signOut() {
   try { await rawReq("/api/auth/logout", { method: "POST", body: "{}" }); } catch (e) {}
+  clearToken();
   ACCT.username = "";
   renderAcct();
   toast("Signed out");
@@ -241,7 +244,8 @@ async function submitPasswordChange() {
       try { detail = (await res.json()).detail || detail; } catch (e) {}
       throw new Error(detail);
     }
-    await res.json();
+    var changed = await res.json();
+    if (changed && changed.token) setToken(changed.token);
     hideAcct();
     toast("Password changed — other devices signed out");
   } catch (e) {

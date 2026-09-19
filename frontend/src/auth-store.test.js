@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { authHeaders, getToken, getVisitor, setToken } from "./auth-store.js";
+import { authHeaders, clearToken, getToken, getVisitor, setToken } from "./auth-store.js";
 
 function memoryStorage(seed = {}) {
   const m = new Map(Object.entries(seed));
@@ -19,19 +19,22 @@ describe("auth-store", () => {
     globalThis.localStorage = store;
   });
 
-  it("never persists sessions in JS (HttpOnly cookie mode)", () => {
-    setToken("abc");
+  it("persists the Bearer fallback token for cross-site cookie blocks", () => {
+    setToken("pluto_abc123");
+    expect(getToken()).toBe("pluto_abc123");
+    expect(store.getItem("pluto_token")).toBe("pluto_abc123");
+    clearToken();
     expect(getToken()).toBe("");
     expect(store.getItem("pluto_token")).toBe(null);
-    expect(store.getItem("poka_token")).toBe(null);
   });
 
-  it("clears legacy tokens once", () => {
+  it("clears legacy tokens but keeps the fallback token", () => {
     store.setItem("poka_token", "legacy-1");
-    store.setItem("pluto_token", "legacy-2");
-    expect(getToken()).toBe("");
-    expect(store.getItem("pluto_token")).toBe(null);
+    setToken("pluto_fallback");
+    expect(getToken()).toBe("pluto_fallback");
     expect(store.getItem("poka_token")).toBe(null);
+    expect(store.getItem("pluto_token")).toBe("pluto_fallback");
+    clearToken();
   });
 
   it("mints a stable 128-bit visitor id", () => {
@@ -40,10 +43,16 @@ describe("auth-store", () => {
     expect(getVisitor()).toBe(v1);
   });
 
-  it("builds cookie-session headers (visitor + CSRF, no Bearer)", () => {
-    const h = authHeaders();
-    expect(h.Authorization).toBe(undefined);
-    expect(h["X-Pluto-Csrf"]).toBe("1");
-    expect(h["X-Pluto-Visitor"]).toMatch(/^[0-9a-f]{32}$/);
+  it("builds session headers (visitor + CSRF, Bearer fallback when set)", () => {
+    clearToken();
+    const anon = authHeaders();
+    expect(anon.Authorization).toBe(undefined);
+    expect(anon["X-Pluto-Csrf"]).toBe("1");
+    expect(anon["X-Pluto-Visitor"]).toMatch(/^[0-9a-f]{32}$/);
+    setToken("pluto_abc123");
+    const authed = authHeaders();
+    expect(authed.Authorization).toBe("Bearer pluto_abc123");
+    expect(authed["X-Pluto-Csrf"]).toBe("1");
+    clearToken();
   });
 });

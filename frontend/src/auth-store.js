@@ -1,37 +1,65 @@
 // @ts-check
-/* Pluto web client module: auth-store (visitor storage + cookie-session headers).
- * Sessions live in an HttpOnly `pluto_session` cookie (set/cleared by
- * /api/auth/*) so injected JS cannot exfiltrate them. This module never
- * stores the session — getToken/setToken remain as migration shims that
- * clear any legacy localStorage token once, then report logged-out.
+/* Pluto web client module: auth-store (visitor storage + session transport).
+ *
+ * Primary transport is the HttpOnly `pluto_session` cookie (set/cleared by
+ * /api/auth/*) so injected JS cannot exfiltrate it. Browsers attach it
+ * automatically via credentials:"include".
+ *
+ * Cross-site fallback (Vercel UI + Render API): third-party cookies are
+ * routinely blocked, so a login 200 can succeed while /me still 401s and
+ * the UI loops on "Log in to continue". The server ALSO returns the raw
+ * session token once in JSON and accepts it as `Authorization: Bearer`
+ * (see backend/deps.py session_token_from). We persist that token as a
+ * fallback only — cookie first, Bearer when the cookie never sticks.
  */
 import { TOKEN_KEY, LEGACY_TOKEN_KEY, VISITOR_KEY } from "./config.js";
 
+var _memToken = "";
+
 function _clearLegacyTokens() {
   try {
-    localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch (e) {}
 }
 
-function getToken() {
-  // Migration shim: drop legacy Bearer tokens persisted before the
-  // HttpOnly-cookie switch, then always report empty (cookie is the
-  // source of truth; JS cannot read it by design).
-  _clearLegacyTokens();
-  return "";
+function _readStoredToken() {
+  try {
+    var t = localStorage.getItem(TOKEN_KEY) || "";
+    return typeof t === "string" ? t.trim() : "";
+  } catch (e) { return ""; }
 }
-function setToken() {
-  // No-op by design (kept for call-site compat): the session cookie is
-  // written by the server via Set-Cookie, not by JS.
+
+function getToken() {
+  // Cookie-first design: the HttpOnly cookie is the source of truth when
+  // present (JS cannot read it by design). The Bearer fallback is only
+  // consulted when cookies are blocked cross-site.
   _clearLegacyTokens();
+  if (_memToken) return _memToken;
+  var stored = _readStoredToken();
+  if (stored) _memToken = stored;
+  return stored;
+}
+function setToken(t) {
+  _clearLegacyTokens();
+  var v = typeof t === "string" ? t.trim() : "";
+  _memToken = v;
+  try {
+    if (v) localStorage.setItem(TOKEN_KEY, v);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch (e) {}
+}
+function clearToken() {
+  setToken("");
 }
 function authHeaders() {
   var h = {};
+  var tok = getToken();
+  if (tok) h["Authorization"] = "Bearer " + tok;
   var v = getVisitor();
   if (v) h["X-Pluto-Visitor"] = v;
   // Required for cookie-authenticated POST/PUT/PATCH/DELETE (see
-  // backend/deps.py _require_csrf). Safe to send always.
+  // backend/deps.py _require_csrf). Safe (and harmless for Bearer) to
+  // send always.
   h["X-Pluto-Csrf"] = "1";
   return h;
 }
@@ -62,4 +90,4 @@ function getVisitor() {
   } catch (e) { return ""; }
 }
 
-export { getToken, setToken, authHeaders, getVisitor };
+export { getToken, setToken, clearToken, authHeaders, getVisitor };

@@ -135,8 +135,10 @@ check("setTIERS live binding", state2.TIERS.join() === "t1");
 state.setTIERS([]);
 
 // 4. api 401 flow uses hooks (dependency inversion): first 401, then ok.
-// Cookie sessions: no Bearer juggling — the hook re-prompts login,
-// then the retry succeeds with the fresh cookie attached by the browser.
+// Transport is cookie-first with a Bearer fallback (auth-store.js):
+// the hook re-prompts login, then the retry succeeds with the fresh
+// cookie attached by the browser — or the Bearer fallback when
+// third-party cookies are blocked cross-site (Vercel + Render).
 let calls = 0;
 globalThis.fetch = async () => {
   calls += 1;
@@ -151,7 +153,14 @@ api.setApiHooks({
 });
 const out = await api.req("/api/chats", { method: "GET" });
 check("401 hook retry succeeds", out && out.ok === true);
-check("no Bearer token in JS (cookie mode)", authStore.getToken() === "");
+// Bearer fallback store: empty by default, round-trips when set (login
+// persists the JSON token so /me succeeds even if cookies are blocked).
+check("fallback token empty by default", authStore.getToken() === "");
+authStore.setToken("pluto_smoke");
+check("fallback token round-trips", authStore.getToken() === "pluto_smoke");
+check("fallback token sent as Bearer", authStore.authHeaders().Authorization === "Bearer pluto_smoke");
+authStore.clearToken();
+check("fallback token clears", authStore.getToken() === "");
 check("fetch called twice", calls === 2);
 
 // 5. Pure rendering still correct through the module graph.
