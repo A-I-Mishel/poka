@@ -48,7 +48,9 @@ def _run_all_users_hygiene() -> None:
             # Prune stale uploads (7 days, unreferenced)
             from backend.deps import _referenced_upload_ids
             referenced = _referenced_upload_ids(user_store)
-            file_store.prune_stale_uploads(referenced_ids=referenced)
+            # Fail-closed: skip pruning when chat load failed (None).
+            if referenced is not None:
+                file_store.prune_stale_uploads(referenced_ids=referenced)
 
             # Prune orphan files (7 days)
             file_store.prune_orphan_files()
@@ -71,9 +73,13 @@ def start_scheduler() -> None:
     with _scheduler_lock:
         if _started:
             return
+        try:
+            raw_interval = get_secret("PLUTO_HYGIENE_INTERVAL_SECONDS", str(STORAGE_HYGIENE_INTERVAL_SECONDS)) or str(STORAGE_HYGIENE_INTERVAL_SECONDS)
+            interval = max(60.0, float(raw_interval))
+        except (ValueError, TypeError):
+            logger.warning("bad PLUTO_HYGIENE_INTERVAL_SECONDS; using default %s", STORAGE_HYGIENE_INTERVAL_SECONDS)
+            interval = max(60.0, float(STORAGE_HYGIENE_INTERVAL_SECONDS))
         _started = True
-
-        interval = max(60.0, float(get_secret("PLUTO_HYGIENE_INTERVAL_SECONDS", str(STORAGE_HYGIENE_INTERVAL_SECONDS)) or str(STORAGE_HYGIENE_INTERVAL_SECONDS)))
         # ±10% jitter avoids thundering herd when N workers/containers
         # restart together (Render redeploy, UVICORN_WORKERS>1).
         try:
@@ -88,15 +94,25 @@ def start_scheduler() -> None:
             logger.debug("hygiene jitter parse failed; using base interval", exc_info=True)
 
         _scheduler = BackgroundScheduler(daemon=True)
-        _scheduler.add_job(
-            _run_all_users_hygiene,
-            IntervalTrigger(seconds=interval, jitter=int(min(300, interval * 0.1))),
-            id="storage_hygiene",
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=300,
-        )
-        _scheduler.start()
+        try:
+            _scheduler.add_job(
+                _run_all_users_hygiene,
+                IntervalTrigger(seconds=interval, jitter=int(min(300, interval * 0.1))),
+                id="storage_hygiene",
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=300,
+            )
+            _scheduler.start()
+        except Exception:
+            logger.warning("background scheduler failed to start", exc_info=True)
+            try:
+                _scheduler.shutdown(wait=False)
+            except Exception:
+                logger.debug("scheduler shutdown after failed start failed", exc_info=True)
+            _scheduler = None
+            _started = False
+            return
         logger.info("background scheduler started (hygiene interval=%.0fs)", interval)
 
 

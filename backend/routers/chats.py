@@ -86,8 +86,18 @@ def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_
     # ponytail: keep recents stable on browse; only archive current if it
     # has diverged from every archived chat (unsaved edit/new chat).
     if [m for m in current if isinstance(m, dict)]:
+        def _content(msgs: list) -> list:
+            # Compare content only (exclude rotating approval tokens).
+            out = []
+            for m in msgs:
+                if not isinstance(m, dict):
+                    continue
+                d = {k: v for k, v in m.items() if k != "pending_approvals"}
+                out.append(d)
+            return out
+
         already_saved = any(
-            isinstance(c, dict) and c.get("messages") == current for c in chats
+            isinstance(c, dict) and _content(c.get("messages") or []) == _content(current) for c in chats
         )
         if not already_saved:
             # reuse origin id when current is an edited version of an existing chat

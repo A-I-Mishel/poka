@@ -30,6 +30,13 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     from services.identity import auth_mode as _auth_mode
 
     _mode = _auth_mode()
+    if _mode == "private":
+        _tokens = (get_secret("PLUTO_ACCESS_TOKENS", "") or "").strip()
+        if not _tokens:
+            raise RuntimeError(
+                "PLUTO_AUTH_MODE=private but PLUTO_ACCESS_TOKENS is empty — "
+                "no one could log in. Set PLUTO_ACCESS_TOKENS."
+            )
     if _mode == "open":
         logger.warning(
             "PLUTO_AUTH_MODE=open — unauthenticated access enabled. "
@@ -60,7 +67,8 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         except RuntimeError:
             raise
         except Exception:
-            logger.debug("public-host open-mode check failed", exc_info=True)
+            logger.warning("public-host open-mode check failed; failing closed", exc_info=True)
+            raise RuntimeError("Startup safety check failed; refusing to start open mode.")
         try:
             if (get_secret("PLUTO_USER_ID", "") or "").strip():
                 _allow_shared = (get_secret("PLUTO_ALLOW_SHARED_VAULT", "") or "").strip().lower() in (
@@ -90,7 +98,8 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         except RuntimeError:
             raise
         except Exception:
-            logger.debug("shared-vault open-mode check failed", exc_info=True)
+            logger.warning("shared-vault open-mode check failed; failing closed", exc_info=True)
+            raise RuntimeError("Startup safety check failed; refusing to start open mode.")
     try:
         _workers = int(get_secret("UVICORN_WORKERS", "1") or "1")
     except (TypeError, ValueError):
@@ -185,6 +194,10 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             # degrades to per-process limits in private mode.
             try:
                 redis_limiter.check("__startup__", "chat")
+                try:
+                    redis_limiter.reset("__startup__")
+                except Exception:
+                    logger.debug("startup probe reset failed", exc_info=True)
             except Exception as _e:
                 if _mode == "private":
                     raise RuntimeError(f"REDIS_URL unreachable in private mode: {_e}") from _e
@@ -287,6 +300,10 @@ async def _security_headers(request, call_next):  # type: ignore[no-untyped-def]
     response.headers.setdefault(
         "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
     )
+    response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     return response
 
 # Optional host-header validation (set PLUTO_TRUSTED_HOSTS="api.example.com,*.example.com")
@@ -328,6 +345,14 @@ for _router in (
 def root():
     """API index (the UI is served separately in development)."""
     return {"ok": True, "name": "Pluto API", "docs": None if _is_private else "/docs"}
+
+
+@app.get("/api/{_rest:path}")
+def _api_fallback(_rest: str):
+    """Guarantee JSON 404 for unknown /api/* paths (StaticFiles would 200 index.html)."""
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(status_code=404, content={"detail": "Not found."})
 
 
 # Single-server demo mode: when frontend/dist exists, serve it.

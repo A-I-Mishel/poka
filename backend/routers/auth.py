@@ -82,7 +82,13 @@ def _auth_gate(request: Request) -> None:
 
     peer = request.client.host if request.client else ""
     ip = extract_client_ip(request.headers.get("x-forwarded-for", ""), peer)
-    verdict = get_rate_limiter().check("auth:%s" % ip, "auth")
+    if not ip or ip == "unknown":
+        # Don't collapse all unknown-IP clients into one "auth:unknown"
+        # bucket (DoS). Use peer-or-random so failures don't block others.
+        import secrets as _secrets
+
+        ip = (peer or "").strip() or ("anon-" + _secrets.token_hex(4))
+    verdict = get_rate_limiter().check("auth:%s" % ip[:45], "auth")
     if not verdict.allowed:
         obs_event("ratelimit.deny", action="auth")
         raise HTTPException(

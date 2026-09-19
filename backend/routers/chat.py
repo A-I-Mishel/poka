@@ -180,7 +180,11 @@ def stream(req: schemas.SendRequest, request: Request,
             yield "data: " + json.dumps(
                 {"type": "error", "detail": outcome["error"]}) + "\n\n"
             return
-        payload = outcome["payload"]
+        payload = outcome.get("payload")
+        if not isinstance(payload, dict):
+            yield "data: " + json.dumps(
+                {"type": "error", "detail": "Worker timed out; please retry."}) + "\n\n"
+            return
         yield "data: " + json.dumps({
             "type": "meta",
             "active_tier": payload.get("active_tier", ""),

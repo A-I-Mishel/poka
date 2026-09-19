@@ -57,11 +57,17 @@ def _now() -> float:
 
 def _prune(vault: Dict[str, Any], now: float) -> bool:
     """Drop consumed/rejected/expired records. Returns True when changed."""
-    kept = [
-        a for a in vault.get("approvals", [])
-        if isinstance(a, dict) and a.get("status") == "pending"
-        and float(a.get("expires", 0) or 0) > now
-    ]
+    kept = []
+    for a in vault.get("approvals", []):
+        try:
+            if not isinstance(a, dict) or a.get("status") != "pending":
+                continue
+            if float(a.get("expires", 0) or 0) <= now:
+                continue
+            kept.append(a)
+        except (ValueError, TypeError):
+            # Malformed entry: drop it rather than aborting whole vault op.
+            continue
     changed = len(kept) != len(vault.get("approvals", []))
     vault["approvals"] = kept
     return changed
@@ -161,12 +167,18 @@ def consume_approval(user_id: Any, tool: str, args: Dict[str, Any],
                     continue
                 if entry.get("status") != "pending":
                     continue
-                if float(entry.get("expires", 0) or 0) <= now:
+                # Match token first so an expired unrelated entry never
+                # shadows a valid token for a different entry.
+                if entry.get("token_hash") != want:
+                    continue
+                try:
+                    expired = float(entry.get("expires", 0) or 0) <= now
+                except (ValueError, TypeError):
+                    expired = True
+                if expired:
                     entry["status"] = "expired"
                     _save(user_id, vault)
                     return False, "expired"
-                if entry.get("token_hash") != want:
-                    continue
                 if entry.get("tool") != tool or entry.get("args_key") != key:
                     return False, "mismatch"
                 entry["status"] = "consumed"
@@ -194,13 +206,16 @@ def get_pending(user_id: Any, approval_id: str) -> Optional[Dict[str, Any]]:
         vault = _load(user_id)
         now = _now()
         for entry in vault.get("approvals", []):
-            if (isinstance(entry, dict) and entry.get("id") == approval_id
-                    and entry.get("status") == "pending"
-                    and float(entry.get("expires", 0) or 0) > now):
-                return {"id": entry["id"], "tool": entry.get("tool", ""),
-                        "summary": entry.get("summary", ""),
-                        "created": entry.get("created", 0),
-                        "expires": entry.get("expires", 0)}
+            try:
+                if (isinstance(entry, dict) and entry.get("id") == approval_id
+                        and entry.get("status") == "pending"
+                        and float(entry.get("expires", 0) or 0) > now):
+                    return {"id": entry["id"], "tool": entry.get("tool", ""),
+                            "summary": entry.get("summary", ""),
+                            "created": entry.get("created", 0),
+                            "expires": entry.get("expires", 0)}
+            except (ValueError, TypeError):
+                continue
         return None
     except Exception:
         return None
@@ -215,13 +230,18 @@ def list_pending(user_id: Any, rotate_tokens: bool = False) -> List[Dict[str, An
     try:
         if not rotate_tokens:
             vault = _load(user_id)
-            return [{"id": a["id"], "tool": a.get("tool", ""),
-                     "summary": a.get("summary", ""),
-                     "created": a.get("created", 0),
-                     "expires": a.get("expires", 0)}
-                    for a in vault.get("approvals", [])
-                    if isinstance(a, dict) and a.get("status") == "pending"
-                    and float(a.get("expires", 0) or 0) > now and a.get("id")]
+            out: List[Dict[str, Any]] = []
+            for a in vault.get("approvals", []):
+                try:
+                    if (isinstance(a, dict) and a.get("status") == "pending"
+                            and float(a.get("expires", 0) or 0) > now and a.get("id")):
+                        out.append({"id": a["id"], "tool": a.get("tool", ""),
+                                    "summary": a.get("summary", ""),
+                                    "created": a.get("created", 0),
+                                    "expires": a.get("expires", 0)})
+                except (ValueError, TypeError):
+                    continue
+            return out
         with path_lock(path):
             vault = _load(user_id)
             _prune(vault, now)
@@ -262,11 +282,14 @@ def peek_args(user_id: Any, approval_id: str) -> Dict[str, Any]:
         vault = _load(user_id)
         now = _now()
         for entry in vault.get("approvals", []):
-            if (isinstance(entry, dict) and entry.get("id") == approval_id
-                    and entry.get("status") == "pending"
-                    and float(entry.get("expires", 0) or 0) > now):
-                stored = entry.get("args")
-                return dict(stored) if isinstance(stored, dict) else {}
+            try:
+                if (isinstance(entry, dict) and entry.get("id") == approval_id
+                        and entry.get("status") == "pending"
+                        and float(entry.get("expires", 0) or 0) > now):
+                    stored = entry.get("args")
+                    return dict(stored) if isinstance(stored, dict) else {}
+            except (ValueError, TypeError):
+                continue
         return {}
     except Exception:
         return {}

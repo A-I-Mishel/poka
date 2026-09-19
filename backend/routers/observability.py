@@ -28,8 +28,8 @@ _start_time = time.time()
 
 
 @router.get("/metrics")
-def metrics():
-    """Prometheus metrics exposition endpoint (public, like /api/health)."""
+def metrics(ctx: UserContext = Depends(current_user)):
+    """Prometheus metrics exposition (authenticated to avoid cardinality scraping)."""
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 

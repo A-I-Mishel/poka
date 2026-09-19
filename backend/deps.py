@@ -63,9 +63,14 @@ _last_hygiene: Dict[str, float] = {}
 # process. Invalidated on explicit write operations (not on reads).
 # TTL fallback (5 min) handles external mutations (manual vault edits).
 # Cache key includes data root path to support tests with tmp dirs.
+# Bounded to 256 entries (FIFO evict) so client-minted visitor ids
+# cannot grow RAM without bound. Guarded by a lock (check-then-set race).
 _user_store_cache: Dict[str, tuple[float, UserStore]] = {}
 _file_store_cache: Dict[str, tuple[float, FileStore]] = {}
+_store_cache_lock = threading.Lock()
 _STORE_CACHE_TTL = 300.0  # 5 minutes
+_STORE_CACHE_MAX = 256
+_HYGIENE_MAX_TRACKED = 2048
 
 
 def _cache_key(user_id: str, run_migration: bool = False) -> str:
@@ -79,11 +84,18 @@ def _get_user_store(user_id: str, run_migration: bool) -> UserStore:
     """Get cached UserStore or create new one with migration flag."""
     now = time.time()
     key = _cache_key(user_id, run_migration)
-    cached = _user_store_cache.get(key)
-    if cached and now - cached[0] < _STORE_CACHE_TTL:
-        return cached[1]
+    with _store_cache_lock:
+        cached = _user_store_cache.get(key)
+        if cached and now - cached[0] < _STORE_CACHE_TTL:
+            return cached[1]
     store = UserStore(user_id, run_migration=run_migration)
-    _user_store_cache[key] = (now, store)
+    with _store_cache_lock:
+        if len(_user_store_cache) >= _STORE_CACHE_MAX:
+            try:
+                _user_store_cache.pop(next(iter(_user_store_cache)))
+            except StopIteration:
+                pass
+        _user_store_cache[key] = (now, store)
     return store
 
 
@@ -91,23 +103,33 @@ def _get_file_store(user_id: str) -> FileStore:
     """Get cached FileStore or create new one."""
     now = time.time()
     key = _cache_key(user_id)
-    cached = _file_store_cache.get(key)
-    if cached and now - cached[0] < _STORE_CACHE_TTL:
-        return cached[1]
+    with _store_cache_lock:
+        cached = _file_store_cache.get(key)
+        if cached and now - cached[0] < _STORE_CACHE_TTL:
+            return cached[1]
     store = FileStore(user_id)
-    _file_store_cache[key] = (now, store)
+    with _store_cache_lock:
+        if len(_file_store_cache) >= _STORE_CACHE_MAX:
+            try:
+                _file_store_cache.pop(next(iter(_file_store_cache)))
+            except StopIteration:
+                pass
+        _file_store_cache[key] = (now, store)
     return store
 
 
 def invalidate_store_caches(user_id: str) -> None:
     """Invalidate cached stores for a user (call after write operations)."""
-    # Remove all cache entries for this user_id (across all data roots)
-    for key in list(_user_store_cache.keys()):
-        if key.startswith(f"{user_id}:"):
-            _user_store_cache.pop(key, None)
-    for key in list(_file_store_cache.keys()):
-        if key.startswith(f"{user_id}:"):
-            _file_store_cache.pop(key, None)
+    # Remove all cache entries for this user_id (across all data roots).
+    # Key shape is f"{user_id}:{root}:{flag}" where root may contain ":".
+    prefix = f"{user_id}:"
+    with _store_cache_lock:
+        for key in list(_user_store_cache.keys()):
+            if key == user_id or key.startswith(prefix):
+                _user_store_cache.pop(key, None)
+        for key in list(_file_store_cache.keys()):
+            if key == user_id or key.startswith(prefix):
+                _file_store_cache.pop(key, None)
 
 
 def clear_all_store_caches() -> None:
@@ -116,14 +138,14 @@ def clear_all_store_caches() -> None:
     _file_store_cache.clear()
 
 
-def _referenced_upload_ids(user_store: UserStore) -> Set[str]:
-    """Upload IDs still cited by the user's chats (never raises)."""
+def _referenced_upload_ids(user_store: UserStore) -> Optional[Set[str]]:
+    """Upload IDs still cited by the user's chats (None on load failure)."""
     found: Set[str] = set()
     try:
         stored, _warnings = user_store.load_chats()
     except Exception:
         logger.debug("referenced-upload-ids load_chats failed", exc_info=True)
-        return found
+        return None
     try:
         blobs = []
         if isinstance(stored, dict):
@@ -165,13 +187,26 @@ def _run_storage_hygiene(user_store: UserStore, file_store: FileStore) -> None:
         if now - last < STORAGE_HYGIENE_INTERVAL_SECONDS:
             return
         _last_hygiene[user_id] = now
+        # Bound tracking dict so visitor IDs cannot grow it forever.
+        if len(_last_hygiene) > _HYGIENE_MAX_TRACKED:
+            try:
+                oldest = min(_last_hygiene, key=lambda k: _last_hygiene[k])
+                _last_hygiene.pop(oldest, None)
+            except ValueError:
+                pass
     try:
         try:
             file_store.prune_stale_outputs()
         except Exception:
             logger.debug("hygiene prune_stale_outputs failed", exc_info=True)
         try:
-            file_store.prune_stale_uploads(referenced_ids=_referenced_upload_ids(user_store))
+            referenced = _referenced_upload_ids(user_store)
+            # Fail-closed: on transient read error (None) skip pruning so
+            # all uploads are not treated as unreferenced and mass-deleted.
+            if referenced is not None:
+                file_store.prune_stale_uploads(referenced_ids=referenced)
+            else:
+                logger.debug("hygiene prune_stale_uploads skipped (load_chats failed)")
         except Exception:
             logger.debug("hygiene prune_stale_uploads failed", exc_info=True)
         try:
@@ -187,7 +222,6 @@ def _visitor_id(raw: Optional[str]) -> Optional[str]:
     text = (raw or "").strip()
     if not _VISITOR_RE.match(text):
         return None
-    text = text.strip(" .")
     return text or None
 
 
@@ -236,7 +270,11 @@ def bearer_token(authorization: Optional[str]) -> Optional[str]:
     scheme, _, value = authorization.partition(" ")
     if scheme.lower() != "bearer" or not value.strip():
         return None
-    return value.strip()
+    token = value.strip()
+    # Reject internal whitespace ("Bearer a b") — tokens are opaque, no spaces.
+    if any(ch.isspace() for ch in token):
+        return None
+    return token
 
 
 #: HttpOnly session cookie name (set by /api/auth/*, read here as
@@ -303,6 +341,9 @@ async def current_user(
         result = authenticate(presented)
     except AuthRequired as e:
         raise HTTPException(status_code=401, detail=str(e))
+    except Exception:
+        logger.debug("authenticate failed", exc_info=True)
+        raise HTTPException(status_code=500, detail="Authentication service unavailable.")
     if result.identity.source == "ephemeral":
         # Open mode without a credential: pin the browser to one vault
         # via its visitor id instead of a fresh random id per request

@@ -108,7 +108,6 @@ def download_artifact(artifact_id: str, ctx: UserContext = Depends(current_user)
 @router.post("/{artifact_id}/regenerate", response_model=schemas.ArtifactMeta)
 def regenerate_artifact(artifact_id: str, ctx: UserContext = Depends(current_user)):
     """Re-run the saved spec into a NEW artifact (original preserved)."""
-    check_generate_limit(ctx)
     try:
         eligible = research_svc.can_regenerate(ctx.file_store, artifact_id)
     except Exception:
@@ -117,6 +116,7 @@ def regenerate_artifact(artifact_id: str, ctx: UserContext = Depends(current_use
         raise HTTPException(
             status_code=400,
             detail="This file cannot be regenerated (no saved settings).")
+    check_generate_limit(ctx)
     try:
         new_meta = research_svc.regenerate_artifact(ctx.file_store, artifact_id)
     except ValueError as e:

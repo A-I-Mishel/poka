@@ -112,7 +112,7 @@ async def upload(file: UploadFile = File(...),
 @router.get("", response_model=list[schemas.UploadMeta])
 def list_uploads(ctx: UserContext = Depends(current_user)):
     """List the user's vaulted uploads."""
-    _check_upload_rate_limit(ctx)
+    # Reads must not burn the `upload` write quota.
     try:
         metas = ctx.file_store.list_uploads()
     except (StorageError, FileValidationError):
@@ -141,7 +141,7 @@ def download_upload(upload_id: str, ctx: UserContext = Depends(current_user)):
     attachment with nosniff + sandbox so it can never execute in the
     UI origin (stored-XSS guard — see backend/main security headers).
     """
-    _check_upload_rate_limit(ctx)
+    # Reads must not burn the `upload` write quota.
     try:
         meta = ctx.file_store.get_upload(upload_id)
     except (StorageError, FileValidationError):

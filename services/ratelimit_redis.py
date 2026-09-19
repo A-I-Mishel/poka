@@ -4,6 +4,7 @@ Uses Redis sorted sets for sliding-window rate limiting.
 Key format: "rl:{action}:{identity}" with scores as timestamps.
 """
 
+import logging
 import time
 from typing import Dict, Optional, Tuple
 
@@ -12,6 +13,8 @@ import redis
 from services.limits import RATE_LIMITS
 from services.ratelimit import RateLimitResult, RateLimiter
 from services.secrets import get_secret
+
+logger = logging.getLogger(__name__)
 
 
 class RedisRateLimiter(RateLimiter):
@@ -40,15 +43,21 @@ class RedisRateLimiter(RateLimiter):
         now = time.time()
         key = self._key(user_id, action)
         window_start = now - window
+        # Unique member per check (timestamp + nonce) so same-tick checks
+        # don't collapse onto one member and undercount.
+        import uuid as _uuid
+        member = f"{now:.6f}:{_uuid.uuid4().hex[:12]}"
 
-        # Use pipeline for atomic operations
+        # Use pipeline for atomic operations. NOTE: we add the new entry
+        # optimistically, then remove it again on deny so rejected callers
+        # don't consume quota / extend their own block.
         pipe = self._redis.pipeline()
         # Remove expired entries
         pipe.zremrangebyscore(key, 0, window_start)
-        # Count current entries
+        # Count current entries (pre-add)
         pipe.zcard(key)
-        # Add new entry (timestamp as both member and score)
-        pipe.zadd(key, {str(now): now})
+        # Add new entry
+        pipe.zadd(key, {member: now})
         # Set expiry on the key (window + 1 second buffer)
         pipe.expire(key, int(window) + 1)
         results = pipe.execute()
@@ -56,6 +65,12 @@ class RedisRateLimiter(RateLimiter):
         current_count = results[1]
 
         if current_count >= max_calls:
+            # Denied: roll back our optimistic add so denials don't extend
+            # the block / drift retry_after.
+            try:
+                self._redis.zrem(key, member)
+            except Exception:
+                logger.debug("rate-limit rollback failed", exc_info=True)
             # Get oldest entry to calculate retry-after
             oldest = self._redis.zrange(key, 0, 0, withscores=True)
             if oldest:
