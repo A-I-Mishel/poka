@@ -1,5 +1,26 @@
 # Load Testing CI Configuration
 
+## Required secrets (Settings → Secrets and variables → Actions)
+
+Load scenarios drive real chat/stream/KB tiers, so the server under test
+must have at least one model tier configured. Without keys every scenario
+fails and the SLO gates go red — the workflow skips instead (not red):
+
+| Secret | Used for |
+|--------|----------|
+| `GEMINI_API_KEY` | Primary tier + KB embeddings (gates all three load jobs) |
+| `GROQ_API_KEY` | Fallback tier (optional) |
+| `OPENROUTER_API_KEY` | Fallback tiers (optional) |
+| `GITHUB_MODELS_TOKEN` | Fallback tier (optional) |
+| `MISTRAL_API_KEY` | Fallback tier (optional) |
+| `NVIDIA_API_KEY` | Fallback tier (optional) |
+| `PLUTO_LOAD_TEST_URL` | Remote target for smoke test (optional; default: local server) |
+| `K6_PROJECT_ID` | k6 Cloud reporting (optional) |
+
+Add at least `GEMINI_API_KEY` to enable the jobs. Each job also runs a
+tiers preflight (`/api/health` must list non-empty `tiers`) that fails
+fast with a clear message instead of burning minutes on doomed scenarios.
+
 ## GitHub Actions Workflow
 
 ### `.github/workflows/load-test.yml`
@@ -42,7 +63,7 @@ env:
   K6_PROJECT_ID: ${{ secrets.K6_PROJECT_ID }}
 
 jobs:
-  # Quick smoke test on every PR
+  # Quick smoke test on every PR (local server unless PLUTO_LOAD_TEST_URL is set)
   smoke-test:
     name: Smoke Test (10 VUs, 30s)
     runs-on: ubuntu-latest
@@ -52,6 +73,19 @@ jobs:
 
       - name: Set up k6
         uses: grafana/k6-action@v0.2.0
+
+      - name: Set up Python (local server only)
+        ...
+
+      - name: Install backend deps (local server only)
+        run: |
+          pip install -r requirements.lock
+
+      - name: Start Pluto server (local, background)
+        run: |
+          nohup uvicorn backend.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+          sleep 10
+          curl -f http://localhost:8000/api/health || (cat server.log && exit 1)
 
       - name: Run smoke test
         run: |
@@ -75,7 +109,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.lock
           pip install -e .
 
       - name: Start Pluto server (background)

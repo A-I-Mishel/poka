@@ -33,6 +33,17 @@ on:
 env:
   BASE_URL: ${{ secrets.PLUTO_LOAD_TEST_URL || 'http://localhost:8000' }}
   K6_PROJECT_ID: ${{ secrets.K6_PROJECT_ID }}
+  # LLM provider keys for the load-test server. Empty when unset (server
+  # boots with no tiers). Jobs that need live tiers are skipped unless
+  # GEMINI_API_KEY is set — otherwise every chat scenario fails and the
+  # SLOs burn minutes to report the obvious. Add keys under
+  # Settings → Secrets and variables → Actions to enable these jobs.
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  GITHUB_MODELS_TOKEN: ${{ secrets.GITHUB_MODELS_TOKEN }}
+  MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+  NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
 
 jobs:
   # Quick smoke test on every PR
@@ -40,11 +51,44 @@ jobs:
     name: Smoke Test (10 VUs, 30s)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Needs model tiers: a remote URL secret, or keys for a local server.
+    # Skips (instead of red) when neither is configured.
+    if: ${{ secrets.PLUTO_LOAD_TEST_URL != '' || secrets.GEMINI_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up k6
         uses: grafana/k6-action@v0.2.0
+
+      - name: Set up Python (local server only)
+        if: ${{ secrets.PLUTO_LOAD_TEST_URL == '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend deps (local server only)
+        if: ${{ secrets.PLUTO_LOAD_TEST_URL == '' }}
+        run: pip install -r requirements.lock
+
+      - name: Start Pluto server (local, background)
+        if: ${{ secrets.PLUTO_LOAD_TEST_URL == '' }}
+        run: |
+          nohup uvicorn backend.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+          sleep 10
+          curl -f http://localhost:8000/api/health || (cat server.log && exit 1)
+
+      - name: Verify model tiers (local server only, fail fast)
+        if: ${{ secrets.PLUTO_LOAD_TEST_URL == '' }}
+        run: |
+          python -c "
+          import json, sys, urllib.request
+          with urllib.request.urlopen('http://localhost:8000/api/health', timeout=15) as r:
+              tiers = json.load(r).get('tiers') or []
+          if not tiers:
+              print('No model tiers configured — set GEMINI_API_KEY (or another provider key) in Secrets to run load tests.')
+              sys.exit(1)
+          print('Tiers ready: %s' % ', '.join(tiers))
+          "
 
       - name: Run smoke test
         run: |
@@ -59,7 +103,7 @@ jobs:
     name: Full Load Test (${{ github.event.inputs.vus || 50 }} VUs, ${{ github.event.inputs.duration || '5m' }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.GEMINI_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,6 +120,18 @@ jobs:
           nohup uvicorn backend.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
           sleep 10
           curl -f http://localhost:8000/api/health || (cat server.log && exit 1)
+
+      - name: Verify model tiers (fail fast when unconfigured)
+        run: |
+          python -c "
+          import json, sys, urllib.request
+          with urllib.request.urlopen('http://localhost:8000/api/health', timeout=15) as r:
+              tiers = json.load(r).get('tiers') or []
+          if not tiers:
+              print('No model tiers configured — set GEMINI_API_KEY (or another provider key) in Secrets to run load tests.')
+              sys.exit(1)
+          print('Tiers ready: %s' % ', '.join(tiers))
+          "
 
       - name: Run load test
         run: |
@@ -136,6 +192,8 @@ jobs:
     name: Locust Test (Python)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Same tier requirement as the k6 jobs: skip (not red) without keys.
+    if: ${{ secrets.GEMINI_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -154,6 +212,18 @@ jobs:
           nohup uvicorn backend.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
           sleep 10
           curl -f http://localhost:8000/api/health || (cat server.log && exit 1)
+
+      - name: Verify model tiers (fail fast when unconfigured)
+        run: |
+          python -c "
+          import json, sys, urllib.request
+          with urllib.request.urlopen('http://localhost:8000/api/health', timeout=15) as r:
+              tiers = json.load(r).get('tiers') or []
+          if not tiers:
+              print('No model tiers configured — set GEMINI_API_KEY (or another provider key) in Secrets to run load tests.')
+              sys.exit(1)
+          print('Tiers ready: %s' % ', '.join(tiers))
+          "
 
       - name: Run Locust headless
         run: |
