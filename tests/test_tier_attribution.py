@@ -95,10 +95,12 @@ def test_no_provider_leaves_box_for_caller():
 
 
 def _research_answer(monkeypatch, reflect=None):
+    import agent.answer as answer_mod
     import agent.runtime as runtime
 
     if reflect is not None:
-        monkeypatch.setattr(runtime, "reflect_and_improve", reflect)
+        # Patch where _reflect_with_fallback looks it up.
+        monkeypatch.setattr(answer_mod, "reflect_and_improve", reflect)
     states = {
         "tier-a": RaisingLLM([]),
         "tier-b": ScriptLLM([("short reply", [])]),

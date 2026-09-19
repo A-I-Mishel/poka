@@ -125,9 +125,9 @@ def test_research_regenerate_all_tools(monkeypatch):
                 self.c = 0
             def get_output(self, aid):
                 return SimpleNamespace(id="art1", spec=self.s, created=1) if aid == "art1" else None
-            def list_outputs(self):
+            def list_outputs(self, _fresh=fresh):
                 self.c += 1
-                return [] if self.c == 1 else [fresh]
+                return [] if self.c == 1 else [_fresh]
         fs = FS(spec)
         # patch the correct tool
         if tool in ("create_docx",):

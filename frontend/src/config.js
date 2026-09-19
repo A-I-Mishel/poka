@@ -16,4 +16,5 @@ try {
   var _envUrl = (import.meta.env && import.meta.env.VITE_API_URL) || "";
   API_BASE = String(_envUrl).replace(/\/+$/, "");
 } catch (e) { API_BASE = ""; }
+/** @param {string} path */
 export function apiUrl(path) { return API_BASE + path; }

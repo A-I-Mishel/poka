@@ -5,7 +5,8 @@
     "moduleResolution": "bundler",
     "allowJs": true,
     "checkJs": false,
-    "strict": false,
+    "strict": true,
+    "noUnusedLocals": true,
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["vite/client"]

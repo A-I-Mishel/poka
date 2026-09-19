@@ -99,3 +99,56 @@ def test_no_fallback_when_preferred_answers(monkeypatch):
     body = res.json()
     assert body["fallback"] is None
     assert "fallback" not in body["message"]
+
+
+def _client_with_corrections(monkeypatch, corrections):
+    def _answer(user_input, history=None, **kwargs):
+        return {
+            "output": "hi",
+            "active_tier": "Groq",
+            "task_type": "creative",
+            "tools_used": [],
+            "sources": [],
+            "request_id": "t",
+            "corrections": corrections,
+        }
+
+    monkeypatch.setattr(agent, "answer_with_fallback", _answer)
+    from backend.main import app
+
+    return TestClient(app)
+
+
+def test_send_reports_corrections(monkeypatch):
+    with _client_with_corrections(monkeypatch, [["craeate", "create"]]) as client:
+        res = client.post("/api/chat/send", json={"content": "craeate a repret"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["corrections"] == [["craeate", "create"]]
+    assert body["message"]["corrections"] == [["craeate", "create"]]
+
+
+def test_corrections_sanitized(monkeypatch):
+    with _client_with_corrections(
+        monkeypatch,
+        [["ok", "ok"], ["a", "b"], "junk", ["x" * 100, "y"], ["p1", "q1"],
+         ["p2", "q2"], ["p3", "q3"], ["p4", "q4"], ["p5", "q5"], ["p6", "q6"]],
+    ) as client:
+        res = client.post("/api/chat/send", json={"content": "hey"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    got = body["message"]["corrections"]
+    # identical pair + non-pair dropped, overlong capped at 32, max 5 kept
+    assert ["ok", "ok"] not in got
+    assert all(isinstance(p, list) and len(p) == 2 for p in got)
+    assert all(len(s) <= 32 for p in got for s in p)
+    assert len(got) <= 5
+
+
+def test_no_corrections_key_when_absent(monkeypatch):
+    with _client_with_stub(monkeypatch, "Groq") as client:
+        res = client.post("/api/chat/send", json={"content": "hey"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["corrections"] == []
+    assert "corrections" not in body["message"]

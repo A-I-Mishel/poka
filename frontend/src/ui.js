@@ -2,18 +2,36 @@
 /* Pluto web client module: ui (DOM helpers, formatting, toasts; no app imports).
  * Split from the vanilla-JS monolith; behavior preserved.
  */
+/** @param {string} id */
 function $(id) { return document.getElementById(id); }
 /* ---------- misc helpers ---------- */
 /* esc(): text-node only — does NOT escape quotes. NEVER use inside
  * double/single-quoted attributes (data-*, title, value). Use
  * escapeAttr() there instead, otherwise `"` breaks out (self-XSS). */
+/** @param {*} s */
 function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+/** @type {Object<string, string>} */
+var _ATTR_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 /* escapeAttr(): safe for double-quoted attribute values. */
+/** @param {*} s */
 function escapeAttr(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    return _ATTR_ESCAPES[c];
   });
 }
+/* enc(): encode one dynamic URL path segment (server IDs, names).
+ * IDs are 16-hex so this is a no-op for well-formed values — it only
+ * neutralizes `../` or quote-breaking payloads if one ever arrives. */
+/** @param {*} s */
+function enc(s) { return encodeURIComponent(String(s == null ? "" : s)); }
+/* isSafeHttpUrl(): only http(s) links may become clickable hrefs.
+ * Server-provided source URLs render via innerHTML/md(); without this
+ * a `javascript:` URL would execute on click (stored XSS via search). */
+/** @param {*} u */
+function isSafeHttpUrl(u) {
+  return /^\s*https?:\/\//i.test(String(u || ""));
+}
+/** @param {*} ts */
 function fmtTime(ts) {
   if (!ts) return "";
   try {
@@ -22,6 +40,7 @@ function fmtTime(ts) {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   } catch (e) { return ""; }
 }
+/** @param {*} ts */
 function fmtDay(ts) {
   try {
     var d = ts ? new Date(ts) : new Date();
@@ -29,6 +48,7 @@ function fmtDay(ts) {
     return d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
   } catch (e) { return ""; }
 }
+/** @param {*} v */
 function fmtStamp(v) {
   if (v === null || v === undefined || v === "") return "";
   try {
@@ -39,18 +59,22 @@ function fmtStamp(v) {
       d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   } catch (e) { return ""; }
 }
+/** @param {*} b */
 function fmtSize(b) {
   if (!(b >= 0)) return "";
   if (b < 1024) return b + " B";
   if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
   return (b / 1048576).toFixed(1) + " MB";
 }
+/** @param {string} msg */
 function toast(msg) {
   var t = document.createElement("div");
   t.className = "toast";
   t.setAttribute("role", "status");
   t.textContent = msg;
-  $("toasts").appendChild(t);
+  var host = $("toasts");
+  if (!host) return;
+  host.appendChild(t);
   setTimeout(function () { t.style.opacity = "0"; t.style.transition = "opacity .3s"; }, 2200);
   setTimeout(function () { t.remove(); }, 2600);
 }
@@ -62,6 +86,10 @@ function openOverlay() {
   }
   return null;
 }
+/**
+ * @param {*} e
+ * @param {*} overlay
+ */
 function trapTab(e, overlay) {
   var f = overlay.querySelectorAll("button, input, textarea, select, a[href], [tabindex]");
   var vis = [];
@@ -74,4 +102,4 @@ function trapTab(e, overlay) {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
-export { $, esc, escapeAttr, fmtTime, fmtDay, fmtStamp, fmtSize, toast, DIALOG_IDS, openOverlay, trapTab };
+export { $, esc, escapeAttr, enc, isSafeHttpUrl, fmtTime, fmtDay, fmtStamp, fmtSize, toast, DIALOG_IDS, openOverlay, trapTab };

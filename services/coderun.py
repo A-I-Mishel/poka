@@ -126,7 +126,7 @@ def _run_argv(argv: List[str], cwd: Path, extra_args: List[str]) -> Dict[str, ob
     full = list(argv) + list(extra_args)
     started = time.time()
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603 (fixed allowlisted argv, shell=False, secret-stripped env)
             full, cwd=str(cwd), env=_safe_env(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             timeout=MAX_CODE_EXEC_SECONDS, shell=False, text=True,

@@ -2,7 +2,6 @@
 All spans carry: tier, task_type, request_id, user_id (hashed), tokens, latency.
 """
 
-import os
 import logging
 from typing import Optional
 from opentelemetry import trace
@@ -40,7 +39,9 @@ def init_tracing(service_name: str = "pluto-api", endpoint: Optional[str] = None
         return _tracer
 
     try:
-        resolved = (endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "") or "").strip() or None
+        from services.secrets import get_secret
+
+        resolved = (endpoint or get_secret("OTEL_EXPORTER_OTLP_ENDPOINT", "") or "").strip() or None
         resource = Resource.create({SERVICE_NAME: service_name})
         provider = TracerProvider(resource=resource)
 
@@ -53,7 +54,7 @@ def init_tracing(service_name: str = "pluto-api", endpoint: Optional[str] = None
                 exporter = None
         else:
             # Explicit opt-in console only; default is NoOp to avoid stdout spam.
-            if (os.getenv("OTEL_TRACES_EXPORTER", "") or "").strip().lower() == "console":
+            if (get_secret("OTEL_TRACES_EXPORTER", "") or "").strip().lower() == "console":
                 try:
                     exporter = ConsoleSpanExporter()
                 except Exception:
@@ -69,7 +70,7 @@ def init_tracing(service_name: str = "pluto-api", endpoint: Optional[str] = None
             trace.set_tracer_provider(provider)
         except Exception:
             # Provider already set (e.g. tests import twice) — keep going.
-            pass
+            logger.debug("tracer provider already set", exc_info=True)
         try:
             _tracer = trace.get_tracer(__name__)
         except Exception:
@@ -205,12 +206,12 @@ def end_llm_span(span: trace.Span, completion_tokens: int = 0, error: Optional[E
             try:
                 span.record_exception(error)
             except Exception:
-                pass
+                logger.debug("span record_exception failed", exc_info=True)
         else:
             span.set_status(Status(StatusCode.OK))
         span.end()
     except Exception:
-        pass
+        logger.debug("end_llm_span failed", exc_info=True)
 
 
 def start_tool_span(request_id: str, tool: str, execution_mode: str) -> trace.Span:

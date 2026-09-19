@@ -6,6 +6,7 @@ prompt-data logic — orchestration lives in backend.flow; attachment
 text escaping is imported from backend.attachments.
 """
 
+import logging
 import re
 from typing import (Any, Dict, List, Optional, Tuple)
 from services import kb as kb_svc
@@ -14,6 +15,8 @@ from services.obs import event as obs_event
 from backend.deps import UserContext
 
 from backend.attachments import (_escape_hint)
+
+logger = logging.getLogger(__name__)
 
 TEACHING_WINDOW_SLIDES: int = 3
 
@@ -176,12 +179,28 @@ def _is_teaching_request(text: str) -> bool:
         t = str(text or "").lower()
         if not t:
             return False
-        has_verb = any(v in t for v in _TEACHING_TEACH_VERBS)
-        has_subject = any(s in t for s in _TEACHING_SUBJECT_NOUNS)
+        try:
+            from services.normalize import any_hit as _any_hit
+            from services.normalize import normalize_text as _norm
+
+            norm = _norm(text)
+        except Exception:
+            norm = t
+            _any_hit = None  # type: ignore
+        if _any_hit is not None:
+            try:
+                has_verb = _any_hit(norm, list(_TEACHING_TEACH_VERBS))
+                has_subject = _any_hit(norm, list(_TEACHING_SUBJECT_NOUNS))
+            except Exception:
+                has_verb = any(v in norm for v in _TEACHING_TEACH_VERBS)
+                has_subject = any(s in norm for s in _TEACHING_SUBJECT_NOUNS)
+        else:
+            has_verb = any(v in norm for v in _TEACHING_TEACH_VERBS)
+            has_subject = any(s in norm for s in _TEACHING_SUBJECT_NOUNS)
         # "teach me", "explain slide 3", "exam tomorrow ... slides"
         if has_verb and has_subject:
             return True
-        if "slide by slide" in t or "lecture-wise" in t or "lecture wise" in t:
+        if "slide by slide" in norm or "lecture-wise" in norm or "lecture wise" in norm:
             return True
         return False
     except Exception:
@@ -475,8 +494,10 @@ def _extract_pptx_blocks(path: Any, ext: str) -> List[Tuple[int, str]]:
                                 if line:
                                     lines.append(line)
                         except Exception:
+                            logger.debug("teach table rows failed; skipping table", exc_info=True)
                             continue
                 except Exception:
+                    logger.debug("teach shape extract failed; skipping shape", exc_info=True)
                     continue
             text = "\n".join(lines).strip()
             if text:
@@ -506,6 +527,7 @@ def _extract_pdf_blocks(path: Any) -> List[Tuple[int, str]]:
             try:
                 t = (page.extract_text() or "").strip()
             except Exception:
+                logger.debug("teach pdf page extract failed; skipping page", exc_info=True)
                 continue
             if t:
                 blocks.append((i, t))
@@ -525,6 +547,7 @@ def _split_marked_blocks(text: str) -> List[Tuple[int, str]]:
             try:
                 num = int(m.group(1))
             except Exception:
+                logger.debug("slide marker number parse failed; skipping mark", exc_info=True)
                 continue
             start = m.end()
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
@@ -714,7 +737,7 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
             if any(rx.search(text) for rx in _TEACHING_FABRICATION_RES):
                 reasons.append("admits guessed slide contents (unverified)")
         except Exception:
-            pass
+            logger.debug("fabrication-res scan failed", exc_info=True)
         concepts = list(_TEACHING_CONCEPT_RE.finditer(text))
         recalls = list(_TEACHING_RECALL_RE.finditer(text))
         admin_only = not concepts and "administrative information" in text.lower()
@@ -732,7 +755,7 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
         if banned:
             reasons.append("banned footer line (no Say Next / Got it / Next Steps)")
     except Exception:
-        pass
+        logger.debug("teaching draft validation failed", exc_info=True)
     return reasons
 
 
@@ -768,7 +791,7 @@ def _repair_teaching_draft(
             try:
                 on_reset()
             except Exception:
-                pass
+                logger.debug("teach repair stream reset failed", exc_info=True)
         from agent.budget import RequestBudget
 
         repair_budget = RequestBudget()
@@ -936,4 +959,4 @@ def _log_teaching_format(send_text: str, output: str, tier: str,
             recall_type=_classify_recall_type(text),
         )
     except Exception:
-        pass
+        logger.debug("teaching format log failed", exc_info=True)

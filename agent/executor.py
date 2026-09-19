@@ -86,7 +86,7 @@ class TokenStream:
                 try:
                     self._on_reset()
                 except Exception:
-                    pass
+                    logger.debug("stream reset callback failed", exc_info=True)
 
     def __call__(self, cumulative_text: str) -> None:
         if not self.streaming:
@@ -95,7 +95,7 @@ class TokenStream:
         try:
             self._on_token(str(cumulative_text))
         except Exception:
-            pass
+            logger.debug("stream token callback failed", exc_info=True)
 
 
 class _BoundedExecutor:
@@ -292,7 +292,7 @@ def _invoke_via_stream(
             try:
                 on_token(text)
             except Exception:
-                pass
+                logger.debug("stream chunk callback failed", exc_info=True)
 
     try:
         first = _next_chunk_before(iterator, first_token_timeout)
@@ -340,7 +340,7 @@ def _invoke_bounded(
     try:
         messages = sanitize_messages_for_provider(messages)
     except Exception:
-        pass
+        logger.debug("provider history sanitize failed; sending as-is", exc_info=True)
     if budget is not None:
         budget.count_llm()
     provider = getattr(llm_instance, "model", type(llm_instance).__name__)
@@ -374,13 +374,13 @@ def _invoke_bounded(
                 if completion > 0:
                     LLM_TOKEN_USAGE.labels(tier, "completion").inc(completion)
         except Exception:
-            pass
+            logger.debug("token usage metric failed", exc_info=True)
         try:
             from agent.cascade import _record_latency
 
             _record_latency(str(tier_name or "unknown"), float(elapsed))
         except Exception:
-            pass
+            logger.debug("latency record failed", exc_info=True)
         return response
 
     started = time.monotonic()

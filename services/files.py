@@ -11,6 +11,7 @@ generated. Every resolution re-validates ownership and containment.
 """
 
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -37,6 +38,8 @@ from services.storage import (
     path_lock,
     user_dir,
 )
+
+logger = logging.getLogger(__name__)
 
 _ID_RE = re.compile(UPLOAD_ID_RE)
 _SAFE_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -226,13 +229,13 @@ def _atomic_write_bytes(dest: Path, data: bytes) -> None:
 
             _snapshots_notify()
         except Exception:
-            pass
+            logger.debug("snapshot notify failed", exc_info=True)
     except OSError:
         try:
             if tmp.exists():
                 tmp.unlink()
         except OSError:
-            pass
+            logger.debug("tmp cleanup failed", exc_info=True)
         raise
 
 
@@ -253,7 +256,7 @@ def _check_disk_space(needed_bytes: int) -> None:
         try:
             root.mkdir(parents=True, exist_ok=True)
         except Exception:
-            pass
+            logger.debug("data root mkdir failed", exc_info=True)
         usage = shutil.disk_usage(str(root))
         # keep 100 MB headroom so OS / other users aren't starved
         headroom = 100 * 1024 * 1024
@@ -264,6 +267,7 @@ def _check_disk_space(needed_bytes: int) -> None:
     except FileValidationError:
         raise
     except Exception:
+        logger.debug("disk space check failed; allowing write", exc_info=True)
         pass
 
 
@@ -859,6 +863,7 @@ class FileStore:
                     meta = model(**{k: rec[k] for k in model.__dataclass_fields__})
                     known.add(meta.stored_name)
                 except Exception:
+                    logger.debug("registry record rebuild failed; skipping entry", exc_info=True)
                     continue
             try:
                 on_disk = list(directory.iterdir())

@@ -109,7 +109,7 @@ def run_workflow(
             if own_budget.max_tools < len(steps):
                 own_budget.max_tools = len(steps)
         except Exception:
-            pass
+            logger.debug("workflow budget sizing failed; using defaults", exc_info=True)
 
         done: List[Dict[str, Any]] = []
         used: List[str] = []

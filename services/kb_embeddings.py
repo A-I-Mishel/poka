@@ -55,14 +55,15 @@ def gemini_embed(texts: List[str]) -> List[List[float]]:
 def stub_embed(texts: List[str], dim: int = 64) -> List[List[float]]:
     """Deterministic lexical-hash vectors for tests ONLY (not semantic).
 
-    Stable across runs (sha1, never Python hash()), L2-normalized so
-    cosine math in tests is meaningful.
+    Stable across runs (sha1 feature hash, never Python hash()),
+    L2-normalized so cosine math in tests is meaningful.
     """
     out: List[List[float]] = []
     for text in (texts or []):
         vec = [0.0] * dim
         for word in str(text or "").lower().split():
-            bucket = int(hashlib.sha1(word.encode("utf-8")).hexdigest(), 16) % dim
+            # Non-security feature hashing (usedforsecurity=False).
+            bucket = int(hashlib.sha1(word.encode("utf-8"), usedforsecurity=False).hexdigest(), 16) % dim
             vec[bucket] += 1.0
         norm = sum(v * v for v in vec) ** 0.5
         out.append([v / norm for v in vec] if norm > 0 else vec)

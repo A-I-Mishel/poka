@@ -1,4 +1,5 @@
 ﻿import io
+import logging
 import time
 import uuid
 from typing import Any, List
@@ -18,6 +19,8 @@ from services.limits import (
 )
 from services.storage import StorageError
 from tools.gating import claim_generation_slot
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -153,7 +156,7 @@ def _pptx_set_textbox(slide: Any, left: Any, top: Any, width: Any, height: Any, 
             if p.runs:
                 p.runs[0].font.size = Pt(14)
     except Exception:
-        pass
+        logger.debug("pptx textbox styling failed", exc_info=True)
 
 
 def _pptx_add_notes(slide: Any, notes: str) -> None:
@@ -163,7 +166,7 @@ def _pptx_add_notes(slide: Any, notes: str) -> None:
     try:
         slide.notes_slide.placeholders[1].text = notes.strip()[:2000]
     except Exception:
-        pass
+        logger.debug("pptx speaker notes attach failed", exc_info=True)
 
 
 def _pptx_add_number(slide: Any, number: int) -> None:
@@ -176,7 +179,7 @@ def _pptx_add_number(slide: Any, number: int) -> None:
         run.text = str(number)
         run.font.size = Pt(10)
     except Exception:
-        pass
+        logger.debug("pptx slide number stamp failed", exc_info=True)
 
 
 @tool
@@ -252,7 +255,7 @@ def build_presentation(spec_json: str) -> str:
             if subtitle and len(title_slide.placeholders) > 1:
                 title_slide.placeholders[1].text = subtitle
         except Exception:
-            pass
+            logger.debug("pptx title subtitle set failed", exc_info=True)
         built = 1
 
         for s in raw_slides:
@@ -272,7 +275,7 @@ def build_presentation(spec_json: str) -> str:
                     if s.get("subtitle") and len(slide.placeholders) > 1:
                         slide.placeholders[1].text = str(s["subtitle"])[:120]
                 except Exception:
-                    pass
+                    logger.debug("pptx slide subtitle set failed", exc_info=True)
                 built += 1
                 _pptx_add_notes(slide, notes)
 
@@ -288,7 +291,7 @@ def build_presentation(spec_json: str) -> str:
                                     run.font.color.rgb = RGBColor(0x63, 0x66, 0xF1)
                                     run.font.bold = True
                 except Exception:
-                    pass
+                    logger.debug("pptx section recolor failed", exc_info=True)
                 built += 1
                 _pptx_add_number(slide, built)
                 _pptx_add_notes(slide, notes)
@@ -300,7 +303,7 @@ def build_presentation(spec_json: str) -> str:
                 try:
                     slide.placeholders[1].text_frame.clear()
                 except Exception:
-                    pass
+                    logger.debug("pptx two-column placeholder clear failed", exc_info=True)
                 _pptx_set_textbox(slide, Inches(0.5), Inches(1.6), Inches(4.4), Inches(4.6),
                                   str(s.get("left_title", ""))[:60], left)
                 _pptx_set_textbox(slide, Inches(5.1), Inches(1.6), Inches(4.4), Inches(4.6),
@@ -321,7 +324,7 @@ def build_presentation(spec_json: str) -> str:
                 try:
                     slide.placeholders[1].text_frame.clear()
                 except Exception:
-                    pass
+                    logger.debug("pptx table placeholder clear failed", exc_info=True)
                 try:
                     shape = slide.shapes.add_table(len(rows) + 1, len(headers), Inches(0.5), Inches(1.6), Inches(9.0), Inches(4.0))
                     table = shape.table
@@ -390,7 +393,7 @@ def build_presentation(spec_json: str) -> str:
                     if slide.shapes.title and (slide.shapes.title.text or "").strip():
                         has_title = True
                 except Exception:
-                    pass
+                    logger.debug("pptx title check failed", exc_info=True)
                 if not has_title:
                     try:
                         for shape in slide.shapes:
@@ -398,7 +401,7 @@ def build_presentation(spec_json: str) -> str:
                                 has_title = True
                                 break
                     except Exception:
-                        pass
+                        logger.debug("pptx content scan failed", exc_info=True)
                 if not has_title:
                     empty_titles += 1
             if empty_titles:

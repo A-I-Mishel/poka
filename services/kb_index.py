@@ -127,7 +127,7 @@ class KBIndex:
             scores, labels = self.index.search(q, k * 3)  # oversample for filtering
 
             results = []
-            for score, label in zip(scores[0], labels[0]):
+            for score, label in zip(scores[0], labels[0], strict=True):
                 if label == -1:
                     continue
                 if label not in self.id_map:

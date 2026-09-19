@@ -1,16 +1,36 @@
 /* Pluto web client module: panels (view switching, server-data panels, mode toggles).
  * Split from the vanilla-JS monolith; behavior preserved.
  */
-import { $, toast, esc, escapeAttr, fmtStamp } from "./ui.js";
+import { $, toast, esc, escapeAttr, enc, isSafeHttpUrl, fmtStamp } from "./ui.js";
 import { ic, IC, artIcon } from "./markdown.js";
 import { req, authedDownload } from "./api.js";
-import { S, chats, current, projects, savePrefs } from "./state.js";
+import { S, chats, current, projects, setPref } from "./state.js";
 import { ask } from "./auth.js";
 
-/* Module-local refs to shared elements (same nodes as other modules). */
-var backBtn = $("backBtn"), panelBody = $("panelBody"),
-  viewChat = $("viewChat"), viewPanel = $("viewPanel"),
+/* Module-local refs to shared elements. Grabbed in initPanels(), not
+ * at import time, so this module imports cleanly without a DOM
+ * (node/vitest/smoke phase 1). app.js calls initPanels() at boot. */
+var backBtn = null, panelBody = null,
+  viewChat = null, viewPanel = null,
+  chatTitle = null;
+var modeToggle = null, thumb = null, modeBtns = [],
+  webBtn = null, input = null;
+var _panelsInit = false;
+function initPanels() {
+  if (_panelsInit) return;
+  _panelsInit = true;
+  backBtn = $("backBtn"); panelBody = $("panelBody");
+  viewChat = $("viewChat"); viewPanel = $("viewPanel");
   chatTitle = $("chatTitle");
+  modeToggle = $("modeToggle");
+  thumb = modeToggle && modeToggle.querySelector(".seg-thumb");
+  modeBtns = (modeToggle && modeToggle.querySelectorAll("button")) || [];
+  webBtn = $("webSearchBtn"); input = $("input");
+  wireTheme();
+  wireNav();
+  wirePanel();
+  wireToggles();
+} /* end initPanels */
 
 /* Chat title derived from the open conversation (moved here from chat.js
  * so panels stays the sole importer direction: chat -> panels). */
@@ -21,22 +41,18 @@ function openTitle() {
   }
   return "New chat";
 }
-var modeToggle = $("modeToggle"), thumb = modeToggle && modeToggle.querySelector(".seg-thumb"),
-  modeBtns = (modeToggle && modeToggle.querySelectorAll("button")) || [],
-  webBtn = $("webSearchBtn"), input = $("input");
-
-
 /* ---------- theme ---------- */
 function applyTheme() {
   document.documentElement.setAttribute("data-theme", S.theme);
   $("icoMoon").classList.toggle("hidden", S.theme === "light");
   $("icoSun").classList.toggle("hidden", S.theme !== "light");
 }
+function wireTheme() {
 $("themeBtn").addEventListener("click", function () {
-  S.theme = S.theme === "dark" ? "light" : "dark";
-  savePrefs();
+  setPref("theme", S.theme === "dark" ? "light" : "dark");
   applyTheme();
 });
+} /* end wireTheme */
 /* ---------- view switching ---------- */
 function setActiveNav(el) {
   var a = document.querySelectorAll(".nav.active,.recent.active");
@@ -67,6 +83,7 @@ function showChat() {
   chatTitle.textContent = openTitle();
   setActiveNav(null);
 }
+function wireNav() {
 backBtn.addEventListener("click", showChat);
 document.querySelectorAll("[data-section]").forEach(function (btn) {
   btn.addEventListener("click", function () {
@@ -74,6 +91,7 @@ document.querySelectorAll("[data-section]").forEach(function (btn) {
     if (window.innerWidth < 861) document.body.classList.add("folded");
   });
 });
+} /* end wireNav */
 
 /* ---------- panels (all server data) ---------- */
 function allMessages() {
@@ -159,7 +177,7 @@ var SECTIONS = {
       if (!p) return "<h2>Project</h2><div class=\"sub\">Select a project first.</div>";
       var text = "";
       try {
-        text = (await req("/api/projects/" + p.id + "/context")).text || "";
+        text = (await req("/api/projects/" + enc(p.id) + "/context")).text || "";
       } catch (e) {
         return "<h2>" + esc(p.name || "Project") + "</h2><div class=\"sub\">Cannot load context: " + esc(e.message) + "</div>";
       }
@@ -296,7 +314,7 @@ function exitWfEdit() {
   var s = $("wfSave"); if (s) s.textContent = "Save workflow";
   var c = $("wfCancelEdit"); if (c) c.style.display = "none";
 }
-panelBody.addEventListener("click", async function (e) {
+async function _onPanelClick(e) {
   var rm = e.target.closest("[data-fact]");
   if (rm) {
     try {
@@ -317,7 +335,7 @@ panelBody.addEventListener("click", async function (e) {
   if (du) {
     e.stopPropagation();
     try {
-      await req("/api/uploads/" + du.getAttribute("data-delup"), { method: "DELETE" });
+      await req("/api/uploads/" + enc(du.getAttribute("data-delup")), { method: "DELETE" });
       toast("File deleted");
       openSection("files");
     } catch (err) { toast("Delete failed: " + err.message); }
@@ -327,14 +345,14 @@ panelBody.addEventListener("click", async function (e) {
   if (up) {
     var card = up.closest(".card");
     var nm = card ? card.querySelector(".t").textContent : "file";
-    authedDownload("/api/uploads/" + up.getAttribute("data-up") + "/file", nm);
+    authedDownload("/api/uploads/" + enc(up.getAttribute("data-up")) + "/file", nm);
     return;
   }
   var rg = e.target.closest("[data-regen]");
   if (rg) {
     e.stopPropagation();
     try {
-      await req("/api/artifacts/" + rg.getAttribute("data-regen") + "/regenerate", { method: "POST" });
+      await req("/api/artifacts/" + enc(rg.getAttribute("data-regen")) + "/regenerate", { method: "POST" });
       toast("Regenerated");
       openSection("artifacts");
     } catch (err) { toast("Regenerate failed: " + err.message); }
@@ -344,7 +362,7 @@ panelBody.addEventListener("click", async function (e) {
   if (da) {
     e.stopPropagation();
     try {
-      await req("/api/artifacts/" + da.getAttribute("data-delart"), { method: "DELETE" });
+      await req("/api/artifacts/" + enc(da.getAttribute("data-delart")), { method: "DELETE" });
       toast("Artifact deleted");
       openSection("artifacts");
     } catch (err) { toast("Delete failed: " + err.message); }
@@ -352,7 +370,7 @@ panelBody.addEventListener("click", async function (e) {
   }
   var art = e.target.closest("[data-art]");
   if (art) {
-    authedDownload("/api/artifacts/" + art.getAttribute("data-art") + "/download", art.getAttribute("data-name") || "file");
+    authedDownload("/api/artifacts/" + enc(art.getAttribute("data-art")) + "/download", art.getAttribute("data-name") || "file");
     return;
   }
   var bb = e.target.closest("[data-brief]");
@@ -360,14 +378,14 @@ panelBody.addEventListener("click", async function (e) {
     var bid = bb.closest(".card").getAttribute("data-bid");
     if (bb.getAttribute("data-brief") === "del") {
       try {
-        await req("/api/briefs/" + bid, { method: "DELETE" });
+        await req("/api/briefs/" + enc(bid), { method: "DELETE" });
         toast("Brief deleted");
         openSection("research");
       } catch (err) { toast("Delete failed: " + err.message); }
     } else {
       try {
-        var meta = await req("/api/briefs/" + bid + "/docx", { method: "POST" });
-        if (meta && meta.id) authedDownload("/api/artifacts/" + meta.id + "/download", meta.name || "brief.docx");
+        var meta = await req("/api/briefs/" + enc(bid) + "/docx", { method: "POST" });
+        if (meta && meta.id) authedDownload("/api/artifacts/" + enc(meta.id) + "/download", meta.name || "brief.docx");
         else toast("Document queued — see Artifacts");
       } catch (err) { toast("Export failed: " + err.message); }
     }
@@ -375,7 +393,11 @@ panelBody.addEventListener("click", async function (e) {
   }
   var op = e.target.closest("[data-open]");
   if (op) {
-    window.open(op.getAttribute("data-open"), "_blank", "noopener");
+    var _url = op.getAttribute("data-open") || "";
+    /* data-open carries server-provided source URLs: only open http(s),
+     * never javascript:/data: (stored-XSS gate for search results). */
+    if (!isSafeHttpUrl(_url)) { toast("Blocked unsafe link."); return; }
+    window.open(_url, "_blank", "noopener");
     return;
   }
   /* Workflow edit mode: null = creating; otherwise the id being updated. */
@@ -399,7 +421,7 @@ panelBody.addEventListener("click", async function (e) {
        * visible form is genuinely in edit mode (title proves it). */
       var editing = wfEditingId && $("wfFormTitle") && $("wfFormTitle").textContent === "Edit workflow";
       if (editing) {
-        await req("/api/workflows/" + wfEditingId, { method: "PUT", body: JSON.stringify({ name: wname, description: wdesc, steps: wsteps }) });
+        await req("/api/workflows/" + enc(wfEditingId), { method: "PUT", body: JSON.stringify({ name: wname, description: wdesc, steps: wsteps }) });
         toast("Workflow updated");
       } else {
         wfEditingId = null;
@@ -416,7 +438,7 @@ panelBody.addEventListener("click", async function (e) {
     e.stopPropagation();
     var eid = wfe.closest(".card").getAttribute("data-wfid");
     try {
-      var w = await req("/api/workflows/" + eid);
+      var w = await req("/api/workflows/" + enc(eid));
       $("wfName").value = w.name || "";
       $("wfDesc").value = w.description || "";
       $("wfSteps").value = JSON.stringify(w.steps || [], null, 2);
@@ -434,7 +456,7 @@ panelBody.addEventListener("click", async function (e) {
     e.stopPropagation();
     var did2 = wdu.closest(".card").getAttribute("data-wfid");
     try {
-      var src = await req("/api/workflows/" + did2);
+      var src = await req("/api/workflows/" + enc(did2));
       await req("/api/workflows", { method: "POST", body: JSON.stringify({ name: String(src.name || "Workflow") + " (copy)", description: src.description || "", steps: src.steps || [] }) });
       toast("Workflow duplicated");
       openSection("workflows");
@@ -448,7 +470,7 @@ panelBody.addEventListener("click", async function (e) {
     ask("Run input (empty for none)", "", async function (v) {
       if (v === null) return;
       try {
-        var out = await req("/api/workflows/" + wid + "/run", { method: "POST", body: JSON.stringify({ input: v || "" }) });
+        var out = await req("/api/workflows/" + enc(wid) + "/run", { method: "POST", body: JSON.stringify({ input: v || "" }) });
         showWfResult(out);
       } catch (err) { toast("Run failed: " + err.message); }
     });
@@ -460,7 +482,7 @@ panelBody.addEventListener("click", async function (e) {
     var did = wd.closest(".card").getAttribute("data-wfid");
     if (!window.confirm("Delete this workflow? This cannot be undone.")) return;
     try {
-      await req("/api/workflows/" + did, { method: "DELETE" });
+      await req("/api/workflows/" + enc(did), { method: "DELETE" });
       if (wfEditingId === did) exitWfEdit();
       toast("Workflow deleted");
       openSection("workflows");
@@ -470,22 +492,32 @@ panelBody.addEventListener("click", async function (e) {
   if (e.target.closest("#projCtxSave")) {
     var ta = $("projCtxTa");
     try {
-      await req("/api/projects/" + ta.getAttribute("data-projid") + "/context", { method: "PUT", body: JSON.stringify({ text: ta.value }) });
+      await req("/api/projects/" + enc(ta.getAttribute("data-projid")) + "/context", { method: "PUT", body: JSON.stringify({ text: ta.value }) });
       toast("Context saved");
     } catch (err) { toast("Save failed: " + err.message); }
     return;
   }
-});
-panelBody.addEventListener("input", function (e) {
+}
+function _onPanelInput(e) {
   if (e.target.id === "researchFilter") {
     var q = e.target.value.toLowerCase();
     panelBody.querySelectorAll("#researchList .card").forEach(function (c) {
       c.style.display = c.getAttribute("data-title").indexOf(q) > -1 ? "" : "none";
     });
   }
-});
+}
+function wirePanel() {
+  panelBody.addEventListener("click", _onPanelClick);
+  panelBody.addEventListener("input", _onPanelInput);
+} /* end wirePanel */
+function wireToggles() {
 /* ponytail: MORE/RECENTS label-toggles, persisted */
-(function initMoreToggle() {
+  initMoreToggle();
+  initRecentsToggle();
+  initFold();
+  initModeSwitch();
+} /* end wireToggles */
+function initMoreToggle() {
   var btn = $("moreToggle"), list = $("moreItems");
   if (!btn || !list) return;
   var collapsed = !!S.moreCollapsed;
@@ -496,12 +528,11 @@ panelBody.addEventListener("input", function (e) {
     var c = list.classList.toggle("collapsed");
     btn.classList.toggle("collapsed", c);
     btn.setAttribute("aria-expanded", c ? "false" : "true");
-    S.moreCollapsed = c;
-    savePrefs();
+    setPref("moreCollapsed", c);
   });
-})();
+}
 /* ponytail: RECENTS collapsible like MORE, persisted */
-(function initRecentsToggle() { /* uses shared .label-toggle CSS */
+function initRecentsToggle() { /* uses shared .label-toggle CSS */
   var btn = $("recentsToggle"), list = $("recentList");
   if (!btn || !list) return;
   var collapsed = !!S.recentsCollapsed;
@@ -512,19 +543,25 @@ panelBody.addEventListener("input", function (e) {
     var c = list.classList.toggle("collapsed");
     btn.classList.toggle("collapsed", c);
     btn.setAttribute("aria-expanded", c ? "false" : "true");
-    S.recentsCollapsed = c;
-    savePrefs();
+    setPref("recentsCollapsed", c);
   });
-})();
+}
+function initFold() {
 $("foldBtn").addEventListener("click", function () {
   document.body.classList.toggle("folded");
   if (window.innerWidth > 860) {
-    S.folded = document.body.classList.contains("folded");
-    savePrefs();
+    setPref("folded", document.body.classList.contains("folded"));
   }
 });
 $("backdrop").addEventListener("click", function () { document.body.classList.add("folded"); });
-/* ---------- toggles (refs owned once at module top, lines 24-26) ---------- */
+} /* end initFold */
+function initModeSwitch() {
+  modeBtns.forEach(function (b) {
+    b.addEventListener("click", function () { setMode(b.getAttribute("data-mode")); });
+  });
+  webBtn.addEventListener("click", function () { setWeb(!webBtn.classList.contains("active")); });
+} /* end initModeSwitch */
+/* ---------- toggles (refs owned by initPanels, see module top) ---------- */
 function updatePlaceholder() {
   var deep = S.mode === "deep", web = webBtn.classList.contains("active");
   if (deep) input.placeholder = "Ask something complex — take your time…";
@@ -539,24 +576,19 @@ function placeThumb() {
   thumb.style.transform = "translateX(" + (br.left - tr.left - modeToggle.clientLeft) + "px)";
 }
 function setMode(mode, skipSave) {
-  S.mode = mode;
-  if (!skipSave) savePrefs();
+  if (!skipSave) setPref("mode", mode);
+  else S.mode = mode;
   modeToggle.setAttribute("data-mode", mode);
   modeBtns.forEach(function (b) { b.classList.toggle("active", b.getAttribute("data-mode") === mode); });
   updatePlaceholder();
   placeThumb();
 }
-modeBtns.forEach(function (b) {
-  b.addEventListener("click", function () { setMode(b.getAttribute("data-mode")); });
-});
 function setWeb(on) {
-  S.web = on;
-  savePrefs();
+  setPref("web", on);
   webBtn.classList.toggle("active", on);
   webBtn.setAttribute("aria-pressed", on ? "true" : "false");
   updatePlaceholder();
 }
-webBtn.addEventListener("click", function () { setWeb(!webBtn.classList.contains("active")); });
 
 
-export { setActiveNav, openSection, showChat, openTitle, allMessages, showWfResult, exitWfEdit, applyTheme, updatePlaceholder, placeThumb, setMode, setWeb, webBtn };
+export { initPanels, setActiveNav, openSection, showChat, openTitle, allMessages, showWfResult, exitWfEdit, applyTheme, updatePlaceholder, placeThumb, setMode, setWeb, webBtn };

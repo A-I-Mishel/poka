@@ -10,7 +10,6 @@ RateLimiter against Redis (INCR + EXPIRE per key:action window) and
 swap it via configure_rate_limiter(). Limits live in services.limits.
 """
 
-import os
 import threading
 import time
 from collections import deque
@@ -34,7 +33,9 @@ class RateLimitResult:
 
 def _trust_proxy() -> bool:
     """Whether X-Forwarded-For can be trusted (behind a known proxy)."""
-    raw = os.getenv("PLUTO_TRUST_PROXY", "false") or "false"
+    from services.secrets import get_secret
+
+    raw = get_secret("PLUTO_TRUST_PROXY", "false") or "false"
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 

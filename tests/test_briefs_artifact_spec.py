@@ -228,7 +228,7 @@ def test_brief_isolation(fenv):
 
 
 def test_brief_atomic_failure_preserves(fenv, monkeypatch):
-    import services.storage as storage_mod
+    import services.storage.store as store_mod
     from services.storage import StorageError
 
     store = UserStore("f-user")
@@ -238,7 +238,9 @@ def test_brief_atomic_failure_preserves(fenv, monkeypatch):
     def _boom(path, payload):
         raise StorageError("disk gone")
 
-    monkeypatch.setattr(storage_mod, "_write_json", _boom)
+    # Patch where UserStore looks it up (services.storage is a package;
+    # the implementation lives in services.storage.store).
+    monkeypatch.setattr(store_mod, "_write_json", _boom)
     with pytest.raises(StorageError):
         store.create_brief("lost", [], "")
     assert store._briefs_path().read_text(encoding="utf-8") == before

@@ -14,7 +14,6 @@ import io
 import os
 import sys
 import zipfile
-from pathlib import Path
 
 import pytest
 
@@ -239,7 +238,7 @@ def test_zip_cannot_open_reports_failed(tmp_path):
         _read_zip_file(p)
 
 
-def test_zip_vault_prefix_hidden():
+def test_zip_vault_prefix_hidden(tmp_path):
     from tools.document_tool import _read_zip_file
 
     # FileStore prefixes stored name with 16-hex id, but _read_zip_file hides it in header.
@@ -247,12 +246,9 @@ def test_zip_vault_prefix_hidden():
     zbytes = _zip_bytes({"a.txt": b"hi"})
     # Save normally then rename file on disk to vault-like name is hard; instead test the re.match directly
     # by calling _read_zip_file on a Path with vault-like name via tmp_path
-    import tempfile
-
-    p = Path(tempfile.mktemp(suffix=".zip"))
-    # craft vault-like filename in temp dir
+    # craft vault-like filename in the pytest tmp dir (no mktemp race)
     vault_name = "abcd1234abcd1234_arch.zip"
-    vault_path = p.parent / vault_name
+    vault_path = tmp_path / vault_name
     vault_path.write_bytes(zbytes)
     out = _read_zip_file(vault_path)
     assert "[archive arch.zip" in out

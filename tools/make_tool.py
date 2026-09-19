@@ -304,10 +304,10 @@ def _build_pdf(title: str, blocks: List[Tuple[str, Any]]) -> bytes:
     kids = " ".join(f"{n} 0 R" for n in page_obj_nums)
     objects[1] = "<< /Type /Catalog /Pages 2 0 R >>".encode("latin-1")
     objects[2] = f"<< /Type /Pages /Kids [{kids}] /Count {n_pages} >>".encode("latin-1")
-    for fnum, base in zip(font_obj_nums, basefonts):
+    for fnum, base in zip(font_obj_nums, basefonts, strict=True):
         objects[fnum] = (f"<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>").encode("latin-1")
 
-    for idx, (pnum, cnum) in enumerate(zip(page_obj_nums, content_obj_nums)):
+    for idx, (pnum, cnum) in enumerate(zip(page_obj_nums, content_obj_nums, strict=True)):
         # One text object per indent/size/font run (Td only moves
         # relatively, so absolute moves handle indent changes cleanly).
         rebuilt: List[str] = ["BT"]
@@ -341,7 +341,7 @@ def _build_pdf(title: str, blocks: List[Tuple[str, Any]]) -> bytes:
         stream = "\n".join(rebuilt).encode("latin-1")
         objects[cnum] = (f"<< /Length {len(stream)} >>\nstream\n".encode("latin-1")
                          + stream + b"\nendstream")
-        fontres = " ".join(f"/{fn} {fnum} 0 R" for fn, fnum in zip(font_names, font_obj_nums))
+        fontres = " ".join(f"/{fn} {fnum} 0 R" for fn, fnum in zip(font_names, font_obj_nums, strict=True))
         objects[pnum] = (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {_PDF_PAGE_W:.0f} {_PDF_PAGE_H:.0f}] "
             f"/Resources << /Font << {fontres} >> >> /Contents {cnum} 0 R >>"

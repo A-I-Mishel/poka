@@ -1,12 +1,17 @@
 ﻿from langchain_core.tools import tool
 from pypdf import PdfReader
+import logging
 from typing import List, Optional, Tuple
 
 from services.context import get_current_user_id
 from services.files import FileStore
 from services.limits import MAX_PDF_CHARS, MAX_PDF_PAGES, MAX_UPLOAD_BYTES
 from services.obs import timed as obs_timed
+from services.ocr import ocr_available as _shared_ocr_available
+from services.ocr import ocr_image_bytes as _shared_ocr_image_bytes
 from tools.parse_cache import ParseCache
+
+logger = logging.getLogger(__name__)
 
 # ponytail: mtime-keyed parse cache — second read in same chat is RAM, not re-parse
 _PDF_CACHE = ParseCache(32)
@@ -59,25 +64,12 @@ def _tesseract_binary_present() -> bool:
 
 def _ocr_available() -> bool:
     """True only when on-device OCR can actually run (lib + binary)."""
-    return _pytesseract_importable() and _tesseract_binary_present()
+    return _shared_ocr_available()
 
 
 def _ocr_image_bytes(blob: bytes) -> str:
     """OCR one image's bytes; "" on any failure (never raises)."""
-    try:
-        import io as _io
-
-        from PIL import Image
-        import pytesseract
-
-        with Image.open(_io.BytesIO(blob)) as img:
-            try:
-                img.load()
-            except Exception:
-                pass
-            return (pytesseract.image_to_string(img) or "").strip()
-    except Exception:
-        return ""
+    return _shared_ocr_image_bytes(blob)
 
 
 def _vision_ocr_image_bytes(blob: bytes) -> str:
@@ -105,9 +97,10 @@ def _vision_ocr_configured() -> bool:
                 if getter() is not None:
                     return True
             except Exception:
+                logger.debug("vision tier probe failed; trying next", exc_info=True)
                 continue
     except Exception:
-        pass
+        logger.debug("vision OCR availability check failed", exc_info=True)
     return False
 
 
@@ -136,10 +129,11 @@ def _ocr_scanned_pages(reader, total_pages: int) -> str:
             if (page.extract_text() or "").strip():
                 continue
         except Exception:
-            pass
+            logger.debug("scanned-page text probe failed", exc_info=True)
         try:
             images = list(getattr(page, "images", []) or [])
         except Exception:
+            logger.debug("page image list failed; skipping page", exc_info=True)
             continue
         for img in images[:2]:
             try:
@@ -154,6 +148,7 @@ def _ocr_scanned_pages(reader, total_pages: int) -> str:
                     text = _vision_ocr_image_bytes(blob)
                     label = f"[page {i + 1} vision-OCR]"
             except Exception:
+                logger.debug("page image bytes unreadable; skipping image", exc_info=True)
                 continue
             if text.strip():
                 parts.append(f"{label}\n{text.strip()}")
@@ -306,6 +301,7 @@ def read_pdf_page(upload_id: str, page: int) -> str:
                             continue
                         piece = _ocr_image_bytes(bytes(data))
                     except Exception:
+                        logger.debug("page image OCR failed; skipping image", exc_info=True)
                         continue
                     if piece.strip():
                         ocr_parts.append(piece.strip())

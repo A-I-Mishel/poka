@@ -80,12 +80,12 @@ def search_documents(query: str) -> str:
                     try:
                         merged.sort(key=lambda r: float((r or {}).get("score", 0.0)), reverse=True)
                     except Exception:
-                        pass
+                        logger.debug("kb search sort failed", exc_info=True)
                     if len(merged) > len(hits or []):
                         hits = merged[:KB_TOP_K]
                         retried = True
     except Exception:
-        pass
+        logger.debug("kb search merge failed", exc_info=True)
     if not hits:
         return (
             "STATUS=EMPTY tool=search_documents: no matching document passages. "

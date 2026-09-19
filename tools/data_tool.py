@@ -1,6 +1,7 @@
 ﻿from langchain_core.tools import tool
 import csv
 import io
+import logging
 from typing import Any, Optional, Tuple, TYPE_CHECKING
 
 from services.context import get_current_user_id
@@ -11,6 +12,8 @@ from tools.parse_cache import ParseCache
 
 # ponytail: mtime-keyed DataFrame cache — second csv_inspect reuses parsed frame
 _CSV_CACHE = ParseCache(8)
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pandas is imported lazily inside _load_csv_frame
     import pandas as pd
@@ -120,7 +123,7 @@ def _load_csv_frame(upload_id: str) -> Tuple[Optional["pd.DataFrame"], Optional[
         try:
             _CSV_CACHE.set(key, (frame.copy(), truncated))
         except Exception:
-            pass
+            logger.debug("csv cache set failed", exc_info=True)
     return frame, None, truncated
 
 

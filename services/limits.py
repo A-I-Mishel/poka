@@ -152,7 +152,10 @@ MAX_TOTAL_REQUEST_TIME: float = 300.0
 REFLECT_SHORT_DRAFT_CHARS: int = 80
 # Fast-mode reflection floor: only substantial creative/research drafts
 # earn the extra cheap-tier critique call; short answers skip it.
+# Research gets a lower floor (150): factual answers benefit most from
+# one cheap critique, and the call runs on CHEAP_TIERS, not quality quota.
 REFLECT_FAST_DRAFT_CHARS: int = 300
+REFLECT_FAST_RESEARCH_CHARS: int = 150
 REFLECT_FAILURE_KEYWORDS: tuple = ("error", "failed", "unable to", "could not")
 # The draft is fed to the critic in a bounded window (chat history stays
 # untruncated): critic quality holds while long research drafts no longer

@@ -14,11 +14,14 @@ without credentials or network).
 """
 
 import base64
+import logging
 from typing import Any, Dict, List, Optional
 
 from services.google import GMAIL_SCOPES as SCOPES
+from services.google import build_google_service
 from services.obs import event as obs_event
-from services.secrets import get_secret
+
+logger = logging.getLogger(__name__)
 
 MAX_BODY_CHARS: int = 20000
 MAX_SEARCH_RESULTS: int = 10
@@ -34,39 +37,16 @@ def configure_service(service: Any) -> None:
 
 def _credentials() -> Optional[Any]:
     """OAuth credentials from env refresh token, or None when unconfigured."""
-    from google.oauth2.credentials import Credentials
+    from services.google import google_credentials
 
-    client_id = (get_secret("GOOGLE_CLIENT_ID", "") or "").strip()
-    client_secret = (get_secret("GOOGLE_CLIENT_SECRET", "") or "").strip()
-    refresh_token = (get_secret("GOOGLE_REFRESH_TOKEN", "") or "").strip()
-    if not (client_id and client_secret and refresh_token):
-        return None
-    return Credentials(
-        None,
-        refresh_token=refresh_token,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=client_id,
-        client_secret=client_secret,
-        scopes=SCOPES,
-    )
+    return google_credentials(list(SCOPES))
 
 
 def get_service() -> Optional[Any]:
     """Build the Gmail client, or None when unconfigured (never raises)."""
     if _service_override is not None:
         return _service_override
-    try:
-        creds = _credentials()
-    except Exception:
-        return None
-    if creds is None:
-        return None
-    try:
-        from googleapiclient.discovery import build
-
-        return build("gmail", "v1", credentials=creds)
-    except Exception:
-        return None
+    return build_google_service("gmail", "v1", list(SCOPES))
 
 
 def _headers(payload: Dict[str, Any]) -> Dict[str, str]:
@@ -76,7 +56,7 @@ def _headers(payload: Dict[str, Any]) -> Dict[str, str]:
             if isinstance(h, dict) and h.get("name"):
                 out[str(h["name"]).lower()] = str(h.get("value", ""))
     except Exception:
-        pass
+        logger.debug("gmail header parse failed", exc_info=True)
     return out
 
 
@@ -147,6 +127,7 @@ def search_messages(service: Any, query: str, max_results: int = MAX_SEARCH_RESU
                 .execute()
             )
         except Exception:
+            logger.debug("gmail message fetch failed; skipping message", exc_info=True)
             continue
         headers = _headers((full or {}).get("payload", {}))
         out.append({

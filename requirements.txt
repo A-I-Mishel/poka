@@ -38,4 +38,5 @@ opentelemetry-instrumentation-redis>=0.65b0,<1
 opentelemetry-instrumentation-sqlite3>=0.65b0,<1
 prometheus-client>=0.26,<1
 python-json-logger>=3.0,<4  # structured JSON logs (services/structured_logging.py)
+rapidfuzz>=3.0,<4  # typo-tolerant intent matching (services/normalize.py); difflib fallback if absent
 # chromadb==0.5.5  # optional -- needs C++ build tools on Windows; app runs without it

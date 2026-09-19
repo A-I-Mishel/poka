@@ -56,6 +56,7 @@ def vision_ocr_bytes(blob: bytes) -> str:
             try:
                 llm_instance = getter()
             except Exception:
+                logger.debug("tier=%s vision getter failed; trying next", name, exc_info=True)
                 continue
             if llm_instance is None:
                 continue
@@ -121,6 +122,7 @@ def _try_vision_answer(
         try:
             llm_instance = getter()
         except Exception:
+            logger.debug("req=%s tier=%s vision getter failed; trying next", request_id, name, exc_info=True)
             continue
         if llm_instance is None:
             continue

@@ -67,7 +67,7 @@ def test_strict_tier_set():
     assert "ONLY from the tool results" in STRICT_GROUNDING_PARAGRAPH
 
 
-def test_simple_answer_strict_only_for_weak_tiers():
+def test_simple_answer_grounded_for_all_tiers():
     weak = FakeLLM(["weak answer text here"])
     out = agent.answer_with_fallback(
         "hello there friend", tiers=[("NVIDIA", lambda: weak)], raw_messages=[])
@@ -78,7 +78,7 @@ def test_simple_answer_strict_only_for_weak_tiers():
     agent.answer_with_fallback(
         "hello there friend", tiers=[("Gemini 3.6 Flash", lambda: strong)],
         raw_messages=[])
-    assert "ONLY from the tool results" not in str(strong.calls[0][0].content)
+    assert "ONLY from the tool results" in str(strong.calls[0][0].content)
 
 
 # --- planning validation -----------------------------------------
@@ -122,6 +122,7 @@ def test_plan_prompt_has_scaffold():
 def test_should_reflect_fast_gate():
     assert should_reflect("creative", "x" * 400, "", deep_mode=False) is True
     assert should_reflect("research", "x" * 400, "", deep_mode=False) is True
+    assert should_reflect("research", "x" * 200, "", deep_mode=False) is True
     assert should_reflect("research", "short", "", deep_mode=False) is False
     assert should_reflect("simple", "x" * 400, "", deep_mode=False) is False
     assert should_reflect("data", "x" * 400, "", deep_mode=False) is False

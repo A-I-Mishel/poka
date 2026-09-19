@@ -3,12 +3,27 @@
  */
 import { $, toast, fmtSize } from "./ui.js";
 
-/* Module-local refs to shared elements (same nodes as chat.js). */
-var input = $("input"), attachments = $("attachments");
+/* Module-local element refs. Grabbed in initComposer(), not at import
+ * time, so this module imports cleanly without a DOM
+ * (node/vitest/smoke phase 1). app.js calls initComposer() at boot. */
+var input = null, attachments = null;
 
 /* ---------- attachments ---------- */
-var composer = $("composer"), attachWrap = $("attachWrap"), attachMenu = $("attachMenu"),
-  photoInput = $("photoInput"), docInput = $("docInput");
+var composer = null, attachWrap = null, attachMenu = null,
+  photoInput = null, docInput = null;
+var _composerInit = false;
+function initComposer() {
+  if (_composerInit) return;
+  _composerInit = true;
+  input = $("input"); attachments = $("attachments");
+  composer = $("composer"); attachWrap = $("attachWrap"); attachMenu = $("attachMenu");
+  photoInput = $("photoInput"); docInput = $("docInput");
+  _grabCamera();
+  wireAttachmentUI();
+  wireCameraUI();
+  wireDragDrop();
+  wireMic();
+} /* end initComposer */
 var pendingFiles = [];
 export function getPendingFiles() { return pendingFiles; }
 export function clearPendingFiles() { pendingFiles = []; }
@@ -53,6 +68,7 @@ function addChip(file) {
 }
 function addFiles(list) { for (var i = 0; i < list.length; i++) addChip(list[i]); }
 function closeAttachMenu() { attachMenu.classList.remove("open"); }
+function wireAttachmentUI() {
 $("attachBtn").addEventListener("click", function (e) {
   e.stopPropagation();
   attachMenu.classList.toggle("open");
@@ -71,11 +87,17 @@ attachMenu.querySelectorAll("button").forEach(function (opt) {
 });
 photoInput.addEventListener("change", function () { addFiles(photoInput.files); photoInput.value = ""; });
 docInput.addEventListener("change", function () { addFiles(docInput.files); docInput.value = ""; });
+} /* end wireAttachmentUI */
 
 /* ---------- camera ---------- */
-var camModal = $("camModal"), camVideo = $("camVideo"), camCanvas = $("camCanvas"),
-  camError = $("camError"), camShot = $("camShot"), camRetake = $("camRetake"),
-  camUse = $("camUse"), camCancel = $("camCancel"), camStream = null, shotTaken = false;
+var camModal = null, camVideo = null, camCanvas = null,
+  camError = null, camShot = null, camRetake = null,
+  camUse = null, camCancel = null, camStream = null, shotTaken = false;
+function _grabCamera() {
+  camModal = $("camModal"); camVideo = $("camVideo"); camCanvas = $("camCanvas");
+  camError = $("camError"); camShot = $("camShot"); camRetake = $("camRetake");
+  camUse = $("camUse"); camCancel = $("camCancel");
+}
 function openCamera() {
   camModal.classList.remove("hidden");
   camError.classList.add("hidden");
@@ -110,6 +132,7 @@ function stopCamera() {
   camVideo.srcObject = null;
 }
 function closeCamera() { stopCamera(); camModal.classList.add("hidden"); }
+function wireCameraUI() {
 camShot.addEventListener("click", function () {
   if (!camStream) return;
   var w = camVideo.videoWidth, h = camVideo.videoHeight;
@@ -142,6 +165,8 @@ camUse.addEventListener("click", function () {
 });
 camCancel.addEventListener("click", closeCamera);
 camModal.addEventListener("click", function (e) { if (e.target === camModal) closeCamera(); });
+} /* end wireCameraUI */
+function wireDragDrop() {
 
 /* ---------- drag & drop ---------- */
 var dragDepth = 0;
@@ -155,6 +180,10 @@ composer.addEventListener("drop", function (e) {
   addFiles(e.dataTransfer.files);
   toast("Attached");
 });
+} /* end wireDragDrop */
+
+/* ---------- mic ---------- */
+function wireMic() {
 
 /* ---------- mic ---------- */
 $("micBtn").addEventListener("click", function () {
@@ -170,5 +199,6 @@ $("micBtn").addEventListener("click", function () {
     r.start();
   } catch (e) { toast("Mic unavailable"); }
 });
+} /* end wireMic */
 
-export { addChip, addFiles, closeAttachMenu, openCamera, stopCamera, closeCamera, camModal };
+export { initComposer, addChip, addFiles, closeAttachMenu, openCamera, stopCamera, closeCamera, camModal };

@@ -19,6 +19,7 @@ token → env/ephemeral/open): this dependency only parses transport
 3. Otherwise HTTP 401.
 """
 
+import logging
 import re
 import threading
 import time
@@ -36,6 +37,8 @@ from services.memory import set_memory_dir
 from services.obs import event as obs_event
 from services.ratelimit import extract_client_ip, get_rate_limiter, limit_key_for, rate_limit_headers
 from services.storage import UserStore
+
+logger = logging.getLogger(__name__)
 
 # Client-minted visitor ids (open mode only): strict shape so the
 # header can never smuggle paths or collide with id namespaces by
@@ -119,6 +122,7 @@ def _referenced_upload_ids(user_store: UserStore) -> Set[str]:
     try:
         stored, _warnings = user_store.load_chats()
     except Exception:
+        logger.debug("referenced-upload-ids load_chats failed", exc_info=True)
         return found
     try:
         blobs = []
@@ -141,7 +145,7 @@ def _referenced_upload_ids(user_store: UserStore) -> Set[str]:
             if legacy_image:
                 found.add(str(legacy_image))
     except Exception:
-        pass
+        logger.debug("referenced-upload-ids scan failed", exc_info=True)
     return found
 
 
@@ -165,17 +169,17 @@ def _run_storage_hygiene(user_store: UserStore, file_store: FileStore) -> None:
         try:
             file_store.prune_stale_outputs()
         except Exception:
-            pass
+            logger.debug("hygiene prune_stale_outputs failed", exc_info=True)
         try:
             file_store.prune_stale_uploads(referenced_ids=_referenced_upload_ids(user_store))
         except Exception:
-            pass
+            logger.debug("hygiene prune_stale_uploads failed", exc_info=True)
         try:
             file_store.prune_orphan_files()
         except Exception:
-            pass
+            logger.debug("hygiene prune_orphan_files failed", exc_info=True)
     except Exception:
-        pass
+        logger.debug("storage hygiene failed", exc_info=True)
 
 
 def _visitor_id(raw: Optional[str]) -> Optional[str]:
@@ -260,6 +264,7 @@ def session_token_from(request: Request, authorization: Optional[str]) -> tuple[
     try:
         cookie = request.cookies.get(SESSION_COOKIE)
     except Exception:
+        logger.debug("session cookie read failed", exc_info=True)
         cookie = None
     if cookie and cookie.strip():
         return cookie.strip(), "cookie"
@@ -275,6 +280,7 @@ def _require_csrf(request: Request, via: str) -> None:
     try:
         marker = (request.headers.get("x-pluto-csrf", "") or "").strip()
     except Exception:
+        logger.debug("csrf header read failed", exc_info=True)
         marker = ""
     if marker != "1":
         raise HTTPException(
@@ -350,4 +356,4 @@ def bind_request_user(user_id: str, limit_key: Optional[str] = None, source: str
         else:
             set_memory_dir(str(_get_user_store(user_id, source in ("env", "token", "account")).root))
     except Exception:
-        pass
+        logger.debug("bind_request_user set_memory_dir failed", exc_info=True)

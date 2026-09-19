@@ -24,6 +24,7 @@ All failures raise AccountError subclasses with user-safe messages
 """
 
 import hashlib
+import logging
 import re
 import secrets
 import time
@@ -31,6 +32,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.obs import event as obs_event
 from services.storage import _read_json, _write_json, data_root, path_lock
+
+logger = logging.getLogger(__name__)
 
 _ACCOUNTS_FILE = "accounts.json"
 
@@ -115,6 +118,7 @@ def _prune_expired_sessions(reg: Dict[str, Any], now: Optional[float] = None) ->
             sessions.pop(digest, None)
         return bool(expired)
     except Exception:
+        logger.debug("prune_expired_sessions failed", exc_info=True)
         return False
 
 
@@ -160,7 +164,7 @@ def _quarantine_registry(reason: str) -> None:
                 os.replace(path, backup)
         obs_event("accounts.quarantine", reason=reason)
     except Exception:
-        pass
+        logger.debug("accounts quarantine failed", exc_info=True)
 
 
 def _save_registry(reg: Dict[str, Any]) -> None:
@@ -259,7 +263,7 @@ def _dummy_verify() -> None:
     try:
         _hash_password(secrets.token_urlsafe(12), secrets.token_bytes(_SALT_BYTES))
     except Exception:
-        pass
+        logger.debug("dummy verify hash failed", exc_info=True)
 
 
 def _lockout_remaining(record: Dict[str, Any], now: float) -> float:
@@ -389,7 +393,7 @@ def login(username: Any, password: Any, agent: str = "") -> Tuple[str, Dict[str,
             try:
                 _save_registry(reg)
             except Exception:
-                pass
+                logger.debug("save registry during lockout failed", exc_info=True)
             obs_event("auth.login", status="locked")
             raise AccountLocked(
                 "Too many failed attempts. Try again in %ds."
@@ -406,7 +410,7 @@ def login(username: Any, password: Any, agent: str = "") -> Tuple[str, Dict[str,
             try:
                 _save_registry(reg)
             except Exception:
-                pass
+                logger.debug("save registry after fail registration failed", exc_info=True)
             if imposed > 0:
                 obs_event("auth.login", status="locked")
                 raise AccountLocked(
@@ -580,7 +584,7 @@ def logout(token: Any) -> bool:
                     try:
                         _save_registry(reg)
                     except Exception:
-                        pass
+                        logger.debug("save registry after session prune failed", exc_info=True)
                 return False
             del reg["sessions"][digest]
             _prune_expired_sessions(reg)

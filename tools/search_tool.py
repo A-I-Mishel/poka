@@ -21,6 +21,22 @@ _WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 _UA = "Pluto/1.0 (research assistant)"
 
 
+def _https_get(url: str, headers: Dict[str, str] | None = None, timeout: int = 15) -> bytes:
+    """GET an https:// URL as bytes (raises on failure).
+
+    Single funnel for all search backends (DDG/Wikimedia constants plus
+    urlencode'd queries): the scheme is asserted so no file: or custom
+    scheme can slip through, and every call carries a timeout.
+    """
+    import urllib.request
+
+    if not str(url or "").lower().startswith("https://"):
+        raise ValueError("refusing non-https fetch")
+    req = urllib.request.Request(url, headers=headers or {"User-Agent": _UA})  # noqa: S310 (https asserted above; fixed backends)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (https asserted above; fixed backends)
+        return resp.read()
+
+
 def _domain_of(url: str) -> str:
     """Extract the registrable-looking host from a URL, "" when unparseable."""
     try:
@@ -139,12 +155,9 @@ class _LiteParser(HTMLParser):
 def _ddg_lite_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[Dict[str, str]]:
     """DDG via its lite HTML endpoint (stdlib; the API package path is dead)."""
     def _fetch(url: str) -> List[Dict[str, str]]:
-        import urllib.parse
-        import urllib.request
-
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", "replace")
+        html = _https_get(
+            url, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"}
+        ).decode("utf-8", "replace")
         parser = _LiteParser()
         parser.feed(html)
         parser.close()
@@ -172,7 +185,7 @@ def _ddg_lite_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[
             if out2:
                 return out2
         except Exception:
-            pass
+            logger.debug("duckduckgo html fallback failed", exc_info=True)
         return out
     except Exception:
         return []
@@ -214,10 +227,8 @@ def _wikipedia_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List
             "srlimit": max(1, min(int(max_results or MAX_SEARCH_RESULTS), 10)),
             "srprop": "snippet", "format": "json",
         })
-        req = urllib.request.Request(
-            _WIKI_API + "?" + params, headers={"User-Agent": _UA})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace"))
+        req_url = _WIKI_API + "?" + params
+        data = json.loads(_https_get(req_url).decode("utf-8", "replace"))
         out: List[Dict[str, str]] = []
         hits = ((data.get("query") or {}).get("search") or [])[:max_results]
         for hit in hits:
@@ -260,7 +271,7 @@ def _wikipedia_search(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List
                         return s
                     out.sort(key=_score, reverse=True)
             except Exception:
-                pass
+                logger.debug("youtube snippet scoring failed", exc_info=True)
         return out
     except Exception:
         return []
@@ -277,12 +288,9 @@ _WIKIDATA_PROPS = {
 def _wiki_api(params: Dict[str, Any]) -> Any:
     """GET a Wikimedia API endpoint as parsed JSON (raises on failure)."""
     import urllib.parse
-    import urllib.request
 
     url = params.pop("_endpoint") + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+    return json.loads(_https_get(url).decode("utf-8", "replace"))
 
 
 def _wikidata_search(query: str) -> List[Dict[str, str]]:
@@ -361,8 +369,10 @@ def extract_cited_sources(text: str) -> List[Dict[str, str]]:
     found: List[Dict[str, str]] = []
     blocks = re.split(r"(?m)^\[(\d+)\]\s+", text)
     # blocks[0] is preamble; then alternating (number, body) pairs.
+    # re.split with one capture group always yields an even tail, so
+    # strict=True documents the invariant (raises on a regex change).
     it = iter(blocks[1:])
-    for number, body in zip(it, it):
+    for number, body in zip(it, it, strict=True):
         url_match = re.search(r"(?m)^URL:\s*(\S+)", body)
         title_line = body.strip().splitlines()[0] if body.strip() else ""
         title = re.sub(r"\s+—\s+\S+\s*$", "", title_line).strip()

@@ -9,6 +9,7 @@ presented as exact.
 """
 
 import html as _html
+import logging
 import re
 import zipfile
 from html.parser import HTMLParser
@@ -29,6 +30,8 @@ from services.limits import (
 )
 from services.obs import timed as obs_timed
 from tools.parse_cache import ParseCache
+
+logger = logging.getLogger(__name__)
 
 # ponytail: mtime-keyed text cache — second read in same chat is RAM, not re-parse
 _DOC_CACHE = ParseCache(32)
@@ -187,7 +190,7 @@ def _safe_zip_members(z: zipfile.ZipFile):
             if info.is_dir():
                 continue
         except Exception:
-            pass
+            logger.debug("zip is_dir check failed; treating as file", exc_info=True)
         if raw.startswith("/") or raw.startswith("~"):
             continue
         parts = [p for p in raw.split("/") if p not in ("", ".")]
@@ -212,6 +215,7 @@ def _read_zip_file(path) -> str:
             try:
                 total_uncompressed += max(0, int(info.file_size or 0))
             except Exception:
+                logger.debug("zip size tally failed; skipping entry", exc_info=True)
                 continue
         names_preview = [n for _, n in files[:MAX_ZIP_LISTED]]
         display = Path(str(path)).name
@@ -341,11 +345,13 @@ def _ole_strings_text(blob: bytes, label: str) -> str:
         try:
             parts.append(hit.decode("ascii"))
         except Exception:
+            logger.debug("ole ascii decode failed; skipping hit", exc_info=True)
             continue
     for hit in utf16_hits:
         try:
             parts.append(hit.decode("utf-16-le"))
         except Exception:
+            logger.debug("ole utf16 decode failed; skipping hit", exc_info=True)
             continue
     junk = frozenset({
         "Root Entry", "WordDocument", "PowerPoint Document",
@@ -386,7 +392,7 @@ def _read_ppt_file(path) -> str:
             if text and text.strip():
                 return text
         except Exception:
-            pass
+            logger.debug("renamed-pptx parse failed; falling back to ole strings", exc_info=True)
         # Fall through to OLE strings for any remaining text.
     try:
         return _ole_strings_text(blob, ".ppt")
@@ -420,12 +426,13 @@ def _read_xls_file(path) -> str:
                 try:
                     parts.append(f"[sheet {name}]\n{frame.to_string()}")
                 except Exception:
+                    logger.debug("xls sheet render failed; skipping sheet", exc_info=True)
                     continue
             text = "\n".join(parts).strip()
             if text:
                 return text
     except Exception:
-        pass
+        logger.debug("xls pandas path failed; falling back to ole strings", exc_info=True)
     return _ole_strings_text(path.read_bytes(), ".xls")
 
 
@@ -448,7 +455,8 @@ def _odf_content_root(blob: bytes) -> Tuple[object, dict]:
             import defusedxml.ElementTree as DET  # type: ignore
             root = DET.fromstring(blob, forbid_dtd=True, forbid_entities=True)
         except ImportError:
-            root = ET.fromstring(blob)
+            # DOCTYPE/ENTITY pre-rejected above; defusedxml preferred when installed.
+            root = ET.fromstring(blob)  # noqa: S314
         except Exception as e:
             raise ValueError(f"cannot parse document content ({e})")
     except ValueError:
@@ -650,6 +658,7 @@ def _read_pptx_file(path) -> str:
                         if line:
                             lines.append(line)
             except Exception:
+                logger.debug("ppt shape extract failed; skipping shape", exc_info=True)
                 continue
         if lines:
             parts.append(f"[slide {i}]\n" + "\n".join(lines))
@@ -669,6 +678,7 @@ def _read_xlsx_file(path) -> str:
         try:
             parts.append(f"[sheet {name}]\n{frame.to_string()}")
         except Exception:
+            logger.debug("xlsx sheet render failed; skipping sheet", exc_info=True)
             continue
     return "\n".join(parts)
 

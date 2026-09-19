@@ -3,9 +3,9 @@
  */
 import { $, toast } from "./ui.js";
 import { escHtml } from "./markdown.js";
-import { apiUrl, AUTH_SEEN_KEY } from "./config.js";
+import { AUTH_SEEN_KEY } from "./config.js";
 import { S, AUTH_MODE } from "./state.js";
-import { authHeaders } from "./auth-store.js";
+import { rawReq } from "./api.js";
 
 var _authHooks = {};
 export function setAuthHooks(h) { _authHooks = h || {}; }
@@ -25,12 +25,12 @@ function renderAcct() {
 }
 async function refreshMe() {
   ACCT.username = "";
-  /* Direct fetch (not req()): req() would pop a nested login dialog on
+  /* rawReq (not req()): req() would pop a nested login dialog on
    * 401, and a stale/revoked/wiped cookie session must not loop the
    * dialog on every call. The session is an HttpOnly cookie (never in
    * JS); a 401 here just means logged-out. */
   try {
-    var res = await fetch(apiUrl("/api/auth/me"), { headers: authHeaders(), credentials: "include" });
+    var res = await rawReq("/api/auth/me");
     if (res.status === 401) {
       ACCT.username = "";
       renderAcct();
@@ -49,10 +49,8 @@ async function refreshMe() {
 async function authCall(path, body) {
   var res;
   try {
-    res = await fetch(apiUrl(path), {
+    res = await rawReq(path, {
       method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
-      credentials: "include",
       body: JSON.stringify(body)
     });
   } catch (e) {
@@ -146,7 +144,7 @@ async function authSubmit(path) {
   }
 }
 async function signOut() {
-  try { await fetch(apiUrl("/api/auth/logout"), { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()), credentials: "include", body: "{}" }); } catch (e) {}
+  try { await rawReq("/api/auth/logout", { method: "POST", body: "{}" }); } catch (e) {}
   ACCT.username = "";
   renderAcct();
   toast("Signed out");
@@ -190,7 +188,7 @@ function hideAcct() {
 async function loadSessions() {
   var box = $("acctSessions");
   try {
-    var res = await fetch(apiUrl("/api/auth/sessions"), { headers: authHeaders(), credentials: "include" });
+    var res = await rawReq("/api/auth/sessions");
     if (!res.ok) throw new Error(res.statusText);
     var data = await res.json();
     var list = (data && data.sessions) || [];
@@ -217,10 +215,8 @@ async function submitPasswordChange() {
   var hint = pwHint(nw, ACCT.username);
   if (hint) { err.textContent = hint; err.classList.remove("hidden"); return; }
   try {
-    var res = await fetch(apiUrl("/api/auth/change-password"), {
+    var res = await rawReq("/api/auth/change-password", {
       method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
-      credentials: "include",
       body: JSON.stringify({ current_password: cur, new_password: nw })
     });
     if (!res.ok) {
@@ -238,7 +234,7 @@ async function submitPasswordChange() {
 }
 async function signOutEverywhere() {
   try {
-    await fetch(apiUrl("/api/auth/logout-all"), { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()), credentials: "include", body: "{}" });
+    await rawReq("/api/auth/logout-all", { method: "POST", body: "{}" });
   } catch (e) {
     toast("Could not sign out everywhere: " + e.message);
     return;
@@ -260,6 +256,13 @@ function askAsync(title, val) {
     ask(title, val, function (v) { resolve(v); });
   });
 }
+/* All dialog/account wiring lives in initAuth(), not at import time,
+ * so this module imports cleanly without a DOM (node/vitest/smoke
+ * phase 1). app.js calls initAuth() once at boot. */
+var _authInit = false;
+function initAuth() {
+  if (_authInit) return;
+  _authInit = true;
 $("dlgOk").addEventListener("click", function () {
   var v = $("dlgInput").value.trim();
   $("dlg").classList.add("hidden");
@@ -309,5 +312,6 @@ $("acctClose").addEventListener("click", function () { hideAcct(); });
 $("acctSignOut").addEventListener("click", function () { hideAcct(); signOut(); });
 $("acctLogoutAll").addEventListener("click", function () { signOutEverywhere(); });
 $("acctSavePass").addEventListener("click", function () { submitPasswordChange(); });
+} /* end initAuth */
 
-export { renderLoginBtn, renderAcct, refreshMe, authCall, authDismissed, markAuthSeen, showAuth, hideAuth, authAsync, settleAuth, authSubmit, signOut, signOutEverywhere, pwHint, openAcct, hideAcct, loadSessions, submitPasswordChange, ask, askAsync };
+export { initAuth, renderLoginBtn, renderAcct, refreshMe, authCall, authDismissed, markAuthSeen, showAuth, hideAuth, authAsync, settleAuth, authSubmit, signOut, signOutEverywhere, pwHint, openAcct, hideAcct, loadSessions, submitPasswordChange, ask, askAsync };

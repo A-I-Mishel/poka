@@ -14,6 +14,7 @@ Private-mode and service-availability checks stay at the call site
 from typing import Optional, Tuple
 
 from services.context import get_current_user_id, get_limit_key
+from services.identity import auth_mode
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
 
@@ -62,3 +63,20 @@ def claim_tool_slot(tool_name: str, action: str, limit_noun: str) -> Tuple[Optio
             f"exceeded, retry in {verdict.retry_after:.0f}s."
         )
     return user_id, None
+
+
+def claim_private_slot(
+    tool_name: str, action: str = "code", limit_noun: str = "code-execution"
+) -> Tuple[Optional[str], Optional[str]]:
+    """Private-mode + user context + rate check, or (None, error).
+
+    Shared by code execution tools (run_python, run_code): open mode
+    is denied outright since untrusted visitors must never execute code.
+    """
+    if auth_mode() != "private":
+        obs_event("ratelimit.deny", action=action, tool=tool_name, reason="open_mode")
+        return None, (
+            f"STATUS=DENIED tool={tool_name}: code execution is disabled "
+            "in open mode. Set PLUTO_AUTH_MODE=private (trusted/owner use only)."
+        )
+    return claim_tool_slot(tool_name, action, limit_noun)

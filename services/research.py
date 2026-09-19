@@ -27,6 +27,7 @@ Excerpt semantics:
 """
 
 from datetime import datetime
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.limits import (
@@ -40,6 +41,8 @@ from services.limits import (
     RESEARCH_TITLE_CHARS,
 )
 from services.storage import clean_generation_spec, clean_source_record, is_valid_id
+
+logger = logging.getLogger(__name__)
 
 #: Cap for the visible Research list (compact).
 MAX_VISIBLE_BRIEFS: int = 8
@@ -208,10 +211,11 @@ def visible_briefs_for_scope(
                 try:
                     scoped = user_store.list_briefs(record["id"])
                 except Exception:
+                    logger.debug("scoped briefs list failed; using personal briefs", exc_info=True)
                     return []
                 return scoped[: max(0, limit)]
     except Exception:
-        pass
+        logger.debug("scoped briefs failed; using personal briefs", exc_info=True)
     return personal_briefs(user_store, limit)
 
 

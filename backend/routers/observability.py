@@ -98,7 +98,7 @@ def health_detailed(ctx: UserContext = Depends(current_user)):
                 if getter() is not None:
                     configured.append(name)
             except Exception:
-                pass
+                logger.debug("tier getter failed", tier=name, exc_info=True)
         checks["llm_tiers"] = {"ok": True, "configured": configured}
     except Exception as e:
         checks["llm_tiers"] = {"ok": False, "error": str(e)}

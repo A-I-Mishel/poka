@@ -3,16 +3,23 @@
  * top-level listeners and re-exports the original chat.js surface so
  * app.js and other importers keep working unchanged.
  */
-import { $, toast } from "./ui.js";
+import { $, toast, enc } from "./ui.js";
 import { MAX_MSG_CHARS } from "./config.js";
-import { S, chats, current, projects, savePrefs, setChats, setCurrent } from "./state.js";
+import { S, chats, current, projects, setPref, setChats, setCurrent } from "./state.js";
 import { req } from "./api.js";
 import { ask } from "./auth.js";
 import { openSection, showChat, openTitle } from "./panels.js";
-import { decideApproval, copyText, speakText, renderChat, renderRecents, refreshProjects, refreshChats, downloadMarkdown, chatMarkdown, getCtxId, getProjId, msgEl, renderProjects, setActiveTier, renderModelDD, stopSpeaking, hydrateUploadImages } from "./render.js";
+import { decideApproval, copyText, speakText, renderChat, renderRecents, refreshProjects, refreshChats, downloadMarkdown, chatMarkdown, getCtxId, getProjId, msgEl, msgMeta, renderProjects, setActiveTier, renderModelDD, stopSpeaking, hydrateUploadImages } from "./render.js";
 import { send, sendText, isStreaming, clearComposer, restoreComposer, uploadPending, streamInto } from "./send.js";
 
-var chatCol = $("chatCol"), input = $("input");
+/* All DOM wiring lives in initChat(), not at import time, so this
+ * module imports cleanly without a DOM (node/vitest/smoke phase 1).
+ * app.js calls initChat() once at boot. */
+var _chatInit = false;
+function initChat() {
+  if (_chatInit) return;
+  _chatInit = true;
+  var chatCol = $("chatCol"), input = $("input");
 
 $("sendBtn").addEventListener("click", send);
 input.addEventListener("keydown", function (e) {
@@ -31,14 +38,15 @@ chatCol.addEventListener("click", async function (e) {
   var btn = e.target.closest("[data-act]");
   if (!btn) return;
   var msg = btn.closest(".msg");
-  var i = msg._i;
+  var meta = msgMeta(msg);
+  var i = meta.i;
   var act = btn.getAttribute("data-act");
   if (act === "approve" || act === "reject") { decideApproval(btn, act === "approve"); return; }
-  if (act === "copy") { copyText(msg._raw); }
-  else if (act === "speak") { speakText(msg._raw, btn); }
+  if (act === "copy") { copyText(meta.raw); }
+  else if (act === "speak") { speakText(meta.raw, btn); }
   else if (act === "edit") {
     if (isStreaming()) { toast("Wait for the current reply"); return; }
-    var old = msg._raw;
+    var old = meta.raw;
     msg.innerHTML = "";
     var ta = document.createElement("textarea");
     ta.className = "edit-ta";
@@ -123,7 +131,7 @@ $("projRename").addEventListener("click", function () {
   ask("Rename project", p.name || "", async function (v) {
     if (!v) return;
     try {
-      await req("/api/projects/" + getProjId(), { method: "PATCH", body: JSON.stringify({ name: v }) });
+      await req("/api/projects/" + enc(getProjId()), { method: "PATCH", body: JSON.stringify({ name: v }) });
       await refreshProjects();
       toast("Renamed");
     } catch (err) { toast("Rename failed: " + err.message); }
@@ -132,8 +140,7 @@ $("projRename").addEventListener("click", function () {
 $("projContext").addEventListener("click", function () {
   $("projMenu").classList.add("hidden");
   if (!getProjId()) return;
-  S.projectId = getProjId();
-  savePrefs();
+  setPref("projectId", getProjId());
   renderProjects();
   openSection("project");
 });
@@ -141,8 +148,8 @@ $("projArchive").addEventListener("click", async function () {
   $("projMenu").classList.add("hidden");
   if (!getProjId()) return;
   try {
-    await req("/api/projects/" + getProjId() + "/archive", { method: "POST" });
-    if (S.projectId === getProjId()) { S.projectId = null; savePrefs(); }
+    await req("/api/projects/" + enc(getProjId()) + "/archive", { method: "POST" });
+    if (S.projectId === getProjId()) { setPref("projectId", null); }
     await refreshProjects();
     toast("Project archived");
   } catch (err) { toast("Archive failed: " + err.message); }
@@ -153,7 +160,7 @@ $("addProjBtn").addEventListener("click", function () {
     try {
       var rec = await req("/api/projects", { method: "POST", body: JSON.stringify({ name: v }) });
       await refreshProjects();
-      if (rec && rec.id) { S.projectId = rec.id; savePrefs(); renderProjects(); }
+      if (rec && rec.id) { setPref("projectId", rec.id); renderProjects(); }
       toast('Project "' + v + '" added');
     } catch (err) { toast("Cannot create project: " + err.message); }
   });
@@ -167,7 +174,7 @@ $("ctxRename").addEventListener("click", function () {
   ask("Rename chat", c.title || "", async function (v) {
     if (!v) return;
     try {
-      var data = await req("/api/chats/" + getCtxId(), { method: "PATCH", body: JSON.stringify({ title: v }) });
+      var data = await req("/api/chats/" + enc(getCtxId()), { method: "PATCH", body: JSON.stringify({ title: v }) });
       setChats(data.chats || chats);
       renderRecents();
       toast("Renamed");
@@ -179,7 +186,7 @@ $("ctxDelete").addEventListener("click", async function () {
   if (!getCtxId()) return;
   if (!window.confirm("Delete this chat? This cannot be undone.")) return;
   try {
-    var data = await req("/api/chats/" + getCtxId(), { method: "DELETE" });
+    var data = await req("/api/chats/" + enc(getCtxId()), { method: "DELETE" });
     setChats(data.chats || []);
     setCurrent(data.current || current);
     renderRecents();
@@ -220,7 +227,7 @@ $("ctxExport").addEventListener("click", async function () {
   $("ctxMenu").classList.add("hidden");
   if (!getCtxId()) return;
   try {
-    var data = await req("/api/chats/" + getCtxId() + "/messages");
+    var data = await req("/api/chats/" + enc(getCtxId()) + "/messages");
     var title = (data && data.title) || "chat";
     downloadMarkdown(title, chatMarkdown(title, (data && data.messages) || []));
     toast("Chat exported");
@@ -231,5 +238,6 @@ $("modelBtn").addEventListener("click", function (e) {
   renderModelDD();
   $("modelDD").classList.toggle("hidden");
 });
+} /* end initChat */
 
-export { msgEl, renderChat, refreshChats, refreshProjects, sendText, send, copyText, renderRecents, renderProjects, chatMarkdown, setActiveTier, renderModelDD, clearComposer, restoreComposer, uploadPending, streamInto, stopSpeaking, speakText, hydrateUploadImages };
+export { initChat, msgEl, renderChat, refreshChats, refreshProjects, sendText, send, copyText, renderRecents, renderProjects, chatMarkdown, setActiveTier, renderModelDD, clearComposer, restoreComposer, uploadPending, streamInto, stopSpeaking, speakText, hydrateUploadImages };

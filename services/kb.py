@@ -15,6 +15,7 @@ into request paths (ingest/search return status, callers decide).
 """
 
 import io
+import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -40,6 +41,8 @@ from services.limits import (
 )
 from services.obs import event as obs_event
 from services.storage import _read_json, _write_json, user_dir
+
+logger = logging.getLogger(__name__)
 
 
 def _kb_path(user_id: Any) -> Path:
@@ -92,7 +95,7 @@ def cosine(a: Any, b: Any) -> float:
         return 0.0
     if not fa or len(fa) != len(fb):
         return 0.0
-    dot = sum(x * y for x, y in zip(fa, fb))
+    dot = sum(x * y for x, y in zip(fa, fb, strict=True))
     na = sum(x * x for x in fa)
     nb = sum(x * x for x in fb)
     if na <= 0 or nb <= 0:
@@ -128,7 +131,7 @@ def _dot(a: Any, b: Any) -> float:
         return 0.0
     if not fa or len(fa) != len(fb):
         return 0.0
-    return sum(x * y for x, y in zip(fa, fb))
+    return sum(x * y for x, y in zip(fa, fb, strict=True))
 
 
 def _blank_kb() -> Dict[str, Any]:
@@ -196,6 +199,7 @@ def _pdf_text(blob: bytes) -> tuple:
             try:
                 text = page.extract_text() or ""
             except Exception:
+                logger.debug("pdf page extract failed; skipping page", exc_info=True)
                 continue
             parts.append(text)
             total += len(text)
@@ -244,6 +248,7 @@ def _pptx_text(blob: bytes) -> tuple:
                         if text:
                             parts.append(text)
                 except Exception:
+                    logger.debug("pptx shape extract failed; skipping shape", exc_info=True)
                     continue
         text = "\n".join(parts).strip()
         return (text, "") if text else ("", "empty")
@@ -264,6 +269,7 @@ def _xlsx_text(blob: bytes) -> tuple:
             try:
                 parts.append(f"[{name}]\n{frame.to_string()}")
             except Exception:
+                logger.debug("xlsx sheet render failed; skipping sheet", exc_info=True)
                 continue
         text = "\n".join(parts).strip()
         return (text, "") if text else ("", "empty")
@@ -274,38 +280,18 @@ def _xlsx_text(blob: bytes) -> tuple:
 def _ocr_available() -> bool:
     """True only when on-device image OCR can actually run (lib + binary).
 
-    Sibling of tools.pdf_tool._ocr_available, duplicated (not imported)
-    to keep services/ free of tools/ imports — tools/__init__ pulls the
-    whole tool registry, which would cycle back through services.kb.
+    Delegates to services.ocr (shared leaf; services/ never imports tools/).
     """
-    try:
-        import pytesseract  # noqa: F401
-    except Exception:
-        return False
-    try:
-        import shutil
+    from services.ocr import ocr_available as _shared
 
-        return shutil.which("tesseract") is not None
-    except Exception:
-        return False
+    return _shared()
 
 
 def _ocr_image_bytes(blob: bytes) -> str:
     """OCR one image's bytes; "" on any failure (never raises)."""
-    try:
-        import io as _io
+    from services.ocr import ocr_image_bytes as _shared_bytes
 
-        from PIL import Image
-        import pytesseract
-
-        with Image.open(_io.BytesIO(blob)) as img:
-            try:
-                img.load()
-            except Exception:
-                pass
-            return (pytesseract.image_to_string(img) or "").strip()
-    except Exception:
-        return ""
+    return _shared_bytes(blob)
 
 
 def _image_text(blob: bytes, display_name: str = "") -> tuple:
@@ -465,6 +451,7 @@ def _zip_text(blob: bytes) -> tuple:
                 # Read with per-file cap from limits
                 member = zf.read(info.filename)[:MAX_ZIP_FILE_BYTES + 1]
             except Exception:
+                logger.debug("zip member read failed; skipping entry", exc_info=True)
                 continue
             if len(member) > MAX_ZIP_FILE_BYTES:
                 continue
@@ -481,6 +468,7 @@ def _zip_text(blob: bytes) -> tuple:
                     try:
                         text = member.decode("utf-8", errors="replace").strip()
                     except Exception:
+                        logger.debug("zip member decode failed; skipping entry", exc_info=True)
                         continue
                 if not text:
                     continue
@@ -533,6 +521,7 @@ def _ole_strings_text(blob: bytes) -> tuple:
             try:
                 piece = hit.decode("utf-16-le") if b"\x00" in hit else hit.decode("ascii")
             except Exception:
+                logger.debug("ole string decode failed; skipping hit", exc_info=True)
                 continue
             text = " ".join(str(piece).split()).strip()
             if len(text) < 5 or text in seen:
@@ -577,7 +566,8 @@ def _odf_xml_text(blob: bytes, kind: str) -> tuple:
 
             root = _DET.fromstring(content, forbid_dtd=True, forbid_entities=True)
         except ImportError:
-            root = _ET.fromstring(content)
+            # DOCTYPE/ENTITY pre-rejected above; defusedxml preferred when installed.
+            root = _ET.fromstring(content)  # noqa: S314
     except Exception:
         return "", f"{kind}-extract-failed"
     ns = {
@@ -639,12 +629,13 @@ def _xls_text(blob: bytes) -> tuple:
                 try:
                     parts.append(f"[{name}]\n{frame.to_string()}")
                 except Exception:
+                    logger.debug("xls sheet render failed; skipping sheet", exc_info=True)
                     continue
             text = "\n".join(parts).strip()
             if text:
                 return text, ""
     except Exception:
-        pass
+        logger.debug("xls parse failed; falling back to ole strings", exc_info=True)
     return _ole_strings_text(blob)
 
 
@@ -742,7 +733,7 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
                 return {"ingested": False, "chunks": 0, "reason": "kb-full"}
         except Exception:
             # If vault unreadable, skip cap checks but still attempt store (will fail there)
-            pass
+            logger.debug("kb cap pre-check failed; attempting store anyway", exc_info=True)
     try:
         vectors = kb_embeddings.embed_texts(chunks)
     except Exception as e:
@@ -779,7 +770,7 @@ def ingest_document(user_id: Any, upload_id: Any, display_name: str, data: bytes
                 "dim": dim,
                 "normalized": True,
                 "ingested_at": time.time(),
-                "chunks": [{"text": c, "vector": v} for c, v in zip(chunks, stored_vectors)],
+                "chunks": [{"text": c, "vector": v} for c, v in zip(chunks, stored_vectors, strict=True)],
             }
             kb["model"] = kb_embeddings.default_model()
             _save_kb(user_id, kb)
@@ -1025,7 +1016,7 @@ def drop_document(user_id: Any, upload_id: Any) -> bool:
             index = get_index(str(user_id))
             index.remove_document(str(upload_id))
         except Exception:
-            pass
+            logger.debug("faiss document removal failed", exc_info=True)
         return True
     except Exception:
         return False

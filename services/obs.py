@@ -65,7 +65,7 @@ def trace_llm_call(request_id: str, tier: str, task_type: str, prompt_tokens: in
         try:
             _completion[0] = int(tokens or 0)
         except Exception:
-            pass
+            logger.debug("completion token record failed", exc_info=True)
 
     try:
         yield _set_completion
@@ -74,7 +74,7 @@ def trace_llm_call(request_id: str, tier: str, task_type: str, prompt_tokens: in
         try:
             LLM_PROVIDER_ERRORS.labels(tier=tier, error_kind=type(e).__name__).inc()
         except Exception:
-            pass
+            logger.debug("provider error metric failed", exc_info=True)
         raise
     finally:
         try:
@@ -85,12 +85,12 @@ def trace_llm_call(request_id: str, tier: str, task_type: str, prompt_tokens: in
             if prompt_tokens:
                 LLM_TOKEN_USAGE.labels(tier=tier, direction="prompt").inc(prompt_tokens)
         except Exception:
-            pass
+            logger.debug("llm duration/token metrics failed", exc_info=True)
         try:
             if span is not None:
                 end_llm_span(span, _completion[0], error)
         except Exception:
-            pass
+            logger.debug("llm span end failed", exc_info=True)
 
 
 def record_tier_fallback(requested: str, actual: str, reason: str) -> None:
@@ -121,12 +121,12 @@ def trace_tool_call(request_id: str, tool: str, execution_mode: str):
             TOOL_CALL_DURATION.labels(tool=tool, execution_mode=execution_mode).observe(duration)
             TOOL_CALLS_TOTAL.labels(tool=tool, status=status).inc()
         except Exception:
-            pass
+            logger.debug("tool duration metrics failed", exc_info=True)
         try:
             if span is not None:
                 span.end()
         except Exception:
-            pass
+            logger.debug("tool span end failed", exc_info=True)
 
 
 def record_tool_execution_mode(tool: str, mode: str) -> None:
@@ -148,12 +148,12 @@ def trace_kb_search(request_id: str, backend: str):
             duration = time.perf_counter() - start
             KB_SEARCH_DURATION.labels(backend=backend).observe(duration)
         except Exception:
-            pass
+            logger.debug("kb search duration metric failed", exc_info=True)
         try:
             if span is not None:
                 span.end()
         except Exception:
-            pass
+            logger.debug("kb span end failed", exc_info=True)
 
 
 def record_kb_cache_hit(hit: bool) -> None:
@@ -188,12 +188,12 @@ def trace_sqlite_query(operation: str):
             duration = time.perf_counter() - start
             SQLITE_QUERY_DURATION.labels(operation=operation).observe(duration)
         except Exception:
-            pass
+            logger.debug("sqlite duration metric failed", exc_info=True)
         try:
             if span is not None:
                 span.end()
         except Exception:
-            pass
+            logger.debug("storage span end failed", exc_info=True)
 
 
 def set_migration_status(user_id: str, status: int) -> None:  # 1=done, 0=pending, -1=failed

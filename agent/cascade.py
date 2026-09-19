@@ -6,6 +6,7 @@ never selected here. BudgetExhausted is never swallowed and never cools
 a tier (it is our limit, not theirs).
 """
 
+import logging
 import re
 import threading
 import time
@@ -45,6 +46,8 @@ _TIER_LAST_ERROR: Dict[str, tuple] = {}
 # (mirrors services.ratelimit). Misses here are benign (two callers
 # cooling the same tier) but serializing keeps streak counting exact.
 _STATE_LOCK = threading.Lock()
+
+logger = logging.getLogger(__name__)
 
 
 def _friendly_reason(kind: str) -> str:
@@ -250,7 +253,7 @@ def _record_tier_failure(name: str, kind: str = "unknown", error: Any = None) ->
                 detail = str(error)[:200] if error is not None else kind
                 _TIER_LAST_ERROR[name] = (kind, detail, time.time())
         except Exception:
-            pass
+            logger.debug("tier last-error record failed", exc_info=True)
         if kind == "timeout":
             streak: int = _TIER_TIMEOUTS.get(name, 0) + 1
             _TIER_TIMEOUTS[name] = streak
@@ -310,7 +313,7 @@ def _record_latency(name: str, seconds: float) -> None:
             _TIER_LAT_EMA[name] = secs if prev is None else (
                 _LAT_EMA_ALPHA * secs + (1.0 - _LAT_EMA_ALPHA) * prev)
     except Exception:
-        pass
+        logger.debug("tier latency EMA update failed", exc_info=True)
 
 
 def _is_slow_tier(name: str) -> bool:
@@ -349,7 +352,7 @@ def _usable_tiers(
                 fast = [item for item in picked if not _is_slow_tier(item[0])]
                 return fast + slow
         except Exception:
-            pass
+            logger.debug("slow-tier demotion failed; using cascade order", exc_info=True)
     return picked
 
 
@@ -388,7 +391,7 @@ def tier_status_snapshot(
                 entry["last_error_kind"] = str(last[0])
                 entry["last_error"] = str(last[1])[:200]
         except Exception:
-            pass
+            logger.debug("tier snapshot entry failed", exc_info=True)
         snapshot.append(entry)
     return snapshot
 
@@ -412,7 +415,7 @@ def reset_tier_state(name: Optional[str] = None) -> int:
                     if store.pop(tier_name, None) is not None:
                         cleared += 1
     except Exception:
-        pass
+        logger.debug("tier state reset failed", exc_info=True)
     return cleared
 
 

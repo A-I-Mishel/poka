@@ -158,6 +158,22 @@ the next live tier continues the same turn with collected tool results
 kept — planning, tool rounds, and final synthesis all fail over, so
 work is never restarted from scratch.
 
+Input understanding (`services/normalize.py`, single source): typo
+correction + creation-verb canonicalization (`turn`/`convert`/`make` →
+`create`) feed the router, tool binding, and teaching detection, so
+`craete`, `convrt`, `pyton`, `documnet` keep their intent. Typo
+metadata rides each answer (`corrections`, `route_confidence`); reads
+auto-correct with a note, writes confirm via approvals. Mine new
+vocabulary with `python scripts/mine_fallthrough.py` or
+`GET /api/ops/router` (scrubbed, no PII) — grow the synonym table,
+never ad-hoc keyword branches.
+
+Answer quality: synthesis stays Gemini-led and quality-first (weak
+lanes — Mistral, Gemma 26B, Ling Fin, Laguna, Free Router — answer
+only when quality tiers are down, marked `fallback: degraded`);
+grounding applies to every tier and synthesis; research drafts earn
+one cheap-tier reflection pass (150+ chars).
+
 ## Tools
 
 File tools accept opaque upload IDs only — never filesystem paths.

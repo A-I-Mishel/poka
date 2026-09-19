@@ -422,7 +422,7 @@ def notify() -> None:
             _dirty = True
         _ensure_worker()
     except Exception:
-        pass
+        logger.debug("snapshot notify failed", exc_info=True)
 
 
 def flush() -> bool:

@@ -42,7 +42,7 @@ def _isolated_cwd(tmp_path, monkeypatch):
 @pytest.fixture(params=LANES, ids=[lane[0] for lane in LANES])
 def lane(request):
     keys = ("name", "key_env", "placeholder", "model_env", "default_model", "base")
-    return dict(zip(keys, request.param))
+    return dict(zip(keys, request.param, strict=True))
 
 
 def _model_of(client):

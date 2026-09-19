@@ -68,7 +68,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.lock
           pip install -e .
 
       - name: Start Pluto server (background)
@@ -146,7 +146,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.lock
           pip install locust
 
       - name: Start Pluto server

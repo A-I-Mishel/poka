@@ -6,7 +6,10 @@ it holds no user data, so sharing it is safe.
 """
 
 import functools
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @functools.lru_cache(maxsize=1)
@@ -30,7 +33,7 @@ def count_tokens(text: str) -> int:
         try:
             return len(encoder.encode(text))
         except Exception:
-            pass
+            logger.debug("tiktoken encode failed; using approximation", exc_info=True)
     return max(1, len(text) // 4)
 
 
@@ -55,6 +58,6 @@ def truncate_tokens(text: str, max_tokens: int, marker: str = "\n[Note: truncate
             clipped = encoder.decode(encoder.encode(text)[:max_tokens])
             return clipped + marker
         except Exception:
-            pass
+            logger.debug("tiktoken clip failed; using char approximation", exc_info=True)
     approx_chars = max_tokens * 4
     return text[:approx_chars] + marker

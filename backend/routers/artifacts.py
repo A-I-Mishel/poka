@@ -1,5 +1,6 @@
 """Generated-file (artifact) endpoints: list, download, regenerate, delete."""
 
+import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +10,8 @@ from backend.deps import UserContext, check_generate_limit, current_user
 from services import research as research_svc
 from services.files import FileValidationError
 from services.storage import StorageError
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/artifacts", tags=["artifacts"])
 
@@ -32,6 +35,7 @@ def list_artifacts(ctx: UserContext = Depends(current_user)):
                 "sub": "",
             })
         except Exception:
+            logger.debug("artifact meta serialization failed", exc_info=True)
             continue
     return out
 

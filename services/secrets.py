@@ -53,17 +53,24 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     return val
 
 def validate_secrets() -> list[str]:
-    """Return warnings for missing/placeholder secrets (never logs values)."""
+    """Return warnings for missing/placeholder secrets (never logs values).
+
+    Note: this module is the only place allowed direct os.getenv —
+    every other module must read through get_secret() so placeholder
+    filtering cannot be bypassed.
+    """
     warnings: list[str] = []
     mode = os.getenv("PLUTO_AUTH_MODE", "open") or "open"
     if mode.strip().lower() == "private" and not os.getenv("PLUTO_ACCESS_TOKENS"):
         warnings.append("PLUTO_AUTH_MODE=private but PLUTO_ACCESS_TOKENS is empty — no one can log in")
     # warn if no LLM tier is configured at all
-    has_any = any(
-        os.getenv(k) and not is_placeholder(os.getenv(k))
-        for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
-                  "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "NVIDIA_API_KEY")
-    )
+    has_any = False
+    for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+              "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "NVIDIA_API_KEY"):
+        raw = os.getenv(k)
+        if raw and not is_placeholder(raw):
+            has_any = True
+            break
     if not has_any:
         warnings.append("No LLM API key configured — /api/health will show empty tiers")
     return warnings

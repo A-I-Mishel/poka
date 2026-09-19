@@ -3,16 +3,34 @@
  * Split from chat.js; behavior preserved. Module-local DOM refs point at
  * the same shared nodes as other modules (see panels.js precedent).
  */
-import { $, toast, esc, fmtTime, fmtDay } from "./ui.js";
+import { $, toast, esc, enc, isSafeHttpUrl, fmtTime, fmtDay } from "./ui.js";
 import { md, planet } from "./markdown.js";
 import { apiUrl } from "./config.js";
-import { S, TIERS, chats, current, projects, savePrefs, setChats, setCurrent, setProjects } from "./state.js";
+import { S, TIERS, chats, current, projects, savePrefs, setPref, setChats, setCurrent, setProjects } from "./state.js";
 import { req, authedDownload } from "./api.js";
 import { authHeaders } from "./auth-store.js";
 import { renderAcct } from "./auth.js";
 import { showChat, openTitle } from "./panels.js";
 
-var chatCol = $("chatCol"), chatScroll = $("chatScroll"), chatTitle = $("chatTitle");
+/* DOM refs are grabbed in initRender(), not at import time, so this
+ * module imports cleanly without a DOM (node/vitest/smoke phase 1). */
+var chatCol = null, chatScroll = null, chatTitle = null;
+var _renderInit = false;
+var _scrollRaf = null;
+function initRender() {
+  if (_renderInit) return;
+  _renderInit = true;
+  chatCol = $("chatCol"); chatScroll = $("chatScroll"); chatTitle = $("chatTitle");
+  $("scrollBtn").addEventListener("click", function () { scrollBottom(); });
+  chatScroll.addEventListener("scroll", function () {
+    if (_scrollRaf) return;
+    _scrollRaf = requestAnimationFrame(function () {
+      _scrollRaf = null;
+      var far = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight > 250;
+      $("scrollBtn").classList.toggle("hidden", !far);
+    });
+  }, { passive: true });
+}
 function chipForAttachment(a) {
   var c = document.createElement("div");
   c.className = "chip art-chip";
@@ -35,7 +53,7 @@ function chipForAttachment(a) {
   n.textContent = a.name || "file";
   c.appendChild(n);
   c.addEventListener("click", function () {
-    if (a.id) authedDownload("/api/uploads/" + a.id + "/file", a.name || "file");
+    if (a.id) authedDownload("/api/uploads/" + enc(a.id) + "/file", a.name || "file");
   });
   return c;
 }
@@ -65,8 +83,8 @@ async function decideApproval(btn, approve, retried) {
     var tok = await approvalTokenFor(id);
     if (!tok) { toast("Already decided or expired."); decidedApprovals[id] = 1; renderChat(); return; }
     var res = approve
-      ? await req("/api/approvals/" + id + "/approve", { method: "POST", body: JSON.stringify({ token: tok }) })
-      : await req("/api/approvals/" + id + "/reject", { method: "POST" });
+      ? await req("/api/approvals/" + enc(id) + "/approve", { method: "POST", body: JSON.stringify({ token: tok }) })
+      : await req("/api/approvals/" + enc(id) + "/reject", { method: "POST" });
     delete approvalTokens[id];
     decidedApprovals[id] = 1;
     if (approve && res && res.result) toast(String(res.result).slice(0, 200));
@@ -82,10 +100,14 @@ async function decideApproval(btn, approve, retried) {
     toast("Approval failed: " + msg);
   }
 }
+/* Expando-free message meta (index + raw content for copy/edit):
+ * a WeakMap keeps DOM nodes clean and releases entries when the
+ * node is removed (no leak on re-render). */
+var _msgMeta = new WeakMap();
+function msgMeta(el) { return _msgMeta.get(el) || { i: -1, raw: "" }; }
 function msgEl(m, idx) {
   var w = document.createElement("div");
-  w._i = idx;
-  w._raw = String((m && m.content) || "");
+  _msgMeta.set(w, { i: idx, raw: String((m && m.content) || "") });
   if (m && m.role === "user") {
     w.className = "msg user";
     if (m.attachments && m.attachments.length) {
@@ -130,7 +152,7 @@ function msgEl(m, idx) {
         chip.appendChild(badge);
         chip.appendChild(nm);
         chip.addEventListener("click", function () {
-          authedDownload("/api/artifacts/" + a.id + "/download", a.name || "file");
+          authedDownload("/api/artifacts/" + enc(a.id) + "/download", a.name || "file");
         });
         ac.appendChild(chip);
       });
@@ -140,7 +162,7 @@ function msgEl(m, idx) {
       var sr = document.createElement("div");
       sr.className = "src-row";
       m.sources.slice(0, 6).forEach(function (s) {
-        if (!s || !s.url) return;
+        if (!s || !s.url || !isSafeHttpUrl(s.url)) return;
         var a = document.createElement("a");
         a.href = s.url;
         a.target = "_blank";
@@ -191,8 +213,27 @@ function msgEl(m, idx) {
     if (m && m.fallback && m.fallback.requested && m.model && m.fallback.requested !== m.model) {
       var fb = document.createElement("div");
       fb.className = "fb-note";
-      fb.textContent = "\u24D8 " + m.fallback.requested + " " + (m.fallback.reason || "unavailable") + " \u2014 answered by " + m.model;
+      if (m.fallback.requested === "quality") {
+        fb.textContent = "\u24D8 Quality models unavailable (" + (m.fallback.reason || "unavailable") + ") \u2014 answered by " + m.model;
+      } else {
+        fb.textContent = "\u24D8 " + m.fallback.requested + " " + (m.fallback.reason || "unavailable") + " \u2014 answered by " + m.model;
+      }
       body.appendChild(fb);
+    }
+    /* Typo corrections ("craeate" -> "create"): textContent-only so
+     * user-derived strings can never inject HTML. Backend caps pairs. */
+    if (m && m.corrections && m.corrections.length) {
+      var shown = [];
+      m.corrections.slice(0, 3).forEach(function (p) {
+        if (p && p.length === 2 && p[0] && p[1] && String(p[0]).toLowerCase() !== String(p[1]).toLowerCase())
+          shown.push("\u201C" + String(p[0]).slice(0, 32) + "\u201D as \u201C" + String(p[1]).slice(0, 32) + "\u201D");
+      });
+      if (shown.length) {
+        var cn = document.createElement("div");
+        cn.className = "fb-note";
+        cn.textContent = "\uD83D\uDD24 Interpreted " + shown.join(", ");
+        body.appendChild(cn);
+      }
     }
     w.appendChild(body);
   }
@@ -311,16 +352,6 @@ function maybeScroll() {
   if (chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 140) scrollBottom();
 }
 function scrollBottom() { chatScroll.scrollTop = chatScroll.scrollHeight; }
-$("scrollBtn").addEventListener("click", function () { scrollBottom(); });
-var _scrollRaf = null;
-chatScroll.addEventListener("scroll", function () {
-  if (_scrollRaf) return;
-  _scrollRaf = requestAnimationFrame(function () {
-    _scrollRaf = null;
-    var far = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight > 250;
-    $("scrollBtn").classList.toggle("hidden", !far);
-  });
-}, { passive: true });
 /* ---------- refresh from server ---------- */
 async function refreshChats() {
   var data = await req("/api/chats");
@@ -501,8 +532,7 @@ var _lastFallbackKey = "";
 var _lastFallbackAt = 0;
 function setActiveTier(tier, fromServer, reason) {
   if (tier && TIERS.indexOf(tier) > -1 && !fromServer) {
-    S.model = tier;
-    savePrefs();
+    setPref("model", tier);
     _lastFallbackKey = "";
   } else if (fromServer && tier) {
     /* Header must show what actually answered (server truth), not the
@@ -520,8 +550,7 @@ function setActiveTier(tier, fromServer, reason) {
       }
     }
     if (S.model !== tier) {
-      S.model = tier;
-      savePrefs();
+      setPref("model", tier);
     }
   }
   $("modelName").textContent = S.model || "…";
@@ -542,8 +571,7 @@ function renderModelDD() {
     btn.textContent = (m === S.model ? "✓ " : "") + m;
     if (m === S.model) btn.className = "on";
     btn.addEventListener("click", function () {
-      S.model = m;
-      savePrefs();
+      setPref("model", m);
       setActiveTier(m, false);
       dd.classList.add("hidden");
       toast("Model: " + m);
@@ -555,4 +583,4 @@ function renderModelDD() {
 function getCtxId() { return ctxId; }
 function getProjId() { return projId; }
 
-export { chipForAttachment, rememberApprovalTokens, approvalTokenFor, decideApproval, msgEl, hydrateUploadImages, versionGroup, renderChat, maybeScroll, scrollBottom, refreshChats, refreshProjects, copyText, legacyCopy, stopSpeaking, speakable, speakText, renderRecents, renderProjects, chatMarkdown, downloadMarkdown, setActiveTier, renderModelDD, getCtxId, getProjId };
+export { initRender, chipForAttachment, rememberApprovalTokens, approvalTokenFor, decideApproval, msgEl, msgMeta, hydrateUploadImages, versionGroup, renderChat, maybeScroll, scrollBottom, refreshChats, refreshProjects, copyText, legacyCopy, stopSpeaking, speakable, speakText, renderRecents, renderProjects, chatMarkdown, downloadMarkdown, setActiveTier, renderModelDD, getCtxId, getProjId };

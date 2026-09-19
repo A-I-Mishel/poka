@@ -4,6 +4,7 @@ Writes a short plan first, then executes it with tools. Any planning
 failure falls back to a plain tool loop instead of breaking the answer.
 """
 
+import logging
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -15,6 +16,8 @@ import agent  # package-attr routing: test doubles on agent._invoke_bounded stay
 from agent.prompts import _as_text
 from agent.toolrun import MAX_TOOL_ROUNDS, TOOL_MAP, _note_tier_failure, run_tool_loop
 from services.limits import PLAN_MAX_CHARS
+
+logger = logging.getLogger(__name__)
 
 
 # Argument/identifier names that merely look like tools (never flagged).
@@ -139,7 +142,7 @@ def plan_then_execute(
                     lambda _n, _llm: _ask_plan(_llm, prompt), None, cheap_tiers)
                 return text
             except Exception:
-                pass
+                logger.debug("cheap-tier planning failed; using attempt tier", exc_info=True)
         return _ask_plan(llm_instance, prompt)
 
     try:
@@ -173,7 +176,7 @@ def plan_then_execute(
             try:
                 plan_text = _ask_plan_default(correction)
             except Exception:
-                pass
+                logger.debug("bounded plan replan failed; executing anyway", exc_info=True)
         # Bounded before injection into the execution prompt: a runaway
         # plan must not crowd the context budget.
         plan_text = plan_text[:PLAN_MAX_CHARS]

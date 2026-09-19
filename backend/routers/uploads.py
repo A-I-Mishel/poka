@@ -1,5 +1,6 @@
 """Upload endpoints: vault-validated staging for chat attachments."""
 
+import logging
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -10,6 +11,8 @@ from services.files import FileValidationError
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter, rate_limit_headers
 from services.storage import StorageError
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -50,7 +53,7 @@ async def upload(file: UploadFile = File(...),
     except HTTPException:
         raise
     except Exception:
-        pass
+        logger.debug("upload size validation failed", exc_info=True)
     try:
         import tempfile
 
@@ -98,7 +101,7 @@ async def upload(file: UploadFile = File(...),
         else:
             kb_svc.ingest_document(ctx.user_id, meta.id, str(meta.display_name), data)
     except Exception:
-        pass
+        logger.debug("kb ingest document failed", exc_info=True)
     return {
         "id": meta.id,
         "kind": str(getattr(meta, "kind", "image") or "image"),
@@ -125,6 +128,7 @@ def list_uploads(ctx: UserContext = Depends(current_user)):
                 "name": str(getattr(meta, "display_name", "file") or "file"),
             })
         except Exception:
+            logger.debug("upload meta serialization failed", exc_info=True)
             continue
     return out
 
@@ -203,5 +207,5 @@ def delete_upload(upload_id: str, ctx: UserContext = Depends(current_user)):
     try:
         kb_svc.drop_document(ctx.user_id, upload_id)
     except Exception:
-        pass
+        logger.debug("kb drop document failed", exc_info=True)
     return {"ok": True}

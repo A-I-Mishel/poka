@@ -2,24 +2,35 @@
  * Split from the vanilla-JS monolith; behavior preserved.
  */
 
-import { $ } from "./ui.js";
-import { openOverlay, trapTab } from "./ui.js";
+import { $, openOverlay, trapTab, toast } from "./ui.js";
 import { API_BASE } from "./config.js";
-import { S, TIERS, savePrefs, setTIERS, setAuthMode } from "./state.js";
-import { req } from "./api.js";
-import { setApiHooks } from "./api.js";
-import { ACCT, refreshMe, authAsync, authDismissed } from "./auth.js";
-import { setAuthHooks } from "./auth.js";
-import { renderProjects, renderRecents, renderChat, refreshProjects, refreshChats, setActiveTier, stopSpeaking } from "./chat.js";
-import { applyTheme, setMode, setWeb, updatePlaceholder, placeThumb, webBtn } from "./panels.js";
-import { closeAttachMenu, closeCamera, camModal } from "./composer.js";
-import { toast } from "./ui.js";
+import { S, TIERS, savePrefs, setPref, setTIERS, setAuthMode } from "./state.js";
+import { req, setApiHooks } from "./api.js";
+import { ACCT, refreshMe, authAsync, authDismissed, setAuthHooks, initAuth } from "./auth.js";
+import { renderProjects, renderRecents, renderChat, refreshProjects, refreshChats, setActiveTier, stopSpeaking, initChat } from "./chat.js";
+import { applyTheme, setMode, setWeb, updatePlaceholder, placeThumb, webBtn, initPanels } from "./panels.js";
+import { closeAttachMenu, closeCamera, camModal, initComposer } from "./composer.js";
+import { initRender } from "./render.js";
+import { initSend } from "./send.js";
 
-window.onerror = function (m, s, l) {
+/* Module init first: every feature module grabs its DOM refs and
+ * registers listeners here (not at import time), so modules stay
+ * importable without a DOM and boot order is explicit. */
+initRender();
+initSend();
+initAuth();
+initPanels();
+initComposer();
+initChat();
+
+/* Global error banner: additive listener (never clobbers other
+ * handlers), guards a missing banner node. */
+window.addEventListener("error", function (e) {
   var b = document.getElementById("errBanner");
+  if (!b) return;
   b.style.display = "block";
-  b.textContent = "Error: " + m + " (line " + l + ")";
-};
+  b.textContent = "Error: " + (e && e.message ? e.message : "unknown") + " (line " + (e && e.lineno ? e.lineno : "?") + ")";
+});
 
 async function _refreshAllSilent() {
   try { await refreshProjects(); } catch (e) {}
@@ -90,7 +101,7 @@ window.addEventListener("resize", placeThumb);
     toast("API unreachable — is the backend running?");
     return;
   }
-  if (TIERS.indexOf(S.model) < 0) S.model = TIERS[0] || "";
+  if (TIERS.indexOf(S.model) < 0) setPref("model", TIERS[0] || "");
   savePrefs();
   setActiveTier(S.model, false);
   try { await refreshMe(); } catch (err) {}

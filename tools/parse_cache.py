@@ -12,6 +12,10 @@ from typing import Any, Optional
 
 from services.files import FileStore
 
+import logging
+
+logger: logging.Logger = logging.getLogger(__name__)
+
 
 class ParseCache:
     """Thread-safe bounded FIFO cache keyed by upload identity."""
@@ -53,4 +57,4 @@ class ParseCache:
                     self._data.pop(next(iter(self._data)))
                 self._data[key] = value
         except Exception:
-            pass
+            logger.debug("parse cache set failed", exc_info=True)

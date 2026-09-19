@@ -1,7 +1,6 @@
 """Meta endpoints: health and configured model tiers."""
 
 import logging
-import os
 import threading
 import time
 
@@ -10,6 +9,7 @@ from fastapi import APIRouter, Depends
 from backend import schemas
 from backend.deps import UserContext, current_user
 from services.identity import auth_mode
+from services.secrets import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,12 @@ def _cached_live_tier(configured: list) -> object:
     # Opt-out for cold-boot speed / quota: PLUTO_HEALTH_PROBE=0 disables
     # the live network probe (liveness only, no readiness).
     try:
-        if (os.getenv("PLUTO_HEALTH_PROBE", "1") or "1").strip().lower() in (
+        if (get_secret("PLUTO_HEALTH_PROBE", "1") or "1").strip().lower() in (
             "0", "false", "no", "off",
         ):
             return None
     except Exception:
-        pass
+        logger.debug("health probe flag parse failed", exc_info=True)
     now = time.time()
     with _live_cache_lock:
         if now - float(_live_cache.get("at", 0.0)) < 60.0:
@@ -45,6 +45,7 @@ def _cached_live_tier(configured: list) -> object:
 
         tier = _probe(timeout=float(_timeout))
     except Exception:
+        logger.debug("live tier probe failed", exc_info=True)
         tier = None
     with _live_cache_lock:
         _live_cache["at"] = now
@@ -71,6 +72,7 @@ def health():
             if getter() is not None:
                 configured.append(name)
         except Exception:
+            logger.debug("tier probe failed for %s", name, exc_info=True)
             continue
     mode = auth_mode()
     if mode == "open":
@@ -84,12 +86,14 @@ def health():
         elif "memory" in type(_get_limiter()).__name__.lower():
             limiter_name = "memory"
     except Exception:
+        logger.debug("rate limiter name probe failed", exc_info=True)
         limiter_name = "memory"
     try:
         from services.snapshots import configured as _snap_configured
 
         snaps = bool(_snap_configured())
     except Exception:
+        logger.debug("snapshot configured probe failed", exc_info=True)
         snaps = False
     return {
         "ok": True,

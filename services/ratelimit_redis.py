@@ -4,7 +4,6 @@ Uses Redis sorted sets for sliding-window rate limiting.
 Key format: "rl:{action}:{identity}" with scores as timestamps.
 """
 
-import os
 import time
 from typing import Dict, Optional, Tuple
 
@@ -12,6 +11,7 @@ import redis
 
 from services.limits import RATE_LIMITS
 from services.ratelimit import RateLimitResult, RateLimiter
+from services.secrets import get_secret
 
 
 class RedisRateLimiter(RateLimiter):
@@ -110,7 +110,7 @@ def get_redis_client() -> Optional[object]:
     Never raises and never connects eagerly (redis-py connects lazily;
     callers that need liveness must ping() inside their own try/except).
     """
-    redis_url = (os.getenv("REDIS_URL") or "").strip()
+    redis_url = (get_secret("REDIS_URL") or "").strip()
     if not redis_url:
         return None
     try:
@@ -124,7 +124,7 @@ def get_redis_client() -> Optional[object]:
 
 def create_redis_limiter() -> Optional[RateLimiter]:
     """Create RedisRateLimiter if REDIS_URL is configured, else None."""
-    redis_url = os.getenv("REDIS_URL")
+    redis_url = get_secret("REDIS_URL")
     if not redis_url:
         return None
     try:

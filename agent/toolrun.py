@@ -11,6 +11,7 @@ blocks ever go back): tool results return inside fresh human messages.
 """
 
 import json as _json
+import logging
 import re as _re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,7 +48,11 @@ from agent.cascade import (
 from agent.executor import TokenStream, _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.prompts import STRICT_GROUNDING_PARAGRAPH, _as_text, _build_system_prompt, is_strict_tier, strip_internal_reasoning
+from agent.prompts import STRICT_GROUNDING_PARAGRAPH, _as_text, _build_system_prompt, strip_internal_reasoning
+from services.normalize import any_hit as _norm_any_hit
+from services.normalize import normalize_text as _normalize_hint
+
+logger = logging.getLogger(__name__)
 
 tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
@@ -114,7 +119,7 @@ def _fallback_bracket_calls_from_text(text: str) -> List[Dict[str, Any]]:
             if len(candidates) >= 4:
                 break
     except Exception:
-        pass
+        logger.debug("bracket-call parse failed", exc_info=True)
     return candidates
 
 
@@ -159,6 +164,7 @@ def _fallback_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
         try:
             obj = _json.loads(snippet)
         except Exception:
+            logger.debug("leaked-JSON snippet parse failed", exc_info=True)
             continue
         if not isinstance(obj, dict):
             continue
@@ -340,7 +346,94 @@ def _note_tier_failure(tier_name: Any, error: Any) -> None:
     try:
         _record_tier_failure(tier_name, classify_provider_error(error)[0], error)
     except Exception:
-        pass
+        logger.debug("tier failure cooldown record failed", exc_info=True)
+
+
+def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None) -> List[Any]:
+    """Typo-tolerant tool binding on normalized text (single source).
+
+    Lazy-binds to keep small-context lanes (GitHub 8k) from 400s.
+    Normalization (services.normalize) handles typos ("convrt",
+    "craete", "pyton") + verb canonicalization ("turn"->"create"),
+    so keyword lists stay canonical — no hard-coded typo variants.
+    tier_name optionally trims heavy lanes (MCP/code) on 8k tiers;
+    None keeps the default minimal set. Never raises; short tokens
+    stay exact-only ("do"/"to" != "doc").
+    """
+    try:
+        raw_low = str(hint or "").lower()
+    except Exception:
+        raw_low = ""
+    try:
+        norm = _normalize_hint(hint or "")
+    except Exception:
+        norm = raw_low
+
+    def _any(keys: Sequence[str]) -> bool:
+        try:
+            return _norm_any_hit(norm, keys)
+        except Exception:
+            return False
+
+    base: List[Any] = [web_search, search_documents, workspace_list, workspace_read, check_logic]
+    if _any(("pdf", "document", "docx", "pptx", "slide",
+             "upload", "attached", "attach", "read_document",
+             "read_pdf", "[content of", "doc", "word", "file",
+             "read", "open", "view", "show", "lecture", "deck", "notes", "paper")):
+        base += [read_document, read_pdf, read_pdf_page, read_output, analyze_csv, csv_inspect]
+    if _any(("csv", "tsv", "xlsx", "data", "table", "spreadsheet", "database",
+             "sql", "query", "sheet", "column", "stats")):
+        base += [analyze_csv, csv_inspect, list_tables, describe_table, query_database, import_csv_table, execute_sql]
+    if _any(("presentation", "slides", "pptx", "powerpoint",
+             "essay", "report", "resume", "create", "build",
+             "convert", "make", "generate", "export", "download",
+             "draft", "prepare", "produce", "save",
+             "letter", "memo", "handout", "thesis", "write up", "turn", "turn into",
+             "into doc", "to doc", "as doc", "into pdf", "to pdf", "as pdf",
+             "into word", "to word")):
+        base += [create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output]
+    if _any(("code", "python", "workspace", "run_code",
+             "script", "program", "function",
+             "execute")):
+        base += [workspace_write, workspace_delete, run_code, run_python, list_mcp_tools, call_mcp_tool]
+    if _any(("gmail", "email", "mail", "calendar",
+             "event", "meeting", "invite")):
+        base += [search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event]
+    # dedupe
+    seen = set()
+    out: List[Any] = []
+    for t in base:
+        if getattr(t, "name", "") not in seen:
+            seen.add(getattr(t, "name", ""))
+            out.append(t)
+    # ambiguous doc request (e.g. "what is it?") with no keyword but file hint may be weak
+    if len(out) <= 5 and any(k in raw_low for k in ("file", "read", "what is", "summar")):
+        for t in [read_document, read_pdf, read_pdf_page]:
+            if t.name not in seen:
+                seen.add(t.name)
+                out.append(t)
+    # Safety net: creation intent must always bind creation tools.
+    # If normalization sees create/turn/convert but the buckets above
+    # missed (new phrasing), add the family instead of starving the model.
+    try:
+        if _norm_any_hit(norm, ("create", "turn into", "convert into",
+                                "presentation", "report", "thesis")):
+            for t in (create_docx, build_document, create_pdf, create_doc):
+                if t.name not in seen:
+                    seen.add(t.name)
+                    out.append(t)
+    except Exception:
+        logger.debug("creation safety net failed", exc_info=True)
+    # Tier-aware trim: 8k lanes (GitHub Models) skip MCP discovery tools
+    # to save context; they re-bind on explicit "mcp" asks via the gmail
+    # bucket above (no — MCP stays only when hint names it).
+    try:
+        if isinstance(tier_name, str) and tier_name.strip().lower() in ("github models",):
+            if not _norm_any_hit(norm, ("mcp", "workspace", "code", "python")):
+                out = [t for t in out if getattr(t, "name", "") not in ("list_mcp_tools", "call_mcp_tool")]
+    except Exception:
+        logger.debug("tier-aware trim failed", exc_info=True)
+    return out if out else list(tools)
 
 
 def run_tool_loop(
@@ -432,10 +525,9 @@ def run_tool_loop(
         CTX_MEMORY_TOKENS,
     )
     system_text: str = _build_system_prompt(mem_fit, "", project_context)
-    if strict:
-        # Weak-tier attempt: strict grounding for the whole turn (a mid-loop
-        # failover to a stronger tier simply keeps it — harmless).
-        system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH
+    # Grounded for all tiers (weak-tier strict flag kept for compat: a
+    # mid-loop failover to a stronger tier simply keeps it — harmless).
+    system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH
     fitted_history, _hist_stats = fit_history(chat_history, CTX_HISTORY_TOKENS)
     messages: List[BaseMessage] = [
         SystemMessage(content=system_text),
@@ -529,93 +621,14 @@ def run_tool_loop(
     messages.append(HumanMessage(content=user_input))
 
     def _filtered_tools(hint: str) -> List[Any]:
-        # ponytail: lazy-bind to keep small-context lanes (GitHub 8k) from 400s; expand heuristic when a needed tool is missed.
-        # Typo-tolerant: exact substring first, then token-level fuzzy
-        # (difflib ratio >= 0.85) for len>=4 keywords so "convrt",
-        # "craete", "pyton" still bind the right tools. Stdlib only,
-        # never raises; short tokens stay exact-only to avoid noise
-        # ("do"/"to" must never match "doc").
-        import difflib as _difflib
-
-        low = (hint or "").lower()
+        # Single funnel: centralized typo-tolerant binding (see
+        # filter_tools_for_hint). Inner wrapper kept so existing
+        # call sites/tests calling the closure keep working.
         try:
-            tokens = _re.findall(r"[a-z0-9]+", low)
+            return filter_tools_for_hint(hint)
         except Exception:
-            tokens = []
-
-        def _hit(phrase: str) -> bool:
-            try:
-                p = str(phrase or "").lower()
-                if not p:
-                    return False
-                if " " in p or "[" in p or "." in p or "_" in p:
-                    return p in low
-                if p in low:
-                    return True
-                if len(p) < 4:
-                    return False
-                for tok in tokens:
-                    if len(tok) < 4 or tok == p:
-                        if tok == p:
-                            return True
-                        continue
-                    if abs(len(tok) - len(p)) > 2:
-                        continue
-                    try:
-                        if _difflib.SequenceMatcher(None, tok, p).ratio() >= 0.85:
-                            return True
-                    except Exception:
-                        continue
-                return False
-            except Exception:
-                return False
-
-        def _any(keys: Sequence[str]) -> bool:
-            try:
-                return any(_hit(k) for k in keys)
-            except Exception:
-                return False
-
-        base: List[Any] = [web_search, search_documents, workspace_list, workspace_read, check_logic]
-        if _any(("pdf", "document", "doucment", "docx", "pptx", "slide", "slid",
-                 ".pdf", "upload", "uplod", "attached", "attach", "read_document",
-                 "read_pdf", "[content of", "doc", "dco", "word", "wrod", "file",
-                 "read", "open", "view", "show", "lecture", "deck", "notes", "paper")):
-            base += [read_document, read_pdf, read_pdf_page, read_output, analyze_csv, csv_inspect]
-        if _any(("csv", "tsv", "xlsx", "data", "table", "spreadsheet", "database",
-                 "sql", "query", "sheet", "column", "stats")):
-            base += [analyze_csv, csv_inspect, list_tables, describe_table, query_database, import_csv_table, execute_sql]
-        if _any(("presentation", "presentaion", "slides", "slids", "pptx", "powerpoint",
-                 "essay", "report", "reprot", "resume", "create", "creat", "craete",
-                 "build", "biuld", "convert", "convet", "conver", "convt", "convrt",
-                 "make", "generate", "genrate", "gernate", "export", "download",
-                 "downlod", "draft", "prepare", "prepair", "produce", "save",
-                 "letter", "memo", "handout", "thesis", "write up", "turn", "turn into",
-                 "into doc", "to doc", "as doc", "into pdf", "to pdf", "as pdf",
-                 "into word", "to word")):
-            base += [create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output]
-        if _any(("code", "python", "pyton", "pythno", "workspace", "run_code",
-                 "script", "scrpt", "program", "progam", "function", "funtion",
-                 "execute", "excecute")):
-            base += [workspace_write, workspace_delete, run_code, run_python, list_mcp_tools, call_mcp_tool]
-        if _any(("gmail", "gmal", "email", "emial", "mail", "calendar", "calender",
-                 "event", "meeting", "invite")):
-            base += [search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event]
-        # dedupe
-        seen = set()
-        out: List[Any] = []
-        for t in base:
-            if getattr(t, "name", "") not in seen:
-                seen.add(getattr(t, "name", ""))
-                out.append(t)
-        # ambiguous doc request (e.g. "what is it?") with no keyword but file hint may be weak
-        if len(out) <= 5 and any(k in low for k in ("file", "read", "what is", "summar")):
-            for t in [read_document, read_pdf, read_pdf_page]:
-                if t.name not in seen:
-                    seen.add(t.name)
-                    out.append(t)
-        # fallback: if heuristics added nothing beyond base and hint looks generic, keep base (saves tokens); full set only when hint empty
-        return out if out else list(tools)
+            logger.debug("tool filter failed; binding full set", exc_info=True)
+            return list(tools)
 
     bound_fixed = llm_instance.bind_tools(_filtered_tools(user_input))
     last_text: str = ""
@@ -662,7 +675,11 @@ def run_tool_loop(
                 provider_error = e
                 break
             try:
-                bound = round_llm.bind_tools(_filtered_tools(user_input))
+                try:
+                    bound = round_llm.bind_tools(
+                        filter_tools_for_hint(user_input, tier_name=tier_name))
+                except Exception:
+                    bound = round_llm.bind_tools(_filtered_tools(user_input))
             except BudgetExhausted:
                 raise
             except TurnCancelled:
@@ -694,7 +711,7 @@ def run_tool_loop(
             try:
                 _record_tier_success(tier_name)
             except Exception:
-                pass
+                logger.debug("tier success record failed", exc_info=True)
         text: str = _as_text(response.content).strip()
         if text:
             last_text = text
@@ -709,7 +726,7 @@ def run_tool_loop(
                     # JSON was the tool call, not an answer to show
                     last_text = ""
             except Exception:
-                pass
+                logger.debug("fallback tool-call parse failed", exc_info=True)
         if on_progress is not None and tool_calls:
             try:
                 names: List[str] = []
@@ -723,7 +740,7 @@ def run_tool_loop(
                 if names:
                     on_progress("Using tools: " + ", ".join(names))
             except Exception:
-                pass
+                logger.debug("progress callback failed", exc_info=True)
         if not tool_calls:
             if not text and llm_provider is not None:
                 # Empty model output with no tool calls: treat as a tier
@@ -742,9 +759,9 @@ def run_tool_loop(
             try:
                 record_tool_execution_mode("batch", execution_mode)
             except Exception:
-                pass
+                logger.debug("tool mode record failed", exc_info=True)
             last_results = _execute_tool_calls_parallel(tool_calls, budget)
-            for tc, result_text in zip(tool_calls, last_results):
+            for tc, result_text in zip(tool_calls, last_results, strict=True):
                 if isinstance(tc, dict):
                     tc_name = tc.get("name", "")
                 else:
@@ -796,9 +813,8 @@ def run_tool_loop(
     # ponytail: cap synthesis join (was unbounded) — prevents 8k overflow on GitHub lane
     _synthesis_blob = "\n".join(last_results)[:6000]
     _synth_system = ("Summarize the tool results below into a concise "
-                     "final answer. Do not call any tools.")
-    if is_strict_tier(round_tier):
-        _synth_system += " " + STRICT_GROUNDING_PARAGRAPH
+                     "final answer. Do not call any tools. "
+                     + STRICT_GROUNDING_PARAGRAPH)
     synthesis_messages: List[BaseMessage] = [
         SystemMessage(content=_synth_system),
         HumanMessage(
@@ -856,7 +872,7 @@ def run_tool_loop(
                 try:
                     _record_tier_success(synthesis_tier)
                 except Exception:
-                    pass
+                    logger.debug("synthesis tier success record failed", exc_info=True)
                 text = _as_text(final.content).strip()
                 if text:
                     _note_final_tier(synthesis_tier)

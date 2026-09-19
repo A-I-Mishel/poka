@@ -35,6 +35,7 @@ class SendResponse(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     fallback: Optional[Dict[str, str]] = None
     pending_approvals: List[Dict[str, Any]] = Field(default_factory=list)
+    corrections: List[List[str]] = Field(default_factory=list)
 
 
 class ApprovalDecision(BaseModel):

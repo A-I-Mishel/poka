@@ -27,10 +27,11 @@ def _endpoint_for(request: Request) -> str:
         if template:
             return str(template)
     except Exception:
-        pass
+        logger.debug("endpoint route template extraction failed", exc_info=True)
     try:
         path = request.url.path or "/"
     except Exception:
+        logger.debug("endpoint url path extraction failed", exc_info=True)
         return "/"
     path = _UUID_RE.sub("/:uuid", path)
     return _HEX_ID_RE.sub("/:id", path)
@@ -78,7 +79,7 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
                 try:
                     span.record_exception(e)
                 except Exception:
-                    pass
+                    logger.debug("span.record_exception failed", exc_info=True)
                 span.set_status(Status(StatusCode.ERROR, str(e)[:300]))
             raise
         finally:
@@ -102,5 +103,5 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
                 try:
                     span.end()
                 except Exception:
-                    pass
+                    logger.debug("span.end failed", exc_info=True)
             clear_request_context()

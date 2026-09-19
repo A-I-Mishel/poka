@@ -10,6 +10,7 @@ Package layout (dependency order: UI -> application -> agent -> services):
 - agent.router: rule routing + LLM task classification.
 - agent.toolrun: tool registry, single tool funnel, main tool loop.
 - agent.planning / agent.reflection / agent.vision: optional stages.
+- agent.answer: history shaping, citation checks, reflection stages.
 - agent.runtime: request orchestration (answer_with_fallback).
 
 This module re-exports the full pre-split surface so existing

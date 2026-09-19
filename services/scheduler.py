@@ -6,7 +6,6 @@ overhead of walking vault directories and running pruning operations.
 """
 
 import logging
-import os
 import threading
 from typing import Optional
 
@@ -14,6 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from services.limits import STORAGE_HYGIENE_INTERVAL_SECONDS
+from services.secrets import get_secret
 from services.storage import data_root
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def start_scheduler() -> None:
     global _scheduler, _started
 
     # Check if disabled via env
-    enabled = os.getenv("PLUTO_SCHEDULER_ENABLED", "true").lower()
+    enabled = (get_secret("PLUTO_SCHEDULER_ENABLED", "true") or "true").lower()
     if enabled in ("0", "false", "no", "off"):
         logger.info("scheduler disabled via PLUTO_SCHEDULER_ENABLED")
         return
@@ -73,18 +73,19 @@ def start_scheduler() -> None:
             return
         _started = True
 
-        interval = max(60.0, float(os.getenv("PLUTO_HYGIENE_INTERVAL_SECONDS", str(STORAGE_HYGIENE_INTERVAL_SECONDS)) or str(STORAGE_HYGIENE_INTERVAL_SECONDS)))
+        interval = max(60.0, float(get_secret("PLUTO_HYGIENE_INTERVAL_SECONDS", str(STORAGE_HYGIENE_INTERVAL_SECONDS)) or str(STORAGE_HYGIENE_INTERVAL_SECONDS)))
         # ±10% jitter avoids thundering herd when N workers/containers
         # restart together (Render redeploy, UVICORN_WORKERS>1).
         try:
             import random as _random
 
-            jitter = float(os.getenv("PLUTO_HYGIENE_JITTER_RATIO", "0.10") or "0.10")
+            jitter = float(get_secret("PLUTO_HYGIENE_JITTER_RATIO", "0.10") or "0.10")
             jitter = min(0.5, max(0.0, jitter))
             if jitter:
-                interval = interval * (1.0 + _random.uniform(-jitter, jitter))
+                # Non-crypto scheduling jitter (thundering-herd avoidance).
+                interval = interval * (1.0 + _random.uniform(-jitter, jitter))  # noqa: S311
         except Exception:
-            pass
+            logger.debug("hygiene jitter parse failed; using base interval", exc_info=True)
 
         _scheduler = BackgroundScheduler(daemon=True)
         _scheduler.add_job(

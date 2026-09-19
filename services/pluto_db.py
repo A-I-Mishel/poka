@@ -96,10 +96,10 @@ def describe_table(user_id: Any, table: str) -> Dict[str, Any]:
         with _connect(user_id) as conn:
             # PRAGMA table_info does not support ? placeholder — use quoted ident
             qname = _quote_ident(name)
-            cols = conn.execute(f"PRAGMA table_info({qname})").fetchall()
+            cols = conn.execute(f"PRAGMA table_info({qname})").fetchall()  # noqa: S608 (validated + quoted identifier; PRAGMA takes no placeholders)
             if not cols:
                 return {"error": "Unknown table."}
-            count = conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()
+            count = conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()  # noqa: S608 (validated + quoted identifier; values use placeholders)
         return {
             "name": name,
             "columns": [{"name": str(c[1]), "type": str(c[2] or "")} for c in cols],
@@ -332,9 +332,10 @@ def import_csv(user_id: Any, table: str, data: bytes) -> Dict[str, Any]:
             qcols = [_quote_ident(c) for c in columns]
             conn.execute(f"DROP TABLE IF EXISTS {qname}")
             conn.execute(
-                f"CREATE TABLE {qname} ({', '.join(f'{qc} {a}' for qc, a in zip(qcols, affinities))})")
+                f"CREATE TABLE {qname} ({', '.join(f'{qc} {a}' for qc, a in zip(qcols, affinities, strict=True))})")
             conn.executemany(
-                f"INSERT INTO {qname} VALUES ({', '.join('?' * len(columns))})", padded)
+                f"INSERT INTO {qname} VALUES ({', '.join('?' * len(columns))})", padded  # noqa: S608 (validated + quoted identifier; values are placeholders)
+            )
             conn.commit()
         return {"table": name, "rows": len(padded), "columns": columns}
     except Exception as e:

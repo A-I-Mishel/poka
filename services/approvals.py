@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import time
 import uuid
@@ -24,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from services.limits import APPROVAL_MAX_PENDING, APPROVAL_TTL_SECONDS
 from services.obs import event as obs_event
 from services.storage import _read_json, _write_json, path_lock, user_dir
+
+logger = logging.getLogger(__name__)
 
 
 def _approvals_path(user_id: Any):
@@ -103,7 +106,7 @@ def request_approval(user_id: Any, tool: str, args: Dict[str, Any],
                                   approval_id=str(entry.get("id", "")),
                                   deduped=True)
                     except Exception:
-                        pass
+                        logger.debug("approval request event failed", exc_info=True)
                     return str(entry["id"]), token, False
             pending = [a for a in vault.get("approvals", []) if a.get("status") == "pending"]
             if len(pending) >= max(1, int(APPROVAL_MAX_PENDING)):
@@ -130,7 +133,7 @@ def request_approval(user_id: Any, tool: str, args: Dict[str, Any],
             try:
                 obs_event("approval.request", tool=tool, approval_id=approval_id)
             except Exception:
-                pass
+                logger.debug("approval request event failed", exc_info=True)
             return approval_id, token, True
     except Exception:
         # Storage failure: closed (the tool reports DENIED without an id).
@@ -172,14 +175,14 @@ def consume_approval(user_id: Any, tool: str, args: Dict[str, Any],
                     obs_event("approval.consumed", tool=tool,
                               approval_id=str(entry.get("id", "")))
                 except Exception:
-                    pass
+                    logger.debug("approval consumed event failed", exc_info=True)
                 stored = entry.get("args")
                 return True, dict(stored) if isinstance(stored, dict) else {}
             _prune(vault, now)
             try:
                 _save(user_id, vault)
             except Exception:
-                pass
+                logger.debug("approval vault save failed", exc_info=True)
             return False, "unknown"
     except Exception:
         return False, "unknown"
@@ -286,7 +289,7 @@ def reject_approval(user_id: Any, approval_id: str) -> bool:
             try:
                 obs_event("approval.rejected", approval_id=str(approval_id))
             except Exception:
-                pass
+                logger.debug("approval rejected event failed", exc_info=True)
             return True
     except Exception:
         return False

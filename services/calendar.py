@@ -13,8 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from services.google import CALENDAR_SCOPES
+from services.google import build_google_service
 from services.obs import event as obs_event
-from services.secrets import get_secret
 
 MAX_LIST_RESULTS: int = 25
 
@@ -31,27 +31,7 @@ def get_service() -> Optional[Any]:
     """Build the Calendar client, or None when unconfigured (never raises)."""
     if _service_override is not None:
         return _service_override
-    try:
-        client_id = (get_secret("GOOGLE_CLIENT_ID", "") or "").strip()
-        client_secret = (get_secret("GOOGLE_CLIENT_SECRET", "") or "").strip()
-        refresh_token = (get_secret("GOOGLE_REFRESH_TOKEN", "") or "").strip()
-        if not (client_id and client_secret and refresh_token):
-            return None
-        from google.oauth2.credentials import Credentials
-
-        creds = Credentials(
-            None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=CALENDAR_SCOPES,
-        )
-        from googleapiclient.discovery import build
-
-        return build("calendar", "v3", credentials=creds)
-    except Exception:
-        return None
+    return build_google_service("calendar", "v3", list(CALENDAR_SCOPES))
 
 
 def _fmt_when(ev: Dict[str, Any]) -> str:

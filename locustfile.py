@@ -17,7 +17,10 @@ Scenarios:
 Target: 50 concurrent users, p95 < 5s, error rate < 1%
 """
 
+import logging
 import random
+
+logger: logging.Logger = logging.getLogger(__name__)
 import time
 import uuid
 import json
@@ -133,7 +136,7 @@ class PlutoUser(FastHttpUser):
             try:
                 self.client.delete(f"/api/uploads/{uid}")
             except Exception:
-                pass
+                logger.debug("locust upload cleanup failed", exc_info=True)
 
 
 class ChatUser(PlutoUser):

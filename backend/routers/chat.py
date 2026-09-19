@@ -1,6 +1,7 @@
 """Chat send + SSE stream endpoints."""
 
 import json
+import logging
 import queue
 import threading
 from typing import Any, AsyncIterator, Dict
@@ -15,6 +16,8 @@ from backend.chatflow import regenerate_chat, run_chat
 from backend.deps import UserContext, bind_request_user, current_user
 from services.obs import event as obs_event
 from services.storage import StorageError
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -171,7 +174,7 @@ def stream(req: schemas.SendRequest, request: Request,
             try:
                 obs_event("request.cancelled", user=user_id)
             except Exception:
-                pass
+                logger.debug("obs_event cancelled failed", exc_info=True)
             return
         if "error" in outcome:
             yield "data: " + json.dumps(
@@ -183,6 +186,7 @@ def stream(req: schemas.SendRequest, request: Request,
             "active_tier": payload.get("active_tier", ""),
             "task_type": payload.get("task_type", ""),
             "fallback": payload.get("fallback"),
+            "corrections": payload.get("corrections", []),
         }) + "\n\n"
         yield "data: " + json.dumps({"type": "done", "result": payload}) + "\n\n"
 

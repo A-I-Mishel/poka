@@ -5,9 +5,11 @@
 import { esc } from "./ui.js";
 
 var PLANET_SVG = '<svg width="SIZE" height="SIZE" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="6"/><ellipse cx="12" cy="12" rx="10" ry="3.8" transform="rotate(-20 12 12)"/><circle cx="10.2" cy="10.4" r="0.7" fill="currentColor" stroke="none"/></svg>';
-function planet(size) { return PLANET_SVG.split("SIZE").join(size); }
+/** @param {number} size */
+function planet(size) { return PLANET_SVG.split("SIZE").join(String(size)); }
 
 /* ---------- icons ---------- */
+/** @type {Object<string, string>} */
 var IC = {
   doc: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M15 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/></svg>',
   down: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/></svg>',
@@ -18,7 +20,9 @@ var IC = {
   code: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>',
   image: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.8"/><path d="m21 15-4.5-4.5L6 21"/></svg>'
 };
+/** @param {string} n */
 function ic(n) { return '<div class="card-ic">' + IC[n] + "</div>"; }
+/** @param {*} kind */
 function artIcon(kind) {
   var k = String(kind || "").toLowerCase();
   if (k.indexOf("image") > -1 || k.indexOf("png") > -1 || k.indexOf("jpg") > -1) return "image";
@@ -26,15 +30,21 @@ function artIcon(kind) {
   if (k.indexOf("chart") > -1 || k.indexOf("csv") > -1) return "chart";
   return "doc";
 }
+/** @type {Object<string, string>} */
+var _HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+/** @param {*} s */
 function escHtml(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    return _HTML_ESCAPES[c];
   });
 }
 /* ---------- markdown (message content only, always escaped first) ---------- */
+/** @param {*} t */
 function md(t) {
   var s = esc(t);
+  /** @type {Array<string>} */
   var stash = [];
+  /** @param {string} html */
   function hold(html) { var k = "\u0001" + stash.length + "\u0001"; stash.push(html); return k; }
   /* fenced code: language hint becomes a class; content stays verbatim */
   s = s.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, function (m, lang, c) {

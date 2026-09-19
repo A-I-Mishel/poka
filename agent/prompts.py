@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """You are Pluto — warm, sharp, and proactively helpful. Be concise and useful:
@@ -465,6 +468,7 @@ def _clean_content_blocks(content: Any) -> Any:
                 continue
             kept.append(block)
         except Exception:
+            logger.debug("reasoning block filter failed; skipping block", exc_info=True)
             continue
     return kept
 
@@ -487,6 +491,7 @@ def _clean_additional_kwargs(kwargs: Any) -> Dict[str, Any]:
                 continue
             cleaned[key] = value
         except Exception:
+            logger.debug("kwarg clean failed; skipping key", exc_info=True)
             continue
     # Recursively clean nested provider-specific payloads when kept.
     nested = cleaned.get("provider_specific_fields")
@@ -541,13 +546,13 @@ def _sanitize_single_message(msg: BaseMessage) -> BaseMessage:
                         b for b in blocks if not _is_reasoning_block(b)
                     ]
             except Exception:
-                pass
+                logger.debug("content_blocks clean failed", exc_info=True)
         model_copy = getattr(msg, "model_copy", None)
         if callable(model_copy):
             try:
                 return model_copy(update=update)  # type: ignore[call-arg]
             except Exception:
-                pass
+                logger.debug("model_copy sanitize failed; rebuilding", exc_info=True)
     except Exception:
         return msg
     # Fallback when model_copy is unavailable: rebuild a minimal

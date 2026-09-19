@@ -10,11 +10,14 @@ rule, else an injected lightweight classifier; failures deny safely.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agent.router import _signals
+
+logger = logging.getLogger(__name__)
 
 VISION_NOUNS = (
     "image", "images", "photo", "photos", "picture", "pictures", "pic",
@@ -201,7 +204,7 @@ def decide(
                         return {"use_images": [], "use_docs": [], "clarify": None,
                                 "reason": "llm-none"}
                 except Exception:
-                    pass
+                    logger.debug("llm gate classifier failed; asking user", exc_info=True)
             return {"use_images": [], "use_docs": [], "clarify": CLARIFY_TEXT,
                     "reason": "ambiguous-multi-clarify"}
 

@@ -12,10 +12,17 @@ import { openSection } from "./panels.js";
 import { addChip, getPendingFiles, clearPendingFiles } from "./composer.js";
 import { msgEl, hydrateUploadImages, scrollBottom, maybeScroll, rememberApprovalTokens, setActiveTier, refreshChats, stopSpeaking } from "./render.js";
 
-var panelBody = $("panelBody"), chatCol = $("chatCol");
-
-/* ---------- send (real SSE stream) ---------- */
-var input = $("input"), attachments = $("attachments");
+/* DOM refs are grabbed in initSend(), not at import time, so this
+ * module imports cleanly without a DOM (node/vitest/smoke phase 1). */
+var panelBody = null, chatCol = null;
+var input = null, attachments = null;
+var _sendInit = false;
+function initSend() {
+  if (_sendInit) return;
+  _sendInit = true;
+  panelBody = $("panelBody"); chatCol = $("chatCol");
+  input = $("input"); attachments = $("attachments");
+}
 var streaming = false;
 var streamAbort = null;
 function sendBtnToStop(on) {
@@ -208,4 +215,4 @@ function send() {
 
 function isStreaming() { return streaming; }
 
-export { sendBtnToStop, clearComposer, restoreComposer, uploadPending, streamInto, sendText, send, isStreaming };
+export { initSend, sendBtnToStop, clearComposer, restoreComposer, uploadPending, streamInto, sendText, send, isStreaming };

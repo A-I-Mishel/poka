@@ -49,6 +49,36 @@ async function req(path, init, retried) {
   }
   return await res.json();
 }
+/* ---------- raw client (no 401 dialog) ----------
+ * Same timeout/credentials/authHeaders as req(), but never pops the
+ * login dialog: auth flows (refreshMe, login/signup, logout, sessions)
+ * and upload/stream paths handle 401 themselves (a stale cookie must
+ * report logged-out, not loop a nested dialog). Callers check
+ * res.status / res.ok directly. */
+async function rawReq(path, init, timeoutMs) {
+  var opts = init || {};
+  var headers = Object.assign({ "Content-Type": "application/json" }, authHeaders(), opts.headers || {});
+  var ms = timeoutMs || 30000;
+  var ctrl = null, timeoutId = null;
+  if (!opts.signal && typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+    try { opts.signal = AbortSignal.timeout(ms); } catch (e) { opts.signal = undefined; }
+  }
+  if (!opts.signal) {
+    ctrl = new AbortController();
+    opts.signal = ctrl.signal;
+    timeoutId = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, ms);
+  }
+  var res;
+  try {
+    res = await fetch(apiUrl(path), Object.assign({}, opts, { headers: headers, credentials: "include" }));
+  } catch (e) {
+    if (e && (e.name === "AbortError" || e.name === "TimeoutError")) throw new Error("Request timed out — retry.");
+    throw new Error("Cannot reach the Pluto API (" + (API_BASE || "same origin") + "). " + e.message);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+  return res;
+}
 function authedDownload(url, filename) {
   fetch(apiUrl(url), { headers: authHeaders(), credentials: "include" }).then(function (res) {
     if (!res.ok) throw new Error(res.statusText);
@@ -63,4 +93,4 @@ function authedDownload(url, filename) {
   }).catch(function (e) { toast("Download failed: " + e.message); });
 }
 
-export { req, authedDownload };
+export { req, rawReq, authedDownload };

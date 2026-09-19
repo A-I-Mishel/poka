@@ -63,14 +63,15 @@ def _fake_agent(monkeypatch, seen):
 
 
 def _no_llm(monkeypatch):
-    import backend.flow as cf
+    import backend.flow.turns as turns_mod
 
     def _failing(_tier):
         def _call(_text, _kinds):
             raise RuntimeError("classifier down")
         return _call
 
-    monkeypatch.setattr(cf, "_attachment_classifier", _failing)
+    # Patch where _apply_attachment_gate looks it up.
+    monkeypatch.setattr(turns_mod, "_attachment_classifier", _failing)
 
 
 def test_1_single_image_what_is_this(tmp_path, monkeypatch):

@@ -15,8 +15,11 @@ import os
 import subprocess
 import sys
 import json
+import logging
 import requests
 from pathlib import Path
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 BASE_URL = os.environ.get("PLUTO_BASE_URL", "http://localhost:8000")
 SLO_LATENCY_P95 = 10.0  # seconds
@@ -67,7 +70,7 @@ def check_slos() -> dict:
                 # violation by itself.
                 error_rate_ok = True
         except Exception:
-            pass
+            logger.debug("metrics endpoint probe failed", exc_info=True)
         return {"reachable_ok": True, "error_rate_ok": error_rate_ok,
                 "latency_ok": latency_ok}
     except Exception as e:

@@ -45,10 +45,17 @@ def should_reflect(
     if not REFLECTION_ENABLED:
         return False
     if not deep_mode:
-        # Fast mode: only substantial creative/research drafts earn one
+        # Fast mode: substantial creative/research drafts earn one
         # cheap-tier critique (runs on CHEAP_TIERS, never the answer tier).
-        return task_type in ("creative", "research") and len(
-            (draft_output or "").strip()) >= REFLECT_FAST_DRAFT_CHARS
+        # Research floor is lower (150): factual drafts benefit most.
+        try:
+            from services.limits import REFLECT_FAST_RESEARCH_CHARS as _RR
+        except Exception:
+            _RR = 150
+        _len = len((draft_output or "").strip())
+        if task_type == "research":
+            return _len >= _RR
+        return task_type == "creative" and _len >= REFLECT_FAST_DRAFT_CHARS
     if task_type == "simple":
         return False
     if task_type in ("creative", "multi_step"):

@@ -19,6 +19,9 @@ export default [
       "no-redeclare": "error",
       "no-unreachable": "error",
       "no-self-assign": "error",
+      // XSS guardrail: javascript: URLs must never become links/hrefs.
+      // Server-provided URLs pass isSafeHttpUrl() (ui.js) first.
+      "no-script-url": "error",
     },
   },
   {

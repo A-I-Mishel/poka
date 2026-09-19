@@ -49,16 +49,6 @@ globalThis.localStorage = {
   setItem: (k, v) => void store.set(k, String(v)),
   removeItem: (k) => void store.delete(k),
 };
-globalThis.document = {
-  getElementById: $,
-  createElement: () => makeEl(),
-  querySelector: () => makeEl(),
-  querySelectorAll: () => [],
-  addEventListener() {},
-  body: makeEl(),
-  documentElement: makeEl(),
-};
-globalThis.window = { addEventListener() {} };
 
 let failures = 0;
 function check(name, cond) {
@@ -70,7 +60,8 @@ function check(name, cond) {
   }
 }
 
-// 1. Every module imports without throwing (top-level DOM/listeners absorbed).
+// 1. Every module imports with NO document/window (only localStorage).
+// Top-level DOM refs/listeners live in init*() — import must not throw.
 const ui = await import("./src/ui.js");
 const config = await import("./src/config.js");
 const markdown = await import("./src/markdown.js");
@@ -80,8 +71,45 @@ const api = await import("./src/api.js");
 const auth = await import("./src/auth.js");
 const panels = await import("./src/panels.js");
 const composer = await import("./src/composer.js");
+const render = await import("./src/render.js");
+const send = await import("./src/send.js");
 const chat = await import("./src/chat.js");
-check("all modules import", true);
+check("all modules import without DOM", true);
+
+// 2. Install browser stubs, then run every init*() (wiring phase).
+globalThis.document = {
+  getElementById: $,
+  createElement: () => makeEl(),
+  querySelector: () => makeEl(),
+  querySelectorAll: () => [],
+  addEventListener() {},
+  body: makeEl(),
+  documentElement: makeEl(),
+};
+globalThis.window = { addEventListener() {} };
+for (const [name, fn] of [
+  ["initRender", render.initRender],
+  ["initSend", send.initSend],
+  ["initAuth", auth.initAuth],
+  ["initPanels", panels.initPanels],
+  ["initComposer", composer.initComposer],
+  ["initChat", chat.initChat],
+]) {
+  try {
+    fn();
+    check(`init ${name} runs`, true);
+  } catch (e) {
+    check(`init ${name} runs (${e.message})`, false);
+  }
+}
+// init is idempotent: second pass must not double-register.
+try {
+  render.initRender(); send.initSend(); auth.initAuth();
+  panels.initPanels(); composer.initComposer(); chat.initChat();
+  check("init functions idempotent", true);
+} catch (e) {
+  check(`init functions idempotent (${e.message})`, false);
+}
 
 // 2. Key exports exist and are callable.
 for (const [mod, name, fn] of [

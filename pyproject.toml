@@ -39,23 +39,22 @@ ignore = [
   "S101",  # asserts are the test suite's language
   "B904",  # router/service exception mapping to HTTPException/AccountError
             # is FastAPI idiom; new code uses `raise ... from e` anyway.
-  # Grandfathered pre-existing noise — fix incrementally, new code must
-  # not add more (S110/S112 best-effort hygiene, B905 zip strict,
-  # S310 urlopen, S106/S107 passwords, S324/S311 hashes/random,
-  # S608 sql, S314 xml, B023 loop var, S603/S306 subprocess/tmp).
-  "S110", "S112", "B905", "S310", "S106", "S107", "S324", "S311",
-  "S608", "S314", "B023", "S603", "S306",
+# Grandfathered pre-existing noise — fix incrementally, new code must
+  # not add more (S110/S112 best-effort hygiene).
+  # Cleared: S310 (single _https_get funnel), S106/S107 (noqa + tests
+  # per-file), S324 (usedforsecurity=False), S311 (noqa jitter),
+  # S608 (validated/quoted idents), S324 (entity pre-filter + noqa),
+  # B023 (bound loop var), S603 (fixed argv + noqa), S306 (tmp_path),
+  # B905 (strict= on equal-by-construction zips).
   "UP006", "UP045", "UP031", "UP035", "I001",
 ]
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S110", "S112", "B017"]
+"tests/*" = ["S110", "S112", "B017", "S106", "S107"]  # S106/S107: password literals are test fixtures, never credentials
 "chaos/*" = ["S603", "S607"]  # local operator tooling, fixed argv, shell=False
-"scripts/*" = ["S603", "S607", "S110"]
+"scripts/*" = ["S603", "S607"]
+"locustfile.py" = ["S311"]  # test data randomness, not crypto
 # FastAPI Depends() in defaults is canonical usage, not a mutable-arg bug.
 "backend/**/*.py" = ["B008"]
 # Documented best-effort hygiene: never-raises helpers degrade silently by design.
-"backend/deps.py" = ["B008", "S110"]
-"backend/main.py" = ["B008", "S110"]
-"services/accounts.py" = ["S110"]
-"services/storage.py" = ["S110"]
-"services/files.py" = ["S110"]
+"backend/deps.py" = ["B008"]
+"backend/main.py" = ["B008"]

@@ -8,12 +8,13 @@ The vanilla-JS frontend (frontend/) talks to this API.
 """
 
 import logging
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from services.secrets import get_secret
 
 load_dotenv()
 
@@ -39,12 +40,12 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         # Operators who truly want a public open instance must opt in via
         # PLUTO_ALLOW_OPEN=true (documented footgun, never the default).
         try:
-            _allow_open = (os.getenv("PLUTO_ALLOW_OPEN", "") or "").strip().lower() in (
+            _allow_open = (get_secret("PLUTO_ALLOW_OPEN", "") or "").strip().lower() in (
                 "1", "true", "yes", "on",
             )
-            _on_hosted = bool((os.getenv("PORT", "") or "").strip()
-                              or (os.getenv("RENDER", "") or "").strip())
-            _origin = (os.getenv("PLUTO_FRONTEND_ORIGIN", "") or "").strip()
+            _on_hosted = bool((get_secret("PORT", "") or "").strip()
+                              or (get_secret("RENDER", "") or "").strip())
+            _origin = (get_secret("PLUTO_FRONTEND_ORIGIN", "") or "").strip()
             _public_origin = bool(_origin) and not any(
                 h in _origin for h in ("localhost", "127.0.0.1", "[::1]")
             )
@@ -59,20 +60,18 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         except RuntimeError:
             raise
         except Exception:
-            pass
+            logger.debug("public-host open-mode check failed", exc_info=True)
         try:
-            from services.secrets import get_secret as _get_secret
-
-            if (_get_secret("PLUTO_USER_ID", "") or "").strip():
-                _allow_shared = (os.getenv("PLUTO_ALLOW_SHARED_VAULT", "") or "").strip().lower() in (
+            if (get_secret("PLUTO_USER_ID", "") or "").strip():
+                _allow_shared = (get_secret("PLUTO_ALLOW_SHARED_VAULT", "") or "").strip().lower() in (
                     "1", "true", "yes", "on",
                 )
                 if not _allow_shared:
                     # Shared vault in open mode on a public host silently
                     # merges every logged-out visitor into one vault.
-                    _origin2 = (os.getenv("PLUTO_FRONTEND_ORIGIN", "") or "").strip()
-                    _hosted2 = bool((os.getenv("PORT", "") or "").strip()
-                                    or (os.getenv("RENDER", "") or "").strip())
+                    _origin2 = (get_secret("PLUTO_FRONTEND_ORIGIN", "") or "").strip()
+                    _hosted2 = bool((get_secret("PORT", "") or "").strip()
+                                    or (get_secret("RENDER", "") or "").strip())
                     _public2 = bool(_origin2) and not any(
                         h in _origin2 for h in ("localhost", "127.0.0.1", "[::1]")
                     )
@@ -91,11 +90,9 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         except RuntimeError:
             raise
         except Exception:
-            pass
+            logger.debug("shared-vault open-mode check failed", exc_info=True)
     try:
-        import os as _os
-
-        _workers = int(_os.getenv("UVICORN_WORKERS", "1") or "1")
+        _workers = int(get_secret("UVICORN_WORKERS", "1") or "1")
     except (TypeError, ValueError):
         _workers = 1
     if _workers > 1:
@@ -105,17 +102,17 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             "for hard abuse/billing enforcement.",
             _workers,
         )
-        _allow_mem = (os.getenv("PLUTO_ALLOW_MEMORY_LIMITER", "") or "").strip().lower() in (
+        _allow_mem = (get_secret("PLUTO_ALLOW_MEMORY_LIMITER", "") or "").strip().lower() in (
             "1", "true", "yes", "on",
         )
-        if not (os.getenv("REDIS_URL", "") or "").strip() and not _allow_mem:
+        if not (get_secret("REDIS_URL", "") or "").strip() and not _allow_mem:
             raise RuntimeError(
                 "UVICORN_WORKERS>1 without REDIS_URL uses per-process "
                 "in-memory rate limits (over-blocks NAT, under-blocks "
                 "distributed abuse). Set REDIS_URL or explicitly opt in "
                 "with PLUTO_ALLOW_MEMORY_LIMITER=true for local dev."
             )
-        if _mode == "private" and not (os.getenv("REDIS_URL", "") or "").strip():
+        if _mode == "private" and not (get_secret("REDIS_URL", "") or "").strip():
             raise RuntimeError(
                 "PLUTO_AUTH_MODE=private with UVICORN_WORKERS>1 requires REDIS_URL "
                 "for distributed rate limiting (abuse/billing enforcement)."
@@ -124,17 +121,17 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     # Without PLUTO_TRUST_PROXY=true limits key on the proxy peer IP,
     # collapsing all visitors into one bucket (over-blocking).
     try:
-        _trust = (os.getenv("PLUTO_TRUST_PROXY", "false") or "false").strip().lower() in (
+        _trust = (get_secret("PLUTO_TRUST_PROXY", "false") or "false").strip().lower() in (
             "1", "true", "yes", "on",
         )
-        if not _trust and (os.getenv("PORT", "") or os.getenv("RENDER", "")):
+        if not _trust and (get_secret("PORT", "") or get_secret("RENDER", "")):
             logger.warning(
                 "PLUTO_TRUST_PROXY is false behind a proxy (PORT/RENDER set) — "
                 "rate limits will key on proxy IP. Set PLUTO_TRUST_PROXY=true "
                 "when behind a trusted proxy."
             )
     except Exception:
-        pass
+        logger.debug("trust-proxy check failed", exc_info=True)
     # Tracing: best-effort, never blocks startup (NoOp when unconfigured).
     try:
         from services.tracing import init_tracing as _init_tracing
@@ -149,7 +146,7 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         for w in validate_secrets():
             logger.warning(w)
     except Exception:
-        pass
+        logger.debug("secret validation failed", exc_info=True)
     # Free-tier durability: restore data/ from the R2 snapshot when the
     # local disk is empty (Render free wipes it on every restart). Skipped
     # when R2 is unconfigured or local data exists; never blocks startup.
@@ -181,7 +178,7 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         from services.ratelimit_redis import create_redis_limiter as _create_redis_limiter
         from services.ratelimit import configure_rate_limiter as _configure_rate_limiter
 
-        _redis_url = (os.getenv("REDIS_URL", "") or "").strip()
+        _redis_url = (get_secret("REDIS_URL", "") or "").strip()
         redis_limiter = _create_redis_limiter()
         if redis_limiter is not None:
             # Smoke-test the connection so a dead Redis never silently
@@ -218,7 +215,7 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
 
 
 # Hide interactive docs + schema in private mode (prevents unauthenticated schema leakage).
-_is_private = os.getenv("PLUTO_AUTH_MODE", "open").strip().lower() == "private"
+_is_private = (get_secret("PLUTO_AUTH_MODE", "open") or "open").strip().lower() == "private"
 app = FastAPI(
     title="Pluto API",
     version="0.1.0",
@@ -237,7 +234,7 @@ import re as _cors_re
 
 _VALID_ORIGIN_RE = _cors_re.compile(r"^https?://[^/\s]+$")
 
-_raw_origins = os.getenv("PLUTO_FRONTEND_ORIGIN", "")
+_raw_origins = get_secret("PLUTO_FRONTEND_ORIGIN", "") or ""
 if not _raw_origins.strip() and not _is_private:
     _raw_origins = "http://localhost:5173"
 _frontend_origins: list[str] = []
@@ -293,7 +290,7 @@ async def _security_headers(request, call_next):  # type: ignore[no-untyped-def]
     return response
 
 # Optional host-header validation (set PLUTO_TRUSTED_HOSTS="api.example.com,*.example.com")
-_trusted_hosts_raw = os.getenv("PLUTO_TRUSTED_HOSTS", "").strip()
+_trusted_hosts_raw = (get_secret("PLUTO_TRUSTED_HOSTS", "") or "").strip()
 if _trusted_hosts_raw:
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
 

@@ -177,8 +177,8 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
 
 
 def _content_hash(content: str) -> str:
-    """Stable digest identifying one message for processed tracking."""
-    return hashlib.sha1(content.encode("utf-8", errors="replace")).hexdigest()
+    """Stable digest identifying one message for processed tracking (non-security)."""
+    return hashlib.sha1(content.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()
 
 
 def _merge_fact(mem: Dict[str, Any], fact: Dict[str, str]) -> bool:

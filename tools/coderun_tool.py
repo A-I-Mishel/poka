@@ -18,21 +18,12 @@ the host, else an honest STATUS=FAILED naming the missing runtime.
 from langchain_core.tools import tool
 
 from services import coderun
-from services.identity import auth_mode
 from services.limits import MAX_CODE_OUTPUT_CHARS
-from services.obs import event as obs_event
-from tools.gating import claim_tool_slot
+from tools.gating import claim_private_slot
 
 
 def _gate(tool_name: str):
-    if auth_mode() != "private":
-        obs_event("ratelimit.deny", action="code", tool=tool_name,
-                  reason="open_mode")
-        return None, (
-            f"STATUS=DENIED tool={tool_name}: code execution is disabled "
-            "in open mode. Set PLUTO_AUTH_MODE=private (trusted/owner use only)."
-        )
-    return claim_tool_slot(tool_name, "code", "code-execution")
+    return claim_private_slot(tool_name)
 
 
 def _format(res: dict, tool_name: str) -> str:

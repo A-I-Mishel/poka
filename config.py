@@ -441,6 +441,15 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
 # remains the escape hatch when synthesis is down (answers then carry a
 # degraded marker). Tables hold (name, getter) pairs like TIER_GETTERS.
 SMALL_FINAL_TIERS = frozenset({"NVIDIA"})  # 8B-class: never final answers
+# Weak final-answer tiers: small or nondeterministic lanes that answer only
+# when quality tiers are down. Runtime marks their answers degraded so the
+# UI can be honest ("quality models unavailable"). Shape of SYNTHESIS_TIERS
+# is unchanged (see test_role_tables_shape); order stays quality-first with
+# these lanes last.
+WEAK_FINAL_TIERS = frozenset({
+    "Mistral", "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
+    "OpenRouter Laguna", "OpenRouter Free Router",
+})
 SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),

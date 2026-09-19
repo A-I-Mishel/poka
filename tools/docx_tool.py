@@ -1,4 +1,5 @@
 ﻿import io
+import logging
 import re
 import time
 import uuid
@@ -11,6 +12,8 @@ from services.files import FileStore
 from services.limits import MAX_DOCX_PARAGRAPHS
 from services.storage import StorageError
 from tools.gating import claim_generation_slot
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -87,7 +90,7 @@ def _docx_add_runs(paragraph: Any, text: str) -> None:
                 run.font.name = "Consolas"
                 run.font.size = Pt(10)
             except Exception:
-                pass
+                logger.debug("docx code font styling failed", exc_info=True)
         else:
             run = paragraph.add_run(token[1:-1]) if not first else _docx_first_run(paragraph, token[1:-1])
             run.italic = True
@@ -104,7 +107,7 @@ def _docx_first_run(paragraph: Any, text: str) -> Any:
             paragraph.runs[0].text = text
             return paragraph.runs[0]
     except Exception:
-        pass
+        logger.debug("docx first-run reuse failed", exc_info=True)
     return paragraph.add_run(text)
 
 
@@ -250,7 +253,7 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
             style = doc.styles["Normal"]
             style.font.size = Pt(11)
         except Exception:
-            pass
+            logger.debug("docx Normal style set failed", exc_info=True)
         doc.add_heading(title.strip()[:120], level=1)
         counts: Dict[str, int] = {}
         for kind, payload in blocks:
@@ -279,13 +282,13 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
                 try:
                     para.style = doc.styles["No Spacing"]
                 except Exception:
-                    pass
+                    logger.debug("docx No-Spacing style set failed", exc_info=True)
                 run = para.add_run(str(payload.get("code", ""))[:4000])
                 try:
                     run.font.name = "Consolas"
                     run.font.size = Pt(10)
                 except Exception:
-                    pass
+                    logger.debug("docx code-block font styling failed", exc_info=True)
             elif kind == "table":
                 headers = payload[0]
                 rows = payload[1:13]
@@ -293,7 +296,7 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
                 try:
                     table.style = "Light Grid Accent 1"
                 except Exception:
-                    pass
+                    logger.debug("docx table style set failed", exc_info=True)
                 for j, header in enumerate(headers):
                     table.cell(0, j).text = str(header)[:_DOCX_MAX_CELL_CHARS]
                 for i, row in enumerate(rows):
@@ -303,7 +306,7 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
                 try:
                     doc.add_page_break()
                 except Exception:
-                    pass
+                    logger.debug("docx page break insert failed", exc_info=True)
         filename: str = f"docx_{uuid.uuid4().hex[:8]}.docx"
         buf = io.BytesIO()
         doc.save(buf)
