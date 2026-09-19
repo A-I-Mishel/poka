@@ -41,31 +41,62 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _SESSION_MAX_AGE = 30 * 86400
 
 
+def _is_cross_site(request: Request) -> bool:
+    """True when the page origin differs from the API host (Vercel UI + Render API)."""
+    try:
+        origin = (request.headers.get("origin", "") or "").strip()
+        if not origin:
+            return False
+        from urllib.parse import urlparse
+
+        o_host = (urlparse(origin).hostname or "").lower()
+        h_host = (request.url.hostname or "").lower()
+        return bool(o_host and h_host) and o_host != h_host
+    except Exception:
+        return False
+
+
 def _set_session_cookie(response: Response, request: Request, token: str) -> None:
     """Set the HttpOnly session cookie (Secure on HTTPS only).
 
     Secure cookies are rejected over plain http (local dev, TestClient),
     so enable Secure only when the request itself arrived via https
-    (prod/Vercel/Render). HttpOnly + SameSite=Lax hold in all modes.
+    (prod/Vercel/Render). Same-site callers (local dev, single-server
+    demo) keep SameSite=Lax; cross-site callers (Vercel UI talking to
+    the Render API) need SameSite=None, otherwise browsers accept the
+    login 200 yet never send the cookie back and every later call 401s.
+    None requires Secure, so non-HTTPS cross-site falls back to Lax.
+    CSRF for cookie sessions is still enforced via the X-Pluto-Csrf
+    header (backend/deps.py _require_csrf).
     """
     try:
         scheme = (request.url.scheme or "").lower()
     except Exception:
         scheme = ""
     secure = scheme == "https"
+    samesite = "none" if (_is_cross_site(request) and secure) else "lax"
     response.set_cookie(
         SESSION_COOKIE,
         token,
         max_age=_SESSION_MAX_AGE,
         httponly=True,
         secure=secure,
-        samesite="lax",
+        samesite=samesite,
         path="/",
     )
 
 
-def _clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE, path="/")
+def _clear_session_cookie(response: Response, request: Request | None = None) -> None:
+    # Mirror the set attributes so the browser actually drops a
+    # SameSite=None;Secure cookie (a Lax, non-Secure delete is ignored
+    # for it and the user would stay "logged in").
+    try:
+        scheme = ((request.url.scheme if request is not None else "") or "").lower()
+    except Exception:
+        scheme = ""
+    secure = scheme == "https"
+    samesite = "none" if (request is not None and _is_cross_site(request) and secure) else "lax"
+    response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, samesite=samesite)
 
 
 def _agent(request: Request) -> str:
@@ -182,10 +213,10 @@ def sessions(request: Request,
 
 
 @router.post("/logout-all")
-def logout_all(response: Response, ctx: UserContext = Depends(current_user)):
+def logout_all(request: Request, response: Response, ctx: UserContext = Depends(current_user)):
     """Revoke every session for this account (all devices). Always 200."""
     _require_account(ctx)
-    _clear_session_cookie(response)
+    _clear_session_cookie(response, request)
     return {"ok": True, "revoked": int(accounts_svc.logout_all(ctx.user_id))}
 
 
@@ -195,7 +226,7 @@ def logout(request: Request, response: Response,
     """Revoke the presenting session token (idempotent, always 200)."""
     presented, _via = session_token_from(request, authorization)
     accounts_svc.logout(presented)
-    _clear_session_cookie(response)
+    _clear_session_cookie(response, request)
     return {"ok": True}
 
 
