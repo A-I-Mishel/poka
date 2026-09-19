@@ -54,12 +54,15 @@ def list_mcp_tools(server: str = "") -> str:
             tools = mcp_svc.list_server_tools(name)
         except Exception as e:
             logger.warning("MCP list failed for %s: %s", name, e)
-            lines.append(f"{name}: LIST FAILED ({e})")
+            lines.append(f"{name}: LIST FAILED ({str(e)[:200]})")
             continue
         if not tools:
             lines.append(f"{name}: (no tools)")
             continue
         for t in tools:
+            if not isinstance(t, dict):
+                lines.append("%s.%s" % (name, str(t)[:80]))
+                continue
             desc = str(t.get("description", "") or "")[:200]
             lines.append("%s.%s %s" % (name, t.get("name", "?"), ("- " + desc) if desc else ""))
     text = "\n".join(lines) or "STATUS=EMPTY tool=list_mcp_tools: no tools found."
@@ -95,16 +98,21 @@ def call_mcp_tool(server: str, tool: str, arguments: str = "{}") -> str:
             "STATUS=DENIED tool=call_mcp_tool: "
             f"{server}.{tool} is not allowlisted (PLUTO_MCP_ALLOW_TOOLS)."
         )
+    raw_args = arguments if isinstance(arguments, str) else str(arguments or "{}")
+    if len(raw_args) > mcp_svc.MAX_TOOL_ARG_CHARS:
+        return "STATUS=INVALID tool=call_mcp_tool: arguments too large."
     try:
-        args = json.loads(arguments or "{}")
+        args = json.loads(raw_args or "{}")
     except (ValueError, TypeError):
         return "STATUS=INVALID tool=call_mcp_tool: arguments must be a JSON object."
     if not isinstance(args, dict):
         return "STATUS=INVALID tool=call_mcp_tool: arguments must be a JSON object."
-    if len(arguments) > mcp_svc.MAX_TOOL_ARG_CHARS:
-        return "STATUS=INVALID tool=call_mcp_tool: arguments too large."
     try:
-        return mcp_svc.call_server_tool(server, tool, args)
+        out = mcp_svc.call_server_tool(server, tool, args)
     except Exception as e:
         logger.warning("MCP call failed for %s.%s: %s", server, tool, e)
-        return f"STATUS=FAILED tool=call_mcp_tool: {e}"
+        return f"STATUS=FAILED tool=call_mcp_tool: {str(e)[:200]}"
+    text = str(out or "")
+    if len(text) > 4000:
+        text = text[:4000] + "\n[Note: MCP output truncated (untrusted).]"
+    return text

@@ -195,7 +195,12 @@ def read_pdf(upload_id: str) -> str:
         used_chars = 0
         pages_read = 0
         for i, page in enumerate(reader.pages[:MAX_PDF_PAGES]):
-            chunk = page.extract_text() or ""
+            try:
+                chunk = page.extract_text() or ""
+            except Exception:
+                logger.debug("pdf page %d extract failed; skipping", i + 1, exc_info=True)
+                pages_read = i + 1
+                continue
             if chunk.strip():
                 parts.append(f"[page {i + 1}]\n{chunk}")
                 used_chars += len(chunk)

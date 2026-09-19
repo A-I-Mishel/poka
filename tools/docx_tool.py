@@ -37,12 +37,20 @@ def create_docx(title: str, content: str) -> str:
         user_id, denied = claim_generation_slot("create_docx")
         if denied is not None:
             return denied
+        title = str(title or "").strip()
+        content = str(content or "")
+        if not title:
+            return "STATUS=INVALID tool=create_docx: empty title."
+        title = title[:120]
+        # Bound content before splitting (10MB string would OOM first).
+        if len(content) > 200000:
+            content = content[:200000]
         doc: Document = Document()
         doc.add_heading(title, level=1)
         paras = [p for p in content.strip().split("\n") if p.strip()]
         dropped_paras = max(0, len(paras) - MAX_DOCX_PARAGRAPHS)
         for paragraph in paras[:MAX_DOCX_PARAGRAPHS]:
-            doc.add_paragraph(paragraph.strip())
+            doc.add_paragraph(paragraph.strip()[:2000])
         filename: str = f"docx_{uuid.uuid4().hex[:8]}.docx"
         buf = io.BytesIO()
         doc.save(buf)
@@ -50,7 +58,7 @@ def create_docx(title: str, content: str) -> str:
 
         try:
             spec = {"kind": "docx", "tool": "create_docx",
-                    "input": {"title": title, "content": content},
+                    "input": {"title": title[:120], "content_len": len(content)},
                     "created": time.time()}
             meta = FileStore(user_id).register_output(
                 filename, data, "docx", spec)
@@ -61,9 +69,9 @@ def create_docx(title: str, content: str) -> str:
             )
             return f"Document saved as {meta.display_name} (file ID: {meta.id}){note}"
         except StorageError as e:
-            return f"STATUS=FAILED tool=create_docx: {e}"
+            return f"STATUS=FAILED tool=create_docx: {str(e)[:200]}"
     except Exception as e:
-        return f"STATUS=FAILED tool=create_docx: {str(e)}"
+        return f"STATUS=FAILED tool=create_docx: {str(e)[:200]}"
 
 
 _DOCX_MAX_BLOCKS: int = 300
@@ -343,6 +351,6 @@ def build_document(markdown_text: str, title: str = "Document") -> str:
                 filename, data, "docx", spec)
             return f"{summary} (file ID: {meta.id})"
         except StorageError as e:
-            return f"STATUS=FAILED tool=build_document: {e}"
+            return f"STATUS=FAILED tool=build_document: {str(e)[:200]}"
     except Exception as e:
         return f"STATUS=FAILED tool=build_document: {str(e)[:200]}"

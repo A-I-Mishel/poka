@@ -118,7 +118,7 @@ def _parse_blocks(markdown_text: str) -> List[Tuple[str, Any]]:
             parsed = [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows]
             parsed = [r for r in parsed if any(c for c in r)]
             parsed = [r for r in parsed if not all(re.fullmatch(r":?-{1,}:?", c or "") for c in r)]
-            if 1 <= len(parsed[0]) <= 6:
+            if parsed and 1 <= len(parsed[0]) <= 6:
                 blocks.append(("table", parsed))
             else:
                 for r in parsed:
@@ -191,17 +191,27 @@ def _pdf_wrap(text: str, font_key: str, size: float, indent: float = 0.0) -> Lis
     words = str(text or "").split()
     if not words:
         return [""]
+    # Cap pathological inputs (1MB URL) so wrap can't emit 100k lines.
+    if len(words) > 5000:
+        words = words[:5000]
     lines: List[str] = []
     current: List[str] = []
     current_len = 0
     for word in words:
-        while len(word) > max_chars:
+        if len(lines) > 5000:
+            break
+        # Cap single-token splits too.
+        splits = 0
+        while len(word) > max_chars and splits < 50:
             # Hard-split pathological long tokens (URLs, code).
             if current:
                 lines.append(" ".join(current))
                 current, current_len = [], 0
             lines.append(word[:max_chars])
             word = word[max_chars:]
+            splits += 1
+        if len(word) > max_chars:
+            word = word[:max_chars]
         extra = len(word) + (1 if current else 0)
         if current_len + extra > max_chars and current:
             lines.append(" ".join(current))
@@ -449,6 +459,8 @@ def create_pdf(title: str, markdown_text: str) -> str:
         return "STATUS=INVALID tool=create_pdf: empty document text."
     if not title or not title.strip():
         return "STATUS=INVALID tool=create_pdf: empty title."
+    if len(markdown_text) > 200000 or len(str(title or "")) > 500:
+        return "STATUS=INVALID tool=create_pdf: input too large."
     user_id, denied = claim_generation_slot("create_pdf")
     if denied is not None:
         return denied
@@ -469,7 +481,7 @@ def create_pdf(title: str, markdown_text: str) -> str:
         filename: str = f"pdf_{uuid.uuid4().hex[:8]}.pdf"
         try:
             spec = {"kind": "pdf", "tool": "create_pdf",
-                    "input": {"title": title, "markdown_text": markdown_text},
+                    "input": {"title": str(title)[:120], "markdown_len": len(markdown_text)},
                     "created": time.time()}
             meta = FileStore(user_id).register_output(filename, data, "pdf", spec)
             return (f"PDF saved as {meta.display_name} "

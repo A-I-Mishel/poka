@@ -446,8 +446,7 @@ def _odf_content_root(blob: bytes) -> Tuple[object, dict]:
         raise ValueError("ODF content.xml too large")
     # cheap case-insensitive check for DOCTYPE/ENTITY without lower-casing huge blob
     head = blob[:8192].lower() if len(blob) > 8192 else blob.lower()
-    # also scan full for entity if head didn't contain but bomb could hide later — still cheap
-    if b"<!doctype" in head or b"<!entity" in head or b"<!doctype" in blob.lower() or b"<!entity" in blob.lower():
+    if b"<!doctype" in head or b"<!entity" in head:
         raise ValueError("XML entities are not allowed in ODF content")
     try:
         # Prefer defusedxml when available (external entity forbid + entity expansion limit)
@@ -455,7 +454,11 @@ def _odf_content_root(blob: bytes) -> Tuple[object, dict]:
             import defusedxml.ElementTree as DET  # type: ignore
             root = DET.fromstring(blob, forbid_dtd=True, forbid_entities=True)
         except ImportError:
-            # DOCTYPE/ENTITY pre-rejected above; defusedxml preferred when installed.
+            # Fail closed without defusedxml: stdlib would expand internal
+            # entities (billion-laughs). DTD already rejected above, but a
+            # late <!ENTITY> past 8k could hide — re-scan fully, cheap.
+            if b"<!entity" in blob.lower() or b"<!doctype" in blob.lower():
+                raise ValueError("XML entities are not allowed in ODF content")
             root = ET.fromstring(blob)  # noqa: S314
         except Exception as e:
             raise ValueError(f"cannot parse document content ({e})")
@@ -674,13 +677,22 @@ def _read_xlsx_file(path) -> str:
         raise ValueError(f"cannot parse xlsx ({e})")
     parts = []
     items = frames.items() if isinstance(frames, dict) else [("Sheet1", frames)]
-    for name, frame in items:
+    # Cap sheets/cols/rows so a wide workbook can't OOM the worker.
+    for idx, (name, frame) in enumerate(items):
+        if idx >= 10:
+            parts.append("[Note: only first 10 sheets shown.]")
+            break
         try:
-            parts.append(f"[sheet {name}]\n{frame.to_string()}")
+            if getattr(frame, "shape", (0, 0))[1] > 100:
+                frame = frame.iloc[:, :100]
+            parts.append(f"[sheet {str(name)[:80]}]\n{frame.head(500).to_string()}")
         except Exception:
             logger.debug("xlsx sheet render failed; skipping sheet", exc_info=True)
             continue
-    return "\n".join(parts)
+    text = "\n".join(parts)
+    if len(text) > 20000:
+        text = text[:20000] + "\n[Note: xlsx truncated.]"
+    return text
 
 
 @tool

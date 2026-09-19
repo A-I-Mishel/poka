@@ -2,16 +2,24 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SendRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     upload_ids: List[str] = Field(default_factory=list, max_length=5)
-    project_id: Optional[str] = None
+    project_id: Optional[str] = Field(default=None, max_length=64)
     deep_mode: bool = False
     force_search: bool = False
     active_tier: Optional[str] = None
+
+    @field_validator("upload_ids")
+    @classmethod
+    def _check_upload_ids(cls, v: List[str]) -> List[str]:
+        for item in v:
+            if not isinstance(item, str) or not item.strip() or len(item) > 128:
+                raise ValueError("bad upload id")
+        return v
 
 
 class ChatMessage(BaseModel):
@@ -21,8 +29,8 @@ class ChatMessage(BaseModel):
 
 
 class RegenerateRequest(BaseModel):
-    index: int
-    project_id: Optional[str] = None
+    index: int = Field(ge=0)
+    project_id: Optional[str] = Field(default=None, max_length=64)
     deep_mode: bool = False
     force_search: bool = False
     active_tier: Optional[str] = None
@@ -49,12 +57,12 @@ class ChatsResponse(BaseModel):
 
 
 class ArchiveRequest(BaseModel):
-    project_id: Optional[str] = None
-    chat_id: Optional[str] = None
+    project_id: Optional[str] = Field(default=None, max_length=64)
+    chat_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class OpenChatRequest(BaseModel):
-    id: str
+    id: str = Field(min_length=1, max_length=64)
 
 class RenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
@@ -86,12 +94,12 @@ class ProjectRename(BaseModel):
 
 
 class TextBody(BaseModel):
-    text: str = ""
+    text: str = Field(default="", max_length=20000)
 
 
 class BriefFromMessage(BaseModel):
-    index: int
-    project_id: Optional[str] = None
+    index: int = Field(ge=0)
+    project_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class WorkflowStep(BaseModel):
@@ -125,7 +133,7 @@ class HealthResponse(BaseModel):
 
 
 class AccountRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=32)
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=8, max_length=128)
 
 

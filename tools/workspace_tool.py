@@ -38,6 +38,18 @@ def _need_private(tool_name: str, action: str = "code"):
     return claim_tool_slot(tool_name, "code", "code")
 
 
+def _clean_path(path: str) -> str:
+    """Tool-side defense-in-depth: reject absolute/.. /empty before service."""
+    text = str(path or "").strip()
+    if not text:
+        raise ValueError("empty path")
+    if text.startswith(("/", "\\", "~")) or ".." in text.split("/"):
+        raise ValueError("path must be workspace-relative without '..'")
+    if len(text) > 256:
+        raise ValueError("path too long")
+    return text
+
+
 @tool
 def workspace_list() -> str:
     """List files in your private code workspace.
@@ -54,7 +66,10 @@ def workspace_list() -> str:
         return f"STATUS=FAILED tool=workspace_list: {str(e)[:200]}"
     if not files:
         return "STATUS=EMPTY tool=workspace_list: workspace is empty (use workspace_write to create e.g. main.py)."
-    lines = [f"{f['path']} ({int(f['size'])} bytes)" for f in files[:100]]
+    shown = files[:100]
+    lines = [f"{f['path']} ({int(f['size'])} bytes)" for f in shown]
+    if len(files) > len(shown):
+        lines.append(f"[Note: +{len(files) - len(shown)} more.]")
     return "\n".join(lines)
 
 
@@ -72,9 +87,13 @@ def workspace_read(path: str) -> str:
     if user_id is None:
         return err
     try:
+        _clean_path(path)
+    except ValueError as e:
+        return f"STATUS=INVALID tool=workspace_read: {e}"
+    try:
         text = read_workspace_file(user_id, str(path or ""))
     except FileNotFoundError as e:
-        return f"STATUS=FAILED tool=workspace_read: {e}"
+        return f"STATUS=INVALID tool=workspace_read: {str(e)[:200]}"
     except StorageError as e:
         return f"STATUS=INVALID tool=workspace_read: {e}"
     except Exception as e:
@@ -102,6 +121,10 @@ def workspace_write(path: str, content: str) -> str:
     if user_id is None:
         return err
     try:
+        _clean_path(path)
+    except ValueError as e:
+        return f"STATUS=INVALID tool=workspace_write: {e}"
+    try:
         saved = write_workspace_file(user_id, str(path or ""), str(content or ""))
     except StorageError as e:
         return f"STATUS=INVALID tool=workspace_write: {e}"
@@ -124,11 +147,15 @@ def workspace_delete(path: str) -> str:
     if user_id is None:
         return err
     try:
+        _clean_path(path)
+    except ValueError as e:
+        return f"STATUS=INVALID tool=workspace_delete: {e}"
+    try:
         ok = delete_workspace_file(user_id, str(path or ""))
     except StorageError as e:
         return f"STATUS=INVALID tool=workspace_delete: {e}"
     except Exception as e:
         return f"STATUS=FAILED tool=workspace_delete: {str(e)[:200]}"
     if not ok:
-        return f"STATUS=FAILED tool=workspace_delete: file not found: {path}"
+        return "STATUS=INVALID tool=workspace_delete: file not found."
     return f"STATUS=OK tool=workspace_delete: deleted {path}."

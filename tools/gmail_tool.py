@@ -82,14 +82,16 @@ def search_gmail(query: str) -> str:
         hits = gmail_svc.search_messages(service, str(query or ""))
     except Exception as e:
         logger.warning("Gmail search failed: %s", e)
-        return f"STATUS=FAILED tool=search_gmail: {e}"
+        return f"STATUS=FAILED tool=search_gmail: {str(e)[:200]}"
     if not hits:
         return "STATUS=EMPTY tool=search_gmail: no matching emails."
     lines = []
     for i, h in enumerate(hits, 1):
+        if not isinstance(h, dict):
+            continue
         lines.append(
-            f"[{i}] id={h['id']} | {h['subject']} | {h['sender']} | {h['date']}\n"
-            f"    {h['snippet']}"
+            f"[{i}] id={h.get('id','?')} | {str(h.get('subject',''))[:200]} | {str(h.get('sender',''))[:120]} | {h.get('date','')}\n"
+            f"    {str(h.get('snippet',''))[:500]}"
         )
     return "\n".join(lines)
 
@@ -114,10 +116,12 @@ def read_gmail(message_id: str) -> str:
         msg = gmail_svc.read_message(service, str(message_id).strip())
     except Exception as e:
         logger.warning("Gmail read failed: %s", e)
-        return f"STATUS=FAILED tool=read_gmail: {e}"
+        return f"STATUS=FAILED tool=read_gmail: {str(e)[:200]}"
+    if not isinstance(msg, dict):
+        return "STATUS=FAILED tool=read_gmail: bad service response."
     return (
-        f"Subject: {msg['subject']}\nFrom: {msg['sender']}\n"
-        f"Date: {msg['date']}\n\n{msg['body']}"
+        f"Subject: {str(msg.get('subject',''))[:300]}\nFrom: {str(msg.get('sender',''))[:200]}\n"
+        f"Date: {msg.get('date','')}\n\n{str(msg.get('body',''))[:4000]}"
     )
 
 
@@ -146,8 +150,9 @@ def create_gmail_draft(to: str, subject: str, body: str) -> str:
         draft = gmail_svc.create_draft(service, to, str(subject or ""), str(body or ""))
     except Exception as e:
         logger.warning("Gmail draft failed: %s", e)
-        return f"STATUS=FAILED tool=create_gmail_draft: {e}"
-    return f"STATUS=OK tool=create_gmail_draft draft_id={draft['id']}"
+        return f"STATUS=FAILED tool=create_gmail_draft: {str(e)[:200]}"
+    did = draft.get('id','?') if isinstance(draft, dict) else '?'
+    return f"STATUS=OK tool=create_gmail_draft draft_id={did}"
 
 
 def _execute_send_gmail(to: str, subject: str, body: str) -> str:
@@ -159,8 +164,9 @@ def _execute_send_gmail(to: str, subject: str, body: str) -> str:
         sent = gmail_svc.send_message(service, to, subject, body)
     except Exception as e:
         logger.warning("Gmail send failed: %s", e)
-        return f"STATUS=FAILED tool=send_gmail: {e}"
-    return f"STATUS=OK tool=send_gmail sent_id={sent['id']}"
+        return f"STATUS=FAILED tool=send_gmail: {str(e)[:200]}"
+    sid = sent.get('id','?') if isinstance(sent, dict) else '?'
+    return f"STATUS=OK tool=send_gmail sent_id={sid}"
 
 
 @tool
@@ -183,6 +189,8 @@ def send_gmail(to: str, subject: str, body: str, approval_token: str = "") -> st
     """
     from services import approvals as approvals_svc
     from services.context import get_current_user_id
+    from services.context import get_limit_key as _glk
+    from services.ratelimit import get_rate_limiter as _grl
 
     if auth_mode() != "private":
         return (
@@ -206,7 +214,20 @@ def send_gmail(to: str, subject: str, body: str, approval_token: str = "") -> st
                 f"expired, or already used ({stored}). Saved nothing."
             )
         action = stored
+        # Re-validate server-stored values (never trust caller alongside token).
+        if not _valid_email(str(action.get("to", "") or "")):
+            return "STATUS=INVALID tool=send_gmail: bad recipient address."
     else:
+        # Rate-limit approval staging (otherwise spam mints unbounded pendings).
+        try:
+            _v = _grl().check(_glk() or user_id, "gmail")
+            if not _v.allowed:
+                return (
+                    "STATUS=DENIED tool=send_gmail: Gmail rate limit "
+                    f"exceeded, retry in {_v.retry_after:.0f}s."
+                )
+        except Exception:
+            logger.debug("send_gmail staging rate-check failed", exc_info=True)
         summary = f"Send email to {to} — {str(subject or '')[:80]}".strip()
         approval_id, _token, _created = approvals_svc.request_approval(
             user_id, "send_gmail", action, summary)

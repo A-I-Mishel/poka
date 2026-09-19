@@ -85,15 +85,11 @@ def _tokenize(formula: str) -> Tuple[List[Tuple[str, str]], str]:
                 tokens.append(("implies", low))
             elif low in ("iff",):
                 tokens.append(("iff", low))
-            elif low in ("true", "t"):
-                tokens.append(("const", "1"))
-            elif low in ("false", "f"):
-                # Single letters t/f collide with variables; only treat
-                # full words true/false as constants, keep t/f as vars.
-                if low in ("true", "false"):
-                    tokens.append(("const", "1" if low == "true" else "0"))
-                else:
-                    tokens.append(("var", val))
+            elif low in ("true", "false"):
+                tokens.append(("const", "1" if low == "true" else "0"))
+            elif low in ("t", "f"):
+                # Single letters t/f collide with variables; keep as vars.
+                tokens.append(("var", val))
             else:
                 tokens.append(("var", val))
             continue

@@ -53,7 +53,8 @@ def search_documents(query: str) -> str:
     try:
         existing = {m.id for m in FileStore(user_id).list_uploads()}
     except Exception:
-        existing = None
+        logger.debug("kb_search list_uploads failed; failing closed", exc_info=True)
+        return "STATUS=DEGRADED tool=search_documents: storage unavailable."
     try:
         hits = kb_svc.search(user_id, query, top_k=KB_TOP_K, valid_ids=existing)
     except Exception as e:
@@ -93,12 +94,18 @@ def search_documents(query: str) -> str:
         )
     lines = []
     for i, hit in enumerate(hits, 1):
+        if not isinstance(hit, dict):
+            continue
         text = str(hit.get("text", "") or "")
         if len(text) > 1200:
             text = text[:1200] + "…"
+        try:
+            score = float(hit.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
         lines.append(
-            f"[{i}] {hit.get('name', 'document')} "
-            f"(match {float(hit.get('score', 0.0)):.2f}):\n{text}"
+            f"[{i}] {str(hit.get('name', 'document'))[:200]} "
+            f"(match {score:.2f}):\n{text}"
         )
     formatted = "\n\n".join(lines)
     if retried:

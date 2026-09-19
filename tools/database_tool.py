@@ -7,6 +7,7 @@ validated identifiers; ATTACH/DETACH are rejected everywhere.
 """
 
 import logging
+from typing import Any
 
 from langchain_core.tools import tool
 
@@ -79,14 +80,31 @@ def query_database(sql: str, max_results: int = 50) -> str:
         max_n = max(1, min(int(max_results or 50), 200))
     except (TypeError, ValueError):
         max_n = 50
-    result = db.query(user_id, str(sql or ""), max_n)
+    text_sql = str(sql or "")
+    # Tool-side pre-check (defense in depth; service is authoritative).
+    stripped = text_sql.strip().lstrip("(").strip()
+    low = stripped.lower()
+    if ";" in stripped.strip().rstrip(";"):
+        return "STATUS=INVALID tool=query_database: multiple statements not allowed."
+    if low.startswith(("attach", "detach", "insert", "update", "delete", "drop", "alter", "create", "replace")):
+        return "STATUS=INVALID tool=query_database: use the approved write path for writes."
+    result = db.query(user_id, text_sql, max_n)
     if "error" in result:
         return f"STATUS=FAILED tool=query_database: {result['error']}"
     if not result["rows"]:
         return "STATUS=EMPTY tool=query_database: no rows matched."
-    lines = [" | ".join(result["columns"])]
-    lines += [" | ".join(str(v) for v in row) for row in result["rows"]]
-    return "\n".join(lines)
+    def _cell(v: Any) -> str:
+        s = str(v if v is not None else "")
+        # Neutralize prompt/display injection + bound context: one line,
+        # 200 chars per cell, 4000 chars total.
+        s = s.replace("\r", " ").replace("\n", " ")
+        return s[:200]
+    lines = [" | ".join(_cell(c) for c in result["columns"])]
+    lines += [" | ".join(_cell(v) for v in row) for row in result["rows"]]
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:4000] + "\n[Note: output truncated.]"
+    return text
 
 
 def _execute_import_csv_table(upload_id: str, table: str) -> str:
@@ -103,9 +121,9 @@ def _execute_import_csv_table(upload_id: str, table: str) -> str:
         return "STATUS=FAILED tool=import_csv_table: unknown upload."
     try:
         with open(str(path), "rb") as f:
-            data = f.read()
+            data = f.read(25 * 1024 * 1024 + 1)
     except OSError as e:
-        return f"STATUS=FAILED tool=import_csv_table: cannot read upload ({e})."
+        return f"STATUS=FAILED tool=import_csv_table: cannot read upload ({str(e)[:200]})."
     result = db.import_csv(user_id, table, data)
     if "error" in result:
         return f"STATUS=FAILED tool=import_csv_table: {result['error']}"
@@ -133,6 +151,8 @@ def import_csv_table(upload_id: str, table: str, approval_token: str = "") -> st
     """
     from services import approvals as approvals_svc
     from services.context import get_current_user_id
+    from services.context import get_limit_key as _glk
+    from services.ratelimit import get_rate_limiter as _grl
 
     user_id = get_current_user_id()
     if not user_id:
@@ -158,7 +178,25 @@ def import_csv_table(upload_id: str, table: str, approval_token: str = "") -> st
                 f"invalid, expired, or already used ({stored}). Changed nothing."
             )
         action = stored
+        # Re-validate server-stored values after consume.
+        if not db.valid_identifier(str(action.get("table", "") or "")):
+            return "STATUS=INVALID tool=import_csv_table: bad table name."
+        try:
+            known2 = FileStore(user_id).resolve_upload(str(action.get("upload_id", "") or "")) is not None
+        except Exception:
+            known2 = False
+        if not known2:
+            return "STATUS=FAILED tool=import_csv_table: unknown upload."
     else:
+        try:
+            _v = _grl().check(_glk() or user_id, "database")
+            if not _v.allowed:
+                return (
+                    "STATUS=DENIED tool=import_csv_table: Database rate limit "
+                    f"exceeded, retry in {_v.retry_after:.0f}s."
+                )
+        except Exception:
+            logger.debug("import_csv staging rate-check failed", exc_info=True)
         summary = (f"Import upload into table {action['table'] or '?'} "
                    "(replaces any existing table of that name)")
         approval_id, _token, _created = approvals_svc.request_approval(
@@ -202,6 +240,8 @@ def execute_sql(sql: str, approval_token: str = "") -> str:
     """
     from services import approvals as approvals_svc
     from services.context import get_current_user_id
+    from services.context import get_limit_key as _glk2
+    from services.ratelimit import get_rate_limiter as _grl2
 
     user_id = get_current_user_id()
     if not user_id:
@@ -219,7 +259,18 @@ def execute_sql(sql: str, approval_token: str = "") -> str:
                 "query_database for reads."
             )
         action = stored
+        if not str(action.get("sql", "") or "").strip():
+            return "STATUS=INVALID tool=execute_sql: empty statement."
     else:
+        try:
+            _v2 = _grl2().check(_glk2() or user_id, "database")
+            if not _v2.allowed:
+                return (
+                    "STATUS=DENIED tool=execute_sql: Database rate limit "
+                    f"exceeded, retry in {_v2.retry_after:.0f}s."
+                )
+        except Exception:
+            logger.debug("execute_sql staging rate-check failed", exc_info=True)
         summary = f"Run write SQL: {action['sql'][:120]}"
         approval_id, _token, _created = approvals_svc.request_approval(
             user_id, "execute_sql", action, summary)

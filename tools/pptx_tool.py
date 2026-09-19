@@ -49,6 +49,13 @@ def create_pptx(topic: str, content: str) -> str:
         user_id, denied = claim_generation_slot("create_pptx")
         if denied is not None:
             return denied
+        topic = str(topic or "").strip()
+        content = str(content or "")
+        if not topic:
+            return "STATUS=INVALID tool=create_pptx: empty topic."
+        topic = topic[:120]
+        if len(content) > 200000:
+            content = content[:200000]
         # Slide cap BEFORE expensive work: count derived slides first so
         # enormous requests are truncated, never fully built.
         blocks: list[str] = [b for b in content.strip().split("\n\n") if b.strip()]
@@ -63,7 +70,14 @@ def create_pptx(topic: str, content: str) -> str:
         prs: Presentation = Presentation()
 
         title_slide = prs.slides.add_slide(prs.slide_layouts[0])
-        title_slide.shapes.title.text = topic
+        try:
+            title_slide.shapes.title.text = topic
+        except (AttributeError, IndexError, KeyError):
+            # Layout without title placeholder: add textbox instead of aborting deck.
+            from pptx.util import Inches as _Inches
+
+            _box = title_slide.shapes.add_textbox(_Inches(1), _Inches(1), _Inches(8), _Inches(2))
+            _box.text_frame.text = topic
 
         slides_content: list[str] = blocks
         dropped_bullets = 0
@@ -72,7 +86,11 @@ def create_pptx(topic: str, content: str) -> str:
                 continue
             slide = prs.slides.add_slide(prs.slide_layouts[1])
             lines: list[str] = slide_text.strip().split("\n")
-            slide.shapes.title.text = lines[0].lstrip("- ").strip() if lines else "Slide"
+            title_text = (lines[0].lstrip("- ").strip() if lines else "Slide")[:200]
+            try:
+                slide.shapes.title.text = title_text
+            except (AttributeError, IndexError, KeyError):
+                pass
             bullets: list[str] = [ln.lstrip("- ").strip() for ln in lines[1:] if ln.strip()]
             if len(bullets) > MAX_PPTX_BULLETS_PER_SLIDE:
                 dropped_bullets += len(bullets) - MAX_PPTX_BULLETS_PER_SLIDE

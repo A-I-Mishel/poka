@@ -70,7 +70,7 @@ def list_calendar_events(query: str = "", max_results: int = 10) -> str:
         events = calendar_svc.list_events(service, query=str(query or ""), max_results=max_n)
     except Exception as e:
         logger.warning("Calendar list failed: %s", e)
-        return f"STATUS=FAILED tool=list_calendar_events: {e}"
+        return f"STATUS=FAILED tool=list_calendar_events: {str(e)[:200]}"
     if not events:
         return "STATUS=EMPTY tool=list_calendar_events: no upcoming events."
     lines = []
@@ -108,18 +108,23 @@ def create_calendar_event(summary: str, start: str, end: str = "",
         return err
     if not str(summary or "").strip() or not str(start or "").strip():
         return "STATUS=INVALID tool=create_calendar_event: summary and start are required."
+    summary = str(summary or "").strip()[:200]
+    timezone_name = str(timezone_name or "UTC").strip()[:80]
+    description = str(description or "")[:2000]
+    location = str(location or "").strip()[:200]
     try:
         created = calendar_svc.create_event(
-            service, str(summary).strip(), str(start).strip(),
-            str(end or "").strip(), str(timezone_name or "UTC"),
-            str(description or ""), str(location or ""))
+            service, summary, str(start).strip(),
+            str(end or "").strip(), timezone_name,
+            description, location)
     except ValueError as e:
-        return f"STATUS=INVALID tool=create_calendar_event: {e}"
+        return f"STATUS=INVALID tool=create_calendar_event: {str(e)[:200]}"
     except Exception as e:
         logger.warning("Calendar create failed: %s", e)
-        return f"STATUS=FAILED tool=create_calendar_event: {e}"
-    suffix = f" link={created['link']}" if created.get("link") else ""
-    return f"STATUS=OK tool=create_calendar_event event_id={created['id']}{suffix}"
+        return f"STATUS=FAILED tool=create_calendar_event: {str(e)[:200]}"
+    suffix = f" link={created['link']}" if isinstance(created, dict) and created.get("link") else ""
+    cid = created.get('id', '?') if isinstance(created, dict) else '?'
+    return f"STATUS=OK tool=create_calendar_event event_id={cid}{suffix}"
 
 
 def _execute_delete_calendar_event(event_id: str) -> str:
@@ -130,11 +135,12 @@ def _execute_delete_calendar_event(event_id: str) -> str:
     try:
         deleted = calendar_svc.delete_event(service, event_id)
     except ValueError as e:
-        return f"STATUS=INVALID tool=delete_calendar_event: {e}"
+        return f"STATUS=INVALID tool=delete_calendar_event: {str(e)[:200]}"
     except Exception as e:
         logger.warning("Calendar delete failed: %s", e)
-        return f"STATUS=FAILED tool=delete_calendar_event: {e}"
-    return f"STATUS=OK tool=delete_calendar_event deleted_id={deleted['deleted']}"
+        return f"STATUS=FAILED tool=delete_calendar_event: {str(e)[:200]}"
+    did = deleted.get('deleted', '?') if isinstance(deleted, dict) else '?'
+    return f"STATUS=OK tool=delete_calendar_event deleted_id={did}"
 
 
 @tool
@@ -155,6 +161,8 @@ def delete_calendar_event(event_id: str, approval_token: str = "") -> str:
     """
     from services import approvals as approvals_svc
     from services.context import get_current_user_id
+    from services.context import get_limit_key as _glk
+    from services.ratelimit import get_rate_limiter as _grl
 
     if auth_mode() != "private":
         return (
@@ -178,7 +186,18 @@ def delete_calendar_event(event_id: str, approval_token: str = "") -> str:
                 f"invalid, expired, or already used ({stored}). Deleted nothing."
             )
         action = stored
+        if not str(action.get("event_id", "") or "").strip():
+            return "STATUS=INVALID tool=delete_calendar_event: empty event id."
     else:
+        try:
+            _v = _grl().check(_glk() or user_id, "calendar")
+            if not _v.allowed:
+                return (
+                    "STATUS=DENIED tool=delete_calendar_event: Calendar rate limit "
+                    f"exceeded, retry in {_v.retry_after:.0f}s."
+                )
+        except Exception:
+            logger.debug("calendar staging rate-check failed", exc_info=True)
         summary = f"Delete calendar event {event_id}"
         approval_id, _token, _created = approvals_svc.request_approval(
             user_id, "delete_calendar_event", action, summary)

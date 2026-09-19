@@ -287,14 +287,24 @@ def csv_inspect(upload_id: str, operation: str, column: str = "", params: str = 
             err = _require_column(df, column)
             if err:
                 return err
-            bits = [p.strip() for p in str(params).split(",", 2)]
+            # params is "col,op,value" but value may contain commas
+            # (e.g. "New York, NY"). Split only on first two commas and
+            # prefer the explicit `column` arg over bits[0].
+            import csv as _csv
+            import io as _io
+            try:
+                bits = next(_csv.reader(_io.StringIO(str(params or ""))))
+            except Exception:
+                bits = str(params or "").split(",", 2)
+            bits = [str(p or "").strip() for p in bits]
             if len(bits) != 3:
                 return "STATUS=INVALID tool=csv_inspect: filter needs params 'col,op,value'."
             _, fop, raw_value = bits
+            # Use the explicit column arg (bits[0] ignored for compat).
             series = df[column]
             try:
                 if fop == "contains":
-                    mask = series.astype(str).str.contains(raw_value, case=False, na=False)
+                    mask = series.astype(str).str.contains(str(raw_value), case=False, na=False, regex=False)
                 else:
                     try:
                         value: Any = float(raw_value)
