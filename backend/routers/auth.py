@@ -103,11 +103,28 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
     the Render API) need SameSite=None, otherwise browsers accept the
     login 200 yet never send the cookie back and every later call 401s.
     None requires Secure, so non-HTTPS cross-site falls back to Lax.
+    That fallback never sticks cross-site: warn loudly so the login-loop
+    (200 + failing /me + "Log in to continue" again) is diagnosable.
     CSRF for cookie sessions is still enforced via the X-Pluto-Csrf
     header (backend/deps.py _require_csrf).
     """
     secure = _is_secure(request)
-    samesite = "none" if (_is_cross_site(request) and secure) else "lax"
+    cross = _is_cross_site(request)
+    if cross and not secure:
+        try:
+            fwd = (request.headers.get("x-forwarded-proto", "") or "").split(",")[0].strip().lower()
+        except Exception:
+            fwd = ""
+        logger.warning(
+            "cross-site session cookie falling back to SameSite=Lax (browser will drop it): "
+            "scheme=%s forwarded-proto=%s host=%s origin=%s — "
+            "set PLUTO_TRUST_PROXY=true behind Render/Vercel so Secure+SameSite=None is issued.",
+            getattr(getattr(request, "url", None), "scheme", "?"),
+            fwd or "?",
+            getattr(getattr(request, "url", None), "hostname", "?"),
+            (request.headers.get("origin", "") or "?")[:120],
+        )
+    samesite = "none" if (cross and secure) else "lax"
     response.set_cookie(
         SESSION_COOKIE,
         token,

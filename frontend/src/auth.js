@@ -131,10 +131,23 @@ async function authSubmit(path) {
     // Server sets the HttpOnly pluto_session cookie; the JSON token is
     // ignored by the browser client (non-browser clients may use it as
     // Bearer). Success = cookie present, so re-read /me for the name.
+    // A login 200 alone proves nothing when the cookie never sticks
+    // (cross-site SameSite=None;Secure, third-party cookies blocked, or
+    // a wiped server store): /me still 401s and ACCT.username stays "".
+    // Never report success in that case, or the caller retries once,
+    // 401s again, and the "Log in to continue" dialog loops forever
+    // behind a bogus "Signed in as you" toast.
     await authCall(path, { username: u, password: p });
     await refreshMe();
+    if (!ACCT.username) {
+      throw new Error(
+        "Login succeeded but the session did not stick. The browser did not send the session cookie back — " +
+        "allow third-party cookies, check Vercel VITE_API_URL points at this API, " +
+        "and set Render PLUTO_TRUST_PROXY=true so SameSite=None; Secure is issued."
+      );
+    }
     settleAuth(true);
-    toast("Signed in as " + (ACCT.username || "you"));
+    toast("Signed in as " + ACCT.username);
     try { if (_authHooks.onSessionChangedToast) await _authHooks.onSessionChangedToast(); } catch (e) {}
   } catch (e) {
     var msg = String((e && e.message) || "Sign in failed.");
