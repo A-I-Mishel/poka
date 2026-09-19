@@ -93,7 +93,7 @@ def workspace_read(path: str) -> str:
     try:
         text = read_workspace_file(user_id, str(path or ""))
     except FileNotFoundError as e:
-        return f"STATUS=INVALID tool=workspace_read: {str(e)[:200]}"
+        return f"STATUS=FAILED tool=workspace_read: {str(e)[:200]}"
     except StorageError as e:
         return f"STATUS=INVALID tool=workspace_read: {e}"
     except Exception as e:

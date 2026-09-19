@@ -441,12 +441,12 @@ def _odf_content_root(blob: bytes) -> Tuple[object, dict]:
     import xml.etree.ElementTree as ET
 
     # XXE/billion-laughs guard: reject entity declarations before parsing.
-    # Stdlib ET ignores external SYSTEM entities but expands internal ones.
+    # Stdlib ET ignores external SYSTEM entities but expands internal ones,
+    # so scan the WHOLE blob (a bomb can hide past any head window).
     if len(blob) > 5 * 1024 * 1024:
         raise ValueError("ODF content.xml too large")
-    # cheap case-insensitive check for DOCTYPE/ENTITY without lower-casing huge blob
-    head = blob[:8192].lower() if len(blob) > 8192 else blob.lower()
-    if b"<!doctype" in head or b"<!entity" in head:
+    lowered = blob.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
         raise ValueError("XML entities are not allowed in ODF content")
     try:
         # Prefer defusedxml when available (external entity forbid + entity expansion limit)

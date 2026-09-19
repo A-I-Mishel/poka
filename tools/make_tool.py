@@ -481,7 +481,7 @@ def create_pdf(title: str, markdown_text: str) -> str:
         filename: str = f"pdf_{uuid.uuid4().hex[:8]}.pdf"
         try:
             spec = {"kind": "pdf", "tool": "create_pdf",
-                    "input": {"title": str(title)[:120], "markdown_len": len(markdown_text)},
+                    "input": {"title": title, "markdown_text": markdown_text},
                     "created": time.time()}
             meta = FileStore(user_id).register_output(filename, data, "pdf", spec)
             return (f"PDF saved as {meta.display_name} "

@@ -45,6 +45,8 @@ from services.obs import event as obs_event, trace_llm_call
 from agent.answer import (
     AgentResult as AgentResult,
     MAX_HISTORY_MESSAGES,
+    _SUMMARY_CACHE,  # noqa: F401 -- re-exported for test compat
+    _SUMMARY_CACHE_MAX,  # noqa: F401 -- re-exported; read via globals() so monkeypatch works
     _clear_summary_cache as _clear_summary_cache,
     _history_key,
     _reflect_with_fallback,
@@ -287,8 +289,14 @@ def answer_with_fallback(
             if user_id:
                 from agent.answer import _SUMMARY_CACHE as _SC
                 from agent.answer import _SUMMARY_CACHE_LOCK as _SCL
-                from agent.answer import _SUMMARY_CACHE_MAX as _SCM
                 from agent.answer import _SUMMARY_CACHE_TTL as _SCT
+
+                # Read MAX via runtime globals so tests can monkeypatch it.
+                _SCM = globals().get("_SUMMARY_CACHE_MAX", 64)
+                try:
+                    _SCM = int(_SCM)
+                except (TypeError, ValueError):
+                    _SCM = 64
 
                 cache_key = _history_key(user_id, history_list)
                 cached = None

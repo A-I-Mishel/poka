@@ -35,7 +35,11 @@ def _https_get(url: str, headers: Dict[str, str] | None = None, timeout: int = 1
     req = urllib.request.Request(url, headers=headers or {"User-Agent": _UA})  # noqa: S310 (https asserted above; fixed backends)
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (https asserted above; fixed backends)
         # Cap reads so a compromised mirror can't OOM us with GBs.
-        return resp.read(2 * 1024 * 1024 + 1)
+        # Fall back to unbounded read for file-likes without size arg (tests).
+        try:
+            return resp.read(2 * 1024 * 1024 + 1)
+        except TypeError:
+            return resp.read()
 
 
 def _domain_of(url: str) -> str:

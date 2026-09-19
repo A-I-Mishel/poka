@@ -151,17 +151,16 @@ _QUERY_EMBED_MAX = 128
 def load_kb(user_id: Any) -> Dict[str, Any]:
     """Load a user's knowledge base; blank (never raise) when missing/corrupt.
 
-    Caches parsed KB by mtime for faster subsequent reads. Returns a deep
-    copy so concurrent ingest/search never share a mutable reference.
+    Caches parsed KB by mtime for faster subsequent reads. Returns the
+    cached reference (identity holds: callers must not mutate it in
+    place — persist via _save_kb + invalidate_kb_cache).
     """
-    import copy as _copy
-
     path = _kb_path(user_id)
     try:
         mtime = path.stat().st_mtime
         cached = _KB_CACHE.get(str(user_id))
         if cached and cached[0] == mtime:
-            return _copy.deepcopy(cached[1])
+            return cached[1]
     except OSError:
         mtime = 0.0  # File doesn't exist yet
     try:
@@ -179,7 +178,7 @@ def load_kb(user_id: Any) -> Dict[str, Any]:
             except OSError:
                 mtime = 0.0
     _KB_CACHE[str(user_id)] = (mtime, kb)
-    return _copy.deepcopy(kb)
+    return kb
 
 
 def invalidate_kb_cache(user_id: Any) -> None:

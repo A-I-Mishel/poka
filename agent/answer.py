@@ -124,8 +124,12 @@ def _verify_citations(output: str, sources: Sequence[Dict[str, str]],
                 _llm, [HumanMessage(content=prompt)],
                 budget=budget).content).strip(),
             None, cheap_tiers)
-        text = str(verdict or "").strip().upper()
-        if text == "UNGROUNDED" or text.endswith(" UNGROUNDED"):
+        text = str(verdict or "").strip()
+        # Flag UNGROUNDED as the leading verdict token ("UNGROUNDED: ...").
+        # A bare substring test false-positives on "NOT UNGROUNDED".
+        import re as _re2
+
+        if _re2.match(r"(?i)UNGROUNDED\b", text):
             return (output.rstrip() + "\n\n[Note: this answer links pages "
                     "beyond what was retrieved this turn — open them critically.]")
         return output

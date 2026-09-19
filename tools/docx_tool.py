@@ -58,7 +58,7 @@ def create_docx(title: str, content: str) -> str:
 
         try:
             spec = {"kind": "docx", "tool": "create_docx",
-                    "input": {"title": title[:120], "content_len": len(content)},
+                    "input": {"title": title, "content": content},
                     "created": time.time()}
             meta = FileStore(user_id).register_output(
                 filename, data, "docx", spec)
