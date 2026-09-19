@@ -23,14 +23,39 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 60
+fail_under = 65
 
 [tool.ruff]
 target-version = "py312"
 fix = false
 
 [tool.ruff.lint]
-# CI gate: pyflakes correctness (unused imports/vars, undefined names)
-# plus pycodestyle runtime errors. Style rules stay advisory (too noisy
-# for a mixed-age codebase); widen the select list incrementally.
-select = ["F", "E9"]
+# CI gate: pyflakes correctness + pycodestyle runtime errors + security
+# (S) + bugbear (B) for raise-from/default-arg hygiene. Noisy legacy
+# rules stay off (UP006/UP045 annotations, UP031 printf, I001 import
+# sort, S101 asserts in tests) — enable incrementally.
+select = ["F", "E9", "S", "B"]
+ignore = [
+  "S101",  # asserts are the test suite's language
+  "B904",  # router/service exception mapping to HTTPException/AccountError
+            # is FastAPI idiom; new code uses `raise ... from e` anyway.
+  # Grandfathered pre-existing noise — fix incrementally, new code must
+  # not add more (S110/S112 best-effort hygiene, B905 zip strict,
+  # S310 urlopen, S106/S107 passwords, S324/S311 hashes/random,
+  # S608 sql, S314 xml, B023 loop var, S603/S306 subprocess/tmp).
+  "S110", "S112", "B905", "S310", "S106", "S107", "S324", "S311",
+  "S608", "S314", "B023", "S603", "S306",
+  "UP006", "UP045", "UP031", "UP035", "I001",
+]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S110", "S112", "B017"]
+"chaos/*" = ["S603", "S607"]  # local operator tooling, fixed argv, shell=False
+"scripts/*" = ["S603", "S607", "S110"]
+# FastAPI Depends() in defaults is canonical usage, not a mutable-arg bug.
+"backend/**/*.py" = ["B008"]
+# Documented best-effort hygiene: never-raises helpers degrade silently by design.
+"backend/deps.py" = ["B008", "S110"]
+"backend/main.py" = ["B008", "S110"]
+"services/accounts.py" = ["S110"]
+"services/storage.py" = ["S110"]
+"services/files.py" = ["S110"]

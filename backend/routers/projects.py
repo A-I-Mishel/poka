@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend import schemas
 from backend.deps import UserContext, current_user
+from services.obs import event as obs_event
 from services.storage import StorageError
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -15,7 +16,8 @@ def list_projects(ctx: UserContext = Depends(current_user)):
     try:
         return ctx.user_store.list_projects()
     except StorageError as e:
-        raise HTTPException(status_code=500, detail=f"Could not load projects: {e}")
+        obs_event("projects.list", status="error", reason="storage")
+        raise HTTPException(status_code=503, detail="Project storage unavailable. Try again.") from e
     except Exception:
         raise HTTPException(status_code=500, detail="Could not load projects.")
 

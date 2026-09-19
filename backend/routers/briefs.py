@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend import schemas
 from backend.deps import UserContext, check_generate_limit, current_user
 from services import research as research_svc
+from services.obs import event as obs_event
 from services.storage import StorageError
 
 
@@ -17,7 +18,8 @@ def list_briefs(ctx: UserContext = Depends(current_user)):
     try:
         return ctx.user_store.list_briefs()
     except StorageError as e:
-        raise HTTPException(status_code=500, detail=f"Could not load briefs: {e}")
+        obs_event("briefs.list", status="error", reason="storage")
+        raise HTTPException(status_code=503, detail="Brief storage unavailable. Try again.") from e
     except Exception:
         raise HTTPException(status_code=500, detail="Could not load briefs.")
 
