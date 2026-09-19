@@ -1,0 +1,45 @@
+name: Chaos SLO probe
+
+# Fault-injection experiments (chaos/experiments/*.yaml) stay MANUAL:
+# they need the chaostoolkit binary, root (iptables) and throwaway data.
+# This workflow only runs the checks-only SLO probe (--checks-only: no
+# fault injection) so drift in /api/health + /api/metrics pages weekly.
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly Monday 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  slo-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install backend deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+          pip install requests
+      - name: Start Pluto server (background)
+        run: |
+          nohup uvicorn backend.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+          sleep 10
+          curl -f http://localhost:8000/api/health || (cat server.log && exit 1)
+      - name: SLO probe (no fault injection)
+        run: python chaos/run_chaos.py --checks-only
+        env:
+          PLUTO_BASE_URL: http://localhost:8000
+      - name: Upload probe results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-slo-${{ github.run_id }}
+          path: |
+            chaos/results.json
+            server.log
+          retention-days: 7

@@ -2,7 +2,12 @@ groups:
   - name: pluto.rules
     interval: 30s
     rules:
-      # Golden signals
+      # Golden signals.
+      # Budgets mirror load-test/k6-scenarios.js per-scenario SLOs:
+      # simple_chat 3s, upload/download + kb_search 5s, upload_kb 10s,
+      # deep_mode 15s, sse_stream 30s; release gate error < 1%.
+      # Paging stays coarser than the release gate by design (5% vs 1%):
+      # CI blocks the release, the pager wakes a human.
       - alert: HighErrorRate
         expr: |
           sum(rate(pluto_http_requests_total{status_code=~"5.."}[5m]))
@@ -11,17 +16,29 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "High 5xx error rate (>5%)"
+          summary: "High 5xx error rate (>5%; release gate is 1%)"
           description: "{{ $value | humanizePercentage }} of requests failing"
 
       - alert: HighLatency
         expr: |
-          histogram_quantile(0.95, sum(rate(pluto_http_request_duration_seconds_bucket[5m])) by (le)) > 10
+          histogram_quantile(0.95, sum(rate(pluto_http_request_duration_seconds_bucket{endpoint!="/api/chat/stream"}[5m])) by (le)) > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "p95 latency > 10s"
+          summary: "p95 latency > 10s on interactive endpoints (stream excluded)"
+          description: "p95 = {{ $value }}s"
+
+      # Streaming + Deep Mode legitimately run long (k6: deep 15s, SSE 30s):
+      # a separate budget so normal deep answers don't page the 10s alert.
+      - alert: SlowStreamLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(pluto_http_request_duration_seconds_bucket{endpoint="/api/chat/stream"}[5m])) by (le)) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stream p95 > 30s (deep/SSE budget)"
           description: "p95 = {{ $value }}s"
 
       # LLM cascade

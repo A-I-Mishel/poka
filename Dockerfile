@@ -23,6 +23,14 @@ COPY --from=web /web/dist ./frontend/dist
 # path) for durable logins.
 RUN mkdir -p /app/data
 VOLUME ["/app/data"]
+# Least privilege: the API needs no root (writes only to PLUTO_DATA_DIR
+# and tmp). Named volumes inherit the image dir's appuser ownership;
+# bind mounts keep host ownership — chown the host path to 10001 first.
+RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
+USER appuser
 # Hugging Face Spaces routes to 7860; other hosts override with $PORT.
 EXPOSE 7860
+# No curl in slim: stdlib-only probe of the public health endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD python -c "import os,sys,urllib.request; p=os.getenv('PORT','7860'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{p}/api/health', timeout=4).status==200 else 1)"
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
