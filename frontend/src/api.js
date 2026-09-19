@@ -11,6 +11,35 @@ var _apiHooks = {};
 export function setApiHooks(h) { _apiHooks = h || {}; }
 
 /* ---------- api client ---------- */
+async function readDetail(res) {
+  // Real Responses always have .text(); minimal test doubles may only
+  // have .json() — support both so neither path crashes.
+  try {
+    if (typeof res.text === "function") {
+      var txt = await res.text();
+      if (txt) {
+        try { return (JSON.parse(txt)).detail || null; } catch (e) { return null; }
+      }
+      return null;
+    }
+    var body = await res.json();
+    return (body && body.detail) || null;
+  } catch (e) {
+    return null;
+  }
+}
+async function readBody(res) {
+  // Empty-body safe (204 No Content): "" -> null instead of SyntaxError.
+  try {
+    if (typeof res.text === "function") {
+      var t = await res.text();
+      return t ? JSON.parse(t) : null;
+    }
+    return await res.json();
+  } catch (e) {
+    throw new Error("Bad server response.");
+  }
+}
 async function req(path, init, retried) {
   var opts = init || {};
   var headers = Object.assign({ "Content-Type": "application/json" }, authHeaders(), opts.headers || {});
@@ -43,21 +72,10 @@ async function req(path, init, retried) {
     return req(path, init, true);
   }
   if (!res.ok) {
-    var detail = res.statusText;
-    try {
-      var txt = await res.text();
-      if (txt) {
-        try { detail = (JSON.parse(txt)).detail || detail; } catch (e) {}
-      }
-    } catch (e) {}
+    var detail = (await readDetail(res)) || res.statusText;
     throw new Error(detail);
   }
-  try {
-    var body = await res.text();
-    return body ? JSON.parse(body) : null;
-  } catch (e) {
-    throw new Error("Bad server response.");
-  }
+  return await readBody(res);
 }
 /* ---------- raw client (no 401 dialog) ----------
  * Same timeout/credentials/authHeaders as req(), but never pops the

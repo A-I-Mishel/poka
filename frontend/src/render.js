@@ -6,7 +6,7 @@
 import { $, toast, esc, enc, isSafeHttpUrl, fmtTime, fmtDay } from "./ui.js";
 import { md, planet } from "./markdown.js";
 import { apiUrl } from "./config.js";
-import { S, TIERS, chats, current, projects, savePrefs, setPref, setChats, setCurrent, setProjects } from "./state.js";
+import { S, TIERS, chats, current, projects, setPref, setChats, setCurrent, setProjects } from "./state.js";
 import { req, authedDownload } from "./api.js";
 import { authHeaders } from "./auth-store.js";
 import { renderAcct } from "./auth.js";

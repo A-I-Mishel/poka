@@ -66,8 +66,9 @@ function fmtSize(b) {
   if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
   return (b / 1048576).toFixed(1) + " MB";
 }
-/** @param {string} msg */
+/** @type {Object<string, number>} */
 var _toastSeen = {};
+/** @param {string} msg */
 function toast(msg) {
   var key = String(msg || "").slice(0, 120);
   var now = Date.now();
@@ -76,7 +77,7 @@ function toast(msg) {
   _toastSeen[key] = now;
   var host = $("toasts");
   if (!host) return;
-  while (host.children.length >= 5) host.removeChild(host.firstChild);
+  while (host.children.length >= 5 && host.firstChild) host.removeChild(host.firstChild);
   var t = document.createElement("div");
   t.className = "toast";
   t.setAttribute("role", "status");
