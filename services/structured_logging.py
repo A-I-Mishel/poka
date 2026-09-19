@@ -68,8 +68,9 @@ def bind_request_context(request_id: Optional[str] = None, user_id: Optional[str
     if request_id is None:
         request_id = uuid.uuid4().hex[:12]
     request_id_var.set(request_id)
-    if user_id:
-        user_id_var.set(user_id)
+    # Always set (even to None) so a request without a user never inherits
+    # the previous request's user from the same context.
+    user_id_var.set(user_id)
     return request_id
 
 

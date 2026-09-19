@@ -100,8 +100,9 @@ def clean_relpath(raw: Any) -> str:
 def resolve_in_workspace(user_id: str, relpath: str) -> Path:
     """Resolve a validated relpath to a contained absolute path.
 
-    Never raises for missing files — returns the canonical candidate
-    after containment check. Raises StorageError on escape.
+    Never raises for missing files — returns the canonical resolved path
+    after containment check. Symlinks are denied (TOCTOU escape).
+    Raises StorageError on escape.
     """
     cleaned = clean_relpath(relpath)
     root = workspace_root(user_id, create=False)
@@ -120,14 +121,30 @@ def resolve_in_workspace(user_id: str, relpath: str) -> Path:
             resolved_cmp = Path(os.path.abspath(str(candidate)))
             if resolved_cmp != base_resolved and base_resolved not in resolved_cmp.parents:
                 raise StorageError("Workspace path escapes the workspace.")
-            return candidate
+            return resolved_cmp
     except StorageError:
         raise
     except Exception as e:
         raise StorageError(f"Cannot resolve workspace path ({e}).") from e
     if resolved != base_resolved and base_resolved not in resolved.parents:
         raise StorageError("Workspace path escapes the workspace.")
-    return candidate
+    # Deny symlinks (TOCTOU): validated path must not traverse a link.
+    try:
+        cur = candidate
+        for _ in range(10):
+            try:
+                if cur.is_symlink():
+                    raise StorageError("Symlinks are not allowed in the workspace.")
+            except OSError:
+                break
+            if cur == root or cur.parent == cur:
+                break
+            cur = cur.parent
+    except StorageError:
+        raise
+    except OSError:
+        pass
+    return resolved
 
 
 def _workspace_usage(root: Path) -> tuple[int, int]:
@@ -225,23 +242,24 @@ def write_workspace_file(user_id: str, relpath: str, content: str) -> Dict[str, 
         )
     root = workspace_root(user_id, create=True)
     dest = resolve_in_workspace(user_id, cleaned)
-    # Quotas before write (exclude the file being overwritten).
-    count, total = _workspace_usage(root)
-    try:
-        existing = dest.stat().st_size if dest.is_file() else 0
-    except OSError:
-        existing = 0
-    is_new = not dest.exists()
-    if is_new and count >= MAX_WORKSPACE_FILES:
-        raise StorageError(
-            f"Too many workspace files (max {MAX_WORKSPACE_FILES}). Delete one first."
-        )
-    if total - existing + len(data) > MAX_WORKSPACE_BYTES:
-        raise StorageError("Workspace quota exceeded. Delete old files first.")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f"{dest.name}.{os.getpid()}.{time.time_ns()}.tmp")
     try:
         with path_lock(dest):
+            # Re-check quotas INSIDE the lock (TOCTOU: concurrent writes
+            # could otherwise exceed caps between check and write).
+            count, total = _workspace_usage(root)
+            try:
+                existing = dest.stat().st_size if dest.is_file() else 0
+            except OSError:
+                existing = 0
+            is_new = not dest.exists()
+            if is_new and count >= MAX_WORKSPACE_FILES:
+                raise StorageError(
+                    f"Too many workspace files (max {MAX_WORKSPACE_FILES}). Delete one first."
+                )
+            if total - existing + len(data) > MAX_WORKSPACE_BYTES:
+                raise StorageError("Workspace quota exceeded. Delete old files first.")
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(text)
             atomic_replace(tmp, dest)

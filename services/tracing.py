@@ -48,7 +48,8 @@ def init_tracing(service_name: str = "pluto-api", endpoint: Optional[str] = None
         exporter = None
         if resolved:
             try:
-                exporter = OTLPSpanExporter(endpoint=resolved, insecure=True)
+                insecure = not resolved.lower().startswith("https://")
+                exporter = OTLPSpanExporter(endpoint=resolved, insecure=insecure)
             except Exception:
                 logger.warning("OTLP exporter init failed; tracing disabled", exc_info=True)
                 exporter = None

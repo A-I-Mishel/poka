@@ -433,9 +433,10 @@ class FileStore:
             raise FileValidationError(f"That file is not a valid .{ext} (OLE compound).")
         if ext == "rtf" and not head.lstrip().lower().startswith(b"{\\rtf"):
             raise FileValidationError("That file is not a valid RTF document.")
-        if ext in ("zip", "odt", "ods", "odp"):
+        if ext in ("zip", "odt", "ods", "odp", "docx", "pptx", "xlsx"):
             # Validity + bomb pre-check BEFORE storage: malformed
             # archives fail here, oversized ones also fail early.
+            # docx/pptx/xlsx are ZIP-based too — same guard applies.
             try:
                 import io
                 import zipfile
@@ -477,6 +478,26 @@ class FileStore:
         # Disk-space guard BEFORE quotas — host full takes precedence
         _check_disk_space(len(data))
         display = sanitize_filename(original_name)
+        # Quota pre-check BEFORE writing bytes so failures don't leave
+        # orphan files on disk (disk-fill via repeated quota failures).
+        try:
+            registry = self._load_registry(self.uploads_registry)
+            existing = [v for v in registry.values() if isinstance(v, dict)]
+            if len(existing) >= MAX_UPLOADS_PER_USER:
+                raise FileValidationError(
+                    f"Too many stored uploads (max {MAX_UPLOADS_PER_USER}). "
+                    "Delete old files or wait for retention cleanup."
+                )
+            used = sum(int(m.get("size", 0) or 0) for m in existing)
+            if used + len(data) > MAX_USER_BYTES:
+                raise FileValidationError(
+                    "Storage quota exceeded. Delete old files or wait for "
+                    "retention cleanup."
+                )
+        except FileValidationError:
+            raise
+        except Exception:
+            logger.debug("quota pre-check failed; proceeding to locked check", exc_info=True)
         upload_id = _new_id()
         stored = f"{upload_id}_{sanitize_filename(display)}"
         dest = self.uploads_dir / stored
@@ -515,7 +536,16 @@ class FileStore:
                 )
             registry[upload_id] = asdict(meta)
 
-        self._update_registry(self.uploads_registry, _add_upload)
+        try:
+            self._update_registry(self.uploads_registry, _add_upload)
+        except Exception:
+            # Locked check failed (quota race): remove orphan bytes we wrote.
+            try:
+                if dest.is_file():
+                    dest.unlink()
+            except OSError:
+                pass
+            raise
         # Invalidate store caches for this user
         from backend.deps import invalidate_store_caches
         invalidate_store_caches(self.user_id)
@@ -580,6 +610,24 @@ class FileStore:
         if not isinstance(data, (bytes, bytearray)) or len(data) == 0:
             raise StorageError("Refusing to register an empty generated file.")
         _check_disk_space(len(data))
+        # Quota pre-check + locked check (same pattern as save_upload).
+        try:
+            from services.limits import MAX_UPLOADS_PER_USER as _MU
+            from services.limits import MAX_USER_BYTES as _MB
+
+            reg = self._load_registry(self.outputs_registry)
+            existing = [v for v in reg.values() if isinstance(v, dict)]
+            if len(existing) >= _MU:
+                raise StorageError(
+                    f"Too many stored files (max {_MU}). Delete old files first."
+                )
+            used = sum(int(m.get("size", 0) or 0) for m in existing)
+            if used + len(data) > _MB:
+                raise StorageError("Storage quota exceeded. Delete old files first.")
+        except StorageError:
+            raise
+        except Exception:
+            logger.debug("output quota pre-check failed; proceeding to locked check", exc_info=True)
         display = sanitize_filename(display_name)
         file_id = _new_id()
         stored = f"{file_id}_{display}"
@@ -601,9 +649,26 @@ class FileStore:
             spec=clean_generation_spec(spec),
         )
         def _add_output(registry: Dict[str, Any]) -> None:
+            from services.limits import MAX_UPLOADS_PER_USER as _MU2
+            from services.limits import MAX_USER_BYTES as _MB2
+
+            existing = [v for v in registry.values() if isinstance(v, dict)]
+            if len(existing) >= _MU2:
+                raise StorageError(f"Too many stored files (max {_MU2}).")
+            used = sum(int(m.get("size", 0) or 0) for m in existing)
+            if used + len(data) > _MB2:
+                raise StorageError("Storage quota exceeded.")
             registry[file_id] = asdict(meta)
 
-        self._update_registry(self.outputs_registry, _add_output)
+        try:
+            self._update_registry(self.outputs_registry, _add_output)
+        except Exception:
+            try:
+                if dest.is_file():
+                    dest.unlink()
+            except OSError:
+                pass
+            raise
         # Invalidate store caches for this user
         from backend.deps import invalidate_store_caches
         invalidate_store_caches(self.user_id)
@@ -877,12 +942,14 @@ class FileStore:
                 name = p.name
                 if name in known:
                     continue
-                # keep recent orphans; only delete old ones + always delete .tmp older than cutoff
+                # keep recent orphans; only delete old ones. All files
+                # (including .tmp) require mtime < cutoff so we never race
+                # a concurrent _atomic_write_bytes.
                 try:
                     mtime = p.stat().st_mtime
                 except OSError:
                     continue
-                if mtime >= cutoff and not name.endswith(".tmp"):
+                if mtime >= cutoff:
                     continue
                 if not self._inside(directory, p):
                     continue

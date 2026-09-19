@@ -195,19 +195,25 @@ def _compile_and_run(user_id: str, lang: str, src: Path,
         rundir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         return {"error": f"cannot prepare run dir ({e})"}
-    exe = rundir / (src.stem + (".exe" if os.name == "nt" else ".out"))
+    exe = rundir / (src.stem + "_" + lang + (".exe" if os.name == "nt" else ".out"))
     if lang in ("c", "cpp"):
         comp = _which("gcc" if lang == "c" else "g++")
-        assert comp is not None
+        if comp is None:
+            return {"error": f"{lang} compiler not installed on this host."}
         comp_argv = [comp, str(src), "-O2", "-o", str(exe)]
         res = _run_argv(comp_argv, root, [])
         if "error" in res:
             return {"error": f"compile {res.get('error')}: {(res.get('output') or '')[:2000]}"}
-        if int(res.get("exit_code", 1)) != 0:
+        try:
+            code = int(res.get("exit_code", 1))
+        except (TypeError, ValueError):
+            code = 1
+        if code != 0:
             return {"error": f"compile failed:\n{(res.get('output') or '')[:4000]}"}
     else:  # rust
         rustc = _which("rustc")
-        assert rustc is not None
+        if rustc is None:
+            return {"error": "rust compiler not installed on this host."}
         res = _run_argv([rustc, str(src), "-O", "-o", str(exe)], root, [])
         if "error" in res:
             return {"error": f"compile {res.get('error')}: {(res.get('output') or '')[:2000]}"}

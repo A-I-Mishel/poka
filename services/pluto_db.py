@@ -14,6 +14,7 @@ SELECT and writes through a confirmation-gated path. Containment rules:
 
 import csv
 import io
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -21,6 +22,8 @@ from typing import Any, Dict, List
 
 from services.obs import event as obs_event
 from services.storage import user_dir
+
+logger = logging.getLogger(__name__)
 
 DB_FILENAME = "pluto.db"
 MAX_ROWS = 5000
@@ -56,8 +59,22 @@ def valid_identifier(name: Any) -> str:
     return text
 
 
-def _connect(user_id: Any) -> sqlite3.Connection:
+def _connect(user_id: Any, read_only: bool = False) -> sqlite3.Connection:
     path = _db_path(user_id)
+    if read_only:
+        # Reads must not create vault files for ephemeral users.
+        if not path.exists():
+            raise FileNotFoundError("no database")
+        uri = "file:%s?mode=ro" % path.as_uri().split("file:", 1)[-1]
+        try:
+            conn = sqlite3.connect(uri, timeout=10.0, uri=True)
+        except Exception:
+            conn = sqlite3.connect(str(path), timeout=10.0)
+        try:
+            conn.execute("PRAGMA query_only=ON")
+        except Exception:
+            logger.debug("query_only pragma failed", exc_info=True)
+        return conn
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=10.0)
     conn.execute("PRAGMA journal_mode=DELETE")
@@ -93,7 +110,7 @@ def describe_table(user_id: Any, table: str) -> Dict[str, Any]:
     if not name:
         return {"error": "Unsafe table name rejected."}
     try:
-        with _connect(user_id) as conn:
+        with _connect(user_id, read_only=True) as conn:
             # PRAGMA table_info does not support ? placeholder — use quoted ident
             qname = _quote_ident(name)
             cols = conn.execute(f"PRAGMA table_info({qname})").fetchall()  # noqa: S608 (validated + quoted identifier; PRAGMA takes no placeholders)
@@ -222,9 +239,7 @@ def query(user_id: Any, sql: str, max_rows: int = 200) -> Dict[str, Any]:
     if err:
         return {"error": err}
     try:
-        with _connect(user_id) as conn:
-            # Defense in depth: authorizer denies any non-read operation even if regex misses.
-            # Fail closed: if the authorizer cannot be installed, abort the query.
+        with _connect(user_id, read_only=True) as conn:
             try:
                 def _authorizer(action: int, _a: Any, _b: Any, _dbname: Any, _src: Any) -> int:
                     # Allow SELECT (21), READ (20), and EXPLAIN's internal reads.
@@ -306,15 +321,22 @@ def _affinity(values: List[str]) -> str:
 
 def import_csv(user_id: Any, table: str, data: bytes) -> Dict[str, Any]:
     """Create/replace a table from CSV bytes. Returns {table, rows, columns}."""
+    from services.limits import MAX_CSV_PARSE_BYTES, MAX_CSV_COLUMNS
+
     name = valid_identifier(table)
     if not name:
         return {"error": "Unsafe table name rejected."}
+    raw = bytes(data or b"")
+    if len(raw) > MAX_CSV_PARSE_BYTES:
+        return {"error": f"CSV too large (max {MAX_CSV_PARSE_BYTES} bytes)."}
     try:
-        text = bytes(data or b"").decode("utf-8-sig", errors="replace")
+        text = raw.decode("utf-8-sig", errors="replace")
         reader = csv.reader(io.StringIO(text))
         header = next(reader, None)
         if not header:
             return {"error": "CSV is empty."}
+        if len(header) > MAX_CSV_COLUMNS:
+            return {"error": f"Too many columns (max {MAX_CSV_COLUMNS})."}
         columns = []
         for i, raw in enumerate(header):
             clean = re.sub(r"[^A-Za-z0-9_]", "_", str(raw or "").strip())
@@ -323,8 +345,13 @@ def import_csv(user_id: Any, table: str, data: bytes) -> Dict[str, Any]:
             columns.append(clean[:64])
         if len(set(columns)) != len(columns):
             return {"error": "Duplicate column names after sanitizing."}
-        rows = [r for r in reader if any((c or "").strip() for c in r)]
-        rows = rows[:MAX_ROWS]
+        rows: list = []
+        for r in reader:
+            if not any((c or "").strip() for c in r):
+                continue
+            rows.append(r)
+            if len(rows) >= MAX_ROWS:
+                break
         affinities = [_affinity([r[i] if i < len(r) else "" for r in rows]) for i in range(len(columns))]
         padded = [[(r[i] if i < len(r) else "") for i in range(len(columns))] for r in rows]
         with _connect(user_id) as conn:

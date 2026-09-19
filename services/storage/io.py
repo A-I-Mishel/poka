@@ -195,3 +195,11 @@ def _write_json(path: Path, payload: Any) -> None:
             pass
         obs_event("storage.write", status="error", file=path.name)
         raise StorageError(f"Could not persist {path.name}: {e}") from e
+    except Exception as e:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        obs_event("storage.write", status="error", file=path.name)
+        raise StorageError(f"Could not persist {path.name}: {e}") from e

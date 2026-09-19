@@ -34,7 +34,8 @@ def _https_get(url: str, headers: Dict[str, str] | None = None, timeout: int = 1
         raise ValueError("refusing non-https fetch")
     req = urllib.request.Request(url, headers=headers or {"User-Agent": _UA})  # noqa: S310 (https asserted above; fixed backends)
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (https asserted above; fixed backends)
-        return resp.read()
+        # Cap reads so a compromised mirror can't OOM us with GBs.
+        return resp.read(2 * 1024 * 1024 + 1)
 
 
 def _domain_of(url: str) -> str:
@@ -97,12 +98,15 @@ def _unwrap_ddg(href: str) -> str:
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
             real = (qs.get("uddg") or [""])[0]
             if real:
-                return real
+                href = real
         if href.startswith("//"):
-            return "https:" + href
+            href = "https:" + href
+        low = href.lower()
+        if low.startswith(("javascript:", "data:", "vbscript:", "file:")):
+            return ""
         return href
     except Exception:
-        return str(href or "")
+        return ""
 
 
 class _LiteParser(HTMLParser):
@@ -289,7 +293,8 @@ def _wiki_api(params: Dict[str, Any]) -> Any:
     """GET a Wikimedia API endpoint as parsed JSON (raises on failure)."""
     import urllib.parse
 
-    url = params.pop("_endpoint") + "?" + urllib.parse.urlencode(params)
+    q = dict(params)
+    url = q.pop("_endpoint", "") + "?" + urllib.parse.urlencode(q)
     return json.loads(_https_get(url).decode("utf-8", "replace"))
 
 

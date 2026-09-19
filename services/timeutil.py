@@ -9,10 +9,18 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _norm_iso(value: object) -> str:
+    text = str(value or "").strip()
+    # fromisoformat doesn't accept trailing Z — normalize to +00:00.
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    return text
+
+
 def format_local(iso_str: str, fmt: str = "%I:%M %p") -> str:
     """Format an ISO timestamp in local time; "" when missing/unparseable."""
     try:
-        dt = datetime.fromisoformat(str(iso_str))
+        dt = datetime.fromisoformat(_norm_iso(iso_str))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone().strftime(fmt)
@@ -28,7 +36,7 @@ def utcnow_stamp(fmt: str = "%Y%m%d_%H%M") -> str:
 def parse_iso(value: object) -> Optional[datetime]:
     """Parse an ISO timestamp; None when missing/unparseable."""
     try:
-        dt = datetime.fromisoformat(str(value))
+        dt = datetime.fromisoformat(_norm_iso(value))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt

@@ -99,12 +99,13 @@ def load_structured_memory() -> Dict[str, Any]:
     return data
 
 
-def save_structured_memory(mem: Dict[str, Any]) -> None:
-    """Save memory to disk. Never raises (storage must not break chat)."""
+def save_structured_memory(mem: Dict[str, Any]) -> bool:
+    """Save memory to disk. Returns True on success, False on failure."""
     try:
         _write_json(Path(_memory_path()), mem)
+        return True
     except StorageError:
-        pass
+        return False
 
 
 def _new_fact(fact_type: str, value: str, content_lower: str) -> Dict[str, str]:
@@ -247,8 +248,8 @@ def update_memory_incremental(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     mem["_processed_hashes"] = processed[-MAX_PROCESSED_HASHES:]
     if added == 0 and new_facts == 0:
         return {"processed": 0, "new_facts": 0, "saved": False}
-    save_structured_memory(mem)
-    return {"processed": added, "new_facts": new_facts, "saved": True}
+    ok = save_structured_memory(mem)
+    return {"processed": added, "new_facts": new_facts, "saved": bool(ok)}
 
 
 def update_memory_from_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:

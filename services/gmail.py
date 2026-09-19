@@ -78,7 +78,12 @@ def extract_plain_text(payload: Dict[str, Any]) -> str:
 
 def _decode_body(data: Any) -> str:
     try:
-        return base64.urlsafe_b64decode(str(data)).decode("utf-8", errors="replace")
+        s = str(data or "").strip().replace("-", "+").replace("_", "/")
+        # Gmail omits padding; restore it.
+        pad = (-len(s)) % 4
+        if pad:
+            s += "=" * pad
+        return base64.b64decode(s).decode("utf-8", errors="replace")
     except Exception:
         return ""
 

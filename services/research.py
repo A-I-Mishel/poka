@@ -411,7 +411,8 @@ def generate_docx_from_brief(user_store: Any, file_store: Any, brief_id: Any) ->
     try:
         before = {m.id for m in file_store.list_outputs()}
     except Exception:
-        before = set()
+        # Fail closed: can't tell what's fresh, so don't return a stale file.
+        raise RuntimeError("STATUS=FAILED tool=build_document: could not list outputs.")
     from tools.docx_tool import build_document
 
     out = build_document.invoke({"title": title, "markdown_text": markdown_text})

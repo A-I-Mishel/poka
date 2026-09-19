@@ -81,6 +81,10 @@ class _IterationBudgetExceeded(Exception):
     """Raised when sandboxed code exceeds its iteration budget."""
 
 
+class _OutputBudgetExceeded(Exception):
+    """Raised when sandboxed code exceeds its output budget."""
+
+
 def validate_code(code: str) -> Optional[str]:
     """Check code against the sandbox policy.
 
@@ -268,7 +272,24 @@ def _exec_timed(compiled: Any) -> Dict[str, Any]:
 
     from services.limits import MAX_PYTHON_EXEC_SECONDS
 
-    buf = io.StringIO()
+    class _CappedBuffer(io.StringIO):
+        def write(self, s: str) -> int:
+            # Incremental cap: fail fast instead of buffering 100MB then truncating.
+            # Keep the head up to the cap so callers can return partial output.
+            text = str(s)
+            room = (MAX_PYTHON_OUTPUT_CHARS + 1024) - self.tell()
+            if room <= 0:
+                raise _OutputBudgetExceeded(
+                    f"output exceeded {MAX_PYTHON_OUTPUT_CHARS} chars"
+                )
+            if len(text) > room:
+                super().write(text[:room])
+                raise _OutputBudgetExceeded(
+                    f"output exceeded {MAX_PYTHON_OUTPUT_CHARS} chars"
+                )
+            return super().write(text)
+
+    buf = _CappedBuffer()
     outcome: Dict[str, Any] = {}
     errors: list = []
 
@@ -292,6 +313,12 @@ def _exec_timed(compiled: Any) -> Dict[str, Any]:
         }
     if errors:
         exc = errors[0]
+        if isinstance(exc, _OutputBudgetExceeded):
+            try:
+                partial = buf.getvalue()[:MAX_PYTHON_OUTPUT_CHARS]
+            except Exception:
+                partial = ""
+            return {"output": partial, "truncated": True}
         if isinstance(exc, _IterationBudgetExceeded):
             return {"error": str(exc), "invalid": False}
         if isinstance(exc, RecursionError):
