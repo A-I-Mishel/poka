@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from agent.budget import BudgetExhausted, RequestBudget
+from agent.budget import RequestBudget
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text
 from agent.toolrun import MAX_TOOL_ROUNDS, TOOL_MAP, _note_tier_failure, run_tool_loop
@@ -112,10 +112,7 @@ def plan_then_execute(
         )
 
     if budget is not None:
-        try:
-            budget.count_plan()
-        except BudgetExhausted:
-            return _loop(user_input)
+        budget.count_plan()
 
     def _ask_plan(p_llm: BaseLanguageModel, prompt: str) -> str:
         plan_response = agent._invoke_bounded(

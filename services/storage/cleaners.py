@@ -196,6 +196,28 @@ def clean_messages(messages: Any) -> List[Dict[str, Any]]:
             cleaned_tools = _clean_tool_names(m.get("tools"))
             if cleaned_tools is not None:
                 entry["tools"] = cleaned_tools
+            if isinstance(m.get("fallback"), dict):
+                fb = m["fallback"]
+                entry["fallback"] = {
+                    "requested": str(fb.get("requested", ""))[:64],
+                    "reason": str(fb.get("reason", ""))[:128],
+                }
+            if isinstance(m.get("corrections"), list):
+                corr = []
+                for pair in m["corrections"][:5]:
+                    if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                        o, n = str(pair[0])[:32], str(pair[1])[:32]
+                        if o and n and o.lower() != n.lower():
+                            corr.append([o, n])
+                if corr:
+                    entry["corrections"] = corr
+            if isinstance(m.get("pending_approvals"), list):
+                pa = []
+                for a in m["pending_approvals"][:8]:
+                    if isinstance(a, dict) and a.get("id") and a.get("tool"):
+                        pa.append({"id": str(a["id"])[:64], "tool": str(a["tool"])[:64], "summary": str(a.get("summary", ""))[:120]})
+                if pa:
+                    entry["pending_approvals"] = pa
             cleaned.append(entry)
     return cleaned[-MAX_MSGS_PER_CHAT:]
 

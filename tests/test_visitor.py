@@ -84,15 +84,22 @@ def test_different_visitors_isolated(client):
     assert other.json() == {"text": ""}
 
 
-def test_malformed_visitor_falls_back_to_ephemeral(client):
+def test_malformed_visitor_falls_back_to_anonymous(client):
     put = client.put("/api/memory/notes", json={"text": "lost note"},
                      headers={"X-Pluto-Visitor": "../nope"})
     assert put.status_code == 200, put.text
-    # Random id per request: the write is unreadable afterwards, but
-    # nothing errors and no traversal happened on disk.
+    # Malformed visitor falls back to fixed "anonymous" ID (not random per request)
+    # so the write is readable on the next request with the same malformed header.
     again = client.get("/api/memory/notes",
                        headers={"X-Pluto-Visitor": "../nope"})
-    assert again.json() == {"text": ""}
+    assert again.json() == {"text": "lost note"}
+
+
+def test_no_visitor_header_uses_anonymous(client):
+    put = client.put("/api/memory/notes", json={"text": "anonymous note"})
+    assert put.status_code == 200, put.text
+    again = client.get("/api/memory/notes")
+    assert again.json() == {"text": "anonymous note"}
 
 
 def test_visitor_ignored_when_token_present(client, monkeypatch):

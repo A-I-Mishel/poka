@@ -239,7 +239,7 @@ def answer_with_fallback(
                 lambda _name, llm: classify_task(user_input, llm, budget, tier_name=_name),
                 first, cheap_table,
             )
-        except (RuntimeError, BudgetExhausted):
+        except RuntimeError:
             # Classifier is down: never silently default tool-ish
             # requests to simple (no tools). Creation/doc signals fail
             # open to multi_step so the tool loop can still help.
@@ -256,6 +256,10 @@ def answer_with_fallback(
                     task_type = "simple"
             except Exception:
                 task_type = "simple"
+        except BudgetExhausted:
+            # Budget exhausted during classification: propagate to stop
+            # the request instead of falling back to a cheaper path.
+            raise
         logger.info("req=%s task=%s", request_id, task_type)
     # Typo metadata for UX ("Did you mean...?") and ops. Never raises,
     # never alters routing — rule_route already ran above.
@@ -287,8 +291,10 @@ def answer_with_fallback(
                     _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
         elif history_list:
             langchain_history = _messages_to_langchain(history_list)
-    except (RuntimeError, BudgetExhausted):
+    except RuntimeError:
         langchain_history = history
+    except BudgetExhausted:
+        raise
 
     def _is_managed_table(table: Any) -> bool:
         # Managed tables hold real shared getters, so per-task sizing via

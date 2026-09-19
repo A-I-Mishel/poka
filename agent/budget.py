@@ -7,8 +7,10 @@ exhaustion raises BudgetExhausted, which the cascade propagates without
 cooling providers (it is our limit, not theirs).
 """
 
+import threading
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from services.limits import (
     MAX_LLM_CALLS_PER_REQUEST,
@@ -36,7 +38,10 @@ class TurnCancelled(Exception):
 
 @dataclass
 class RequestBudget:
-    """Bounded resources for one user message (also collects metrics)."""
+    """Bounded resources for one user message (also collects metrics).
+
+    All mutating methods are thread-safe for parallel tool execution.
+    """
 
     max_llm: int = MAX_LLM_CALLS_PER_REQUEST
     max_tools: int = MAX_TOOL_CALLS_PER_REQUEST
@@ -53,6 +58,7 @@ class RequestBudget:
     rounds: int = 0
     timeouts: int = 0
     external_tokens: int = 0
+    _lock: Any = field(default_factory=threading.Lock, repr=False)
 
     def check_time(self) -> None:
         """Raise BudgetExhausted when the request ran too long."""
@@ -61,21 +67,23 @@ class RequestBudget:
 
     def count_llm(self) -> None:
         """Charge one model call; raise when the LLM budget is spent."""
-        self.check_time()
-        self.llm_calls += 1
-        if self.llm_calls > self.max_llm:
-            raise BudgetExhausted(f"LLM call budget exhausted ({self.max_llm}).")
+        with self._lock:
+            self.check_time()
+            self.llm_calls += 1
+            if self.llm_calls > self.max_llm:
+                raise BudgetExhausted(f"LLM call budget exhausted ({self.max_llm}).")
 
     def count_tool(self, is_search: bool = False) -> None:
         """Charge one tool call (search calls have their own sub-budget)."""
-        self.check_time()
-        self.tool_calls += 1
-        if is_search:
-            self.search_calls += 1
-            if self.search_calls > self.max_search:
-                raise BudgetExhausted(f"Search budget exhausted ({self.max_search}).")
-        if self.tool_calls > self.max_tools:
-            raise BudgetExhausted(f"Tool budget exhausted ({self.max_tools}).")
+        with self._lock:
+            self.check_time()
+            self.tool_calls += 1
+            if is_search:
+                self.search_calls += 1
+                if self.search_calls > self.max_search:
+                    raise BudgetExhausted(f"Search budget exhausted ({self.max_search}).")
+            if self.tool_calls > self.max_tools:
+                raise BudgetExhausted(f"Tool budget exhausted ({self.max_tools}).")
 
     def count_round(self) -> None:
         """Charge one tool-loop round; shared across nested loops.

@@ -22,7 +22,7 @@ from services.vision import (
 )
 
 from agent.budget import BudgetExhausted, RequestBudget
-from agent.cascade import _usable_tiers
+from agent.cascade import _all_skipped_permanent, _usable_tiers
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.executor import TokenStream
 from agent.prompts import _as_text, strip_internal_reasoning
@@ -30,7 +30,7 @@ from agent.prompts import _as_text, strip_internal_reasoning
 logger = logging.getLogger(__name__)
 
 
-def vision_ocr_bytes(blob: bytes) -> str:
+def vision_ocr_bytes(blob: bytes, budget: Optional[RequestBudget] = None) -> str:
     """Transcribe image bytes via a vision-capable tier ("" when unusable).
 
     OCR fallback for scanned PDFs when no on-device engine exists: the
@@ -40,6 +40,11 @@ def vision_ocr_bytes(blob: bytes) -> str:
     vision tier is configured or every attempt fails — never raises, so
     tools degrade to an honest STATUS=EMPTY instead of failing.
     """
+    if budget is not None:
+        try:
+            budget.count_llm()
+        except BudgetExhausted:
+            return ""
     try:
         url, _err = encode_image_bytes(blob)
         if not url:
@@ -62,7 +67,7 @@ def vision_ocr_bytes(blob: bytes) -> str:
                 continue
             try:
                 response = agent._invoke_bounded(
-                    llm_instance, [HumanMessage(content=payload)], budget=None)
+                    llm_instance, [HumanMessage(content=payload)], budget=budget)
                 text = strip_internal_reasoning(_as_text(response.content).strip())
                 if text:
                     logger.info("tier=%s vision-ocr ok (%d chars)", name, len(text))
@@ -116,6 +121,9 @@ def _try_vision_answer(
     payload = build_vision_messages(prompt, data_urls)
     tokens = on_token if isinstance(on_token, TokenStream) else TokenStream(on_token, on_reset)
     live = tokens if tokens.streaming else None
+    # Fail fast if all vision tiers are quota-cooled (same as text cascade).
+    if tiers is not None and _all_skipped_permanent(list(_usable_tiers(first, tiers))):
+        return None
     for name, getter in _usable_tiers(first, tiers):
         if not vision_supported_tier(name):
             continue
@@ -127,14 +135,11 @@ def _try_vision_answer(
         if llm_instance is None:
             continue
         try:
-            try:
-                budget.count_llm()
-            except BudgetExhausted:
-                return None  # let the normal cascade produce the budget message
+            budget.count_llm()
             if live is not None:
                 live.reset_for_new_call()
             response = agent._invoke_bounded(
-                llm_instance, [HumanMessage(content=payload)], budget=None,
+                llm_instance, [HumanMessage(content=payload)], budget=budget,
                 on_token=live,
             )
             text = strip_internal_reasoning(_as_text(response.content).strip())

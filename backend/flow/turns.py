@@ -12,6 +12,7 @@ from agent.executor import ExecutorBusyError
 from services.limits import MAX_CHAT_TITLE_CHARS, MAX_DISPLAY_NAME_CHARS
 from services.storage import (is_valid_id, new_conversation_id)
 from services.timeutil import utcnow_iso
+from services.storage.io import path_lock as _chats_path_lock
 from backend.deps import UserContext
 
 from backend.attachments import (_attachment_text_hint, _resolve_attachments, attachment_hint, attachments_overview)
@@ -20,6 +21,16 @@ from backend.flow.teaching import _apply_teaching_session
 from backend.teach import (_is_pace_feedback, _is_teaching_continuation, _is_teaching_request, _log_teaching_format, _maybe_repair_teaching_turn)
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_turn(store: Any, fn: Any) -> Any:
+    """Execute a turn atomically under the chat file lock.
+
+    Uses the store's _mutate_chats method which holds the per-file lock
+    across the entire read-modify-write, preventing concurrent turns
+    from losing each other's messages.
+    """
+    return store._mutate_chats(lambda data: fn(data))
 
 
 def _sanitize_corrections(result: Any) -> List[List[str]]:
@@ -229,92 +240,95 @@ def run_chat(ctx: UserContext, content: str,
         raise ValueError("Message is empty.")
     store = ctx.user_store
     _check_limits(ctx.limit_key or ctx.user_id, bool(deep_mode))
-    chats, current, warnings = _load_state(store)
 
-    attachments, image_ids = _resolve_attachments(ctx, upload_ids or [])
+    # Serialize turns per user to prevent lost updates on concurrent sends.
+    with _chats_path_lock(store.chats_path):
+        chats, current, warnings = _load_state(store)
 
-    send_text = text
-    total = len(attachments)
-    if total > 1:
-        send_text += attachments_overview(attachments)
-    for position, attach in enumerate(attachments, start=1):
-        send_text += attachment_hint(
-            attach["kind"], attach["id"], attach["name"], position, total)
-    for attach in attachments:
-        send_text += _attachment_text_hint(ctx, attach)
+        attachments, image_ids = _resolve_attachments(ctx, upload_ids or [])
 
-    user_msg: Dict[str, Any] = {
-        "role": "user",
-        "content": text,
-        "time": utcnow_iso(),
-    }
-    if attachments:
-        user_msg["attachments"] = attachments
-    if image_ids:
-        user_msg["image"] = image_ids[0]
+        send_text = text
+        total = len(attachments)
+        if total > 1:
+            send_text += attachments_overview(attachments)
+        for position, attach in enumerate(attachments, start=1):
+            send_text += attachment_hint(
+                attach["kind"], attach["id"], attach["name"], position, total)
+        for attach in attachments:
+            send_text += _attachment_text_hint(ctx, attach)
 
-    prior_history = build_chat_history(
-        [m for m in current if isinstance(m, dict)])
-    prior_raw: List[Dict[str, Any]] = [
-        dict(m) for m in current if isinstance(m, dict)]
-    memory_notes, project_context = _memory_and_project(store, project_id)
-
-    send_text, vision_ids, clarify = _apply_attachment_gate(
-        ctx, text, current, attachments, image_ids, send_text, active_tier)
-    if clarify is not None:
-        assistant_msg: Dict[str, Any] = {
-            "role": "assistant",
-            "content": clarify,
+        user_msg: Dict[str, Any] = {
+            "role": "user",
+            "content": text,
             "time": utcnow_iso(),
-            **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                               "clarify", None),
         }
+        if attachments:
+            user_msg["attachments"] = attachments
+        if image_ids:
+            user_msg["image"] = image_ids[0]
+
+        prior_history = build_chat_history(
+            [m for m in current if isinstance(m, dict)])
+        prior_raw: List[Dict[str, Any]] = [
+            dict(m) for m in current if isinstance(m, dict)]
+        memory_notes, project_context = _memory_and_project(store, project_id)
+
+        send_text, vision_ids, clarify = _apply_attachment_gate(
+            ctx, text, current, attachments, image_ids, send_text, active_tier)
+        if clarify is not None:
+            assistant_msg: Dict[str, Any] = {
+                "role": "assistant",
+                "content": clarify,
+                "time": utcnow_iso(),
+                **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                                   "clarify", None),
+            }
+            current = current + [user_msg, assistant_msg]
+            store.save_chats(chats, current)
+            return {
+                "message": assistant_msg,
+                "active_tier": "clarify",
+                "task_type": "clarify",
+                "warnings": warnings,
+                "fallback": None,
+                "corrections": [],
+            }
+
+        assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
+            ctx, send_text, prior_history, prior_raw, vision_ids,
+            memory_notes, project_context, bool(deep_mode),
+            bool(force_search), active_tier, on_token, on_reset,
+            on_progress, cancel)
+
+        try:
+            fixed, repaired, left = _maybe_repair_teaching_turn(
+                send_text, str(assistant_msg.get("content", "")), tier,
+                on_token, on_reset)
+            if repaired:
+                assistant_msg = dict(assistant_msg)
+                assistant_msg["content"] = fixed
+            _log_teaching_format(send_text, str(assistant_msg.get("content", "")),
+                                 tier, repaired=repaired, violations=len(left))
+        except Exception:
+            try:
+                _log_teaching_format(send_text, str(assistant_msg.get("content", "")), tier)
+            except Exception:
+                logger.debug("teaching format log failed", exc_info=True)
+        persisted, live = _turn_approvals(ctx)
+        if persisted:
+            assistant_msg = dict(assistant_msg)
+            assistant_msg["pending_approvals"] = persisted
         current = current + [user_msg, assistant_msg]
         store.save_chats(chats, current)
         return {
             "message": assistant_msg,
-            "active_tier": "clarify",
-            "task_type": "clarify",
+            "active_tier": tier,
+            "task_type": task_type,
             "warnings": warnings,
-            "fallback": None,
-            "corrections": [],
+            "fallback": fallback,
+            "pending_approvals": live,
+            "corrections": list(assistant_msg.get("corrections", []) or []),
         }
-
-    assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
-        ctx, send_text, prior_history, prior_raw, vision_ids,
-        memory_notes, project_context, bool(deep_mode),
-        bool(force_search), active_tier, on_token, on_reset,
-        on_progress, cancel)
-
-    try:
-        fixed, repaired, left = _maybe_repair_teaching_turn(
-            send_text, str(assistant_msg.get("content", "")), tier,
-            on_token, on_reset)
-        if repaired:
-            assistant_msg = dict(assistant_msg)
-            assistant_msg["content"] = fixed
-        _log_teaching_format(send_text, str(assistant_msg.get("content", "")),
-                             tier, repaired=repaired, violations=len(left))
-    except Exception:
-        try:
-            _log_teaching_format(send_text, str(assistant_msg.get("content", "")), tier)
-        except Exception:
-            logger.debug("teaching format log failed", exc_info=True)
-    persisted, live = _turn_approvals(ctx)
-    if persisted:
-        assistant_msg = dict(assistant_msg)
-        assistant_msg["pending_approvals"] = persisted
-    current = current + [user_msg, assistant_msg]
-    store.save_chats(chats, current)
-    return {
-        "message": assistant_msg,
-        "active_tier": tier,
-        "task_type": task_type,
-        "warnings": warnings,
-        "fallback": fallback,
-        "pending_approvals": live,
-        "corrections": list(assistant_msg.get("corrections", []) or []),
-    }
 
 
 def _complete_turn_guarded(ctx: UserContext, send_text: str,
@@ -356,8 +370,11 @@ def regenerate_chat(ctx: UserContext, index: int,
     """
     store = ctx.user_store
     _check_limits(ctx.limit_key or ctx.user_id, bool(deep_mode))
-    chats, current, warnings = _load_state(store)
-    msgs = [m for m in current if isinstance(m, dict)]
+
+    # Serialize turns per user to prevent lost updates on concurrent regenerates.
+    with _chats_path_lock(store.chats_path):
+        chats, current, warnings = _load_state(store)
+        msgs = [m for m in current if isinstance(m, dict)]
     if not isinstance(index, int) or not (0 <= index < len(msgs)):
         raise ValueError("Response to regenerate was not found.")
     assistant_msg = msgs[index]

@@ -100,10 +100,21 @@ def validate_code(code: str) -> Optional[str]:
             if isinstance(node, ast.While):
                 return "'while' loops are not allowed (use 'for' with range())"
             return "async code is not allowed in the sandbox"
+        # Reject any name starting with '_' in any context (Name, Attribute,
+        # FunctionDef, ClassDef, AsyncFunctionDef, arg, ExceptHandler)
+        # to prevent shadowing the injected iteration guard.
         if isinstance(node, ast.Name) and node.id.startswith("_"):
             return "private name %r is not allowed" % (node.id,)
         if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
             return "private attribute %r is not allowed" % (node.attr,)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name.startswith("_"):
+                return "private name %r is not allowed" % (node.name,)
+        if isinstance(node, ast.arg):
+            if node.arg.startswith("_"):
+                return "private name %r is not allowed" % (node.arg,)
+        if isinstance(node, ast.ExceptHandler) and node.name and node.name.startswith("_"):
+            return "private name %r is not allowed" % (node.name,)
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name) and func.id in _BLOCKED_CALLS:

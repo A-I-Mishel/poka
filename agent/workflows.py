@@ -105,11 +105,19 @@ def run_workflow(
                 )
 
         own_budget = budget if budget is not None else RequestBudget()
-        try:
-            if own_budget.max_tools < len(steps):
-                own_budget.max_tools = len(steps)
-        except Exception:
-            logger.debug("workflow budget sizing failed; using defaults", exc_info=True)
+        # Use a local max_tools cap without mutating the caller's budget.
+        # Create a fresh budget with the needed capacity, preserving caller's
+        # deadline and other limits, only raising max_tools if needed.
+        if budget is not None and budget.max_tools < len(steps):
+            own_budget = RequestBudget(
+                max_llm=budget.max_llm,
+                max_tools=len(steps),
+                max_search=budget.max_search,
+                max_reflect=budget.max_reflect,
+                max_plan=budget.max_plan,
+                max_rounds=budget.max_rounds,
+                deadline=budget.deadline,
+            )
 
         done: List[Dict[str, Any]] = []
         used: List[str] = []

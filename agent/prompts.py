@@ -212,12 +212,10 @@ def _build_system_prompt(
 
     if isinstance(relevant_context, str) and relevant_context.strip():
         stripped = relevant_context.strip()
-        # Pre-wrapped retrieval output passes through without nesting. This must be
-        # an anchored check (tag at the very start), not a substring search — a
-        # substring search lets attacker-influenced text that merely *mentions*
-        # the tag skip defanging entirely and land in the prompt unescaped.
+        # Always defang: even pre-wrapped retrieval output can contain
+        # attacker-influenced inner tags. The anchored check was a hole.
         if _is_wrapped_relevant_memory(stripped):
-            block = stripped
+            block = _defang_boundary_tags(stripped)
         else:
             block = _relevant_memory_block(relevant_context)
         prompt += "\n\n## RELEVANT MEMORY DATA\n" + block

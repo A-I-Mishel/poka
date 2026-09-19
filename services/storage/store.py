@@ -68,6 +68,17 @@ class UserStore:
                     chats.append(record)
         return {"chats": chats, "current": clean_messages(data.get("current", []))}, warnings
 
+    def _mutate_chats(self, fn: Any) -> Any:
+        """Read-modify-write the chats file under one lock hold."""
+        with path_lock(self.chats_path):
+            data, _ = _read_json(self.chats_path)
+            result = fn(data)
+            _write_json(self.chats_path, result)
+        # Invalidate store caches for this user
+        from backend.deps import invalidate_store_caches
+        invalidate_store_caches(self.user_id)
+        return result
+
     def save_chats(self, chats: Any, current: Any) -> None:
         """Persist chats + open conversation. Raises StorageError on failure."""
         stored: List[Dict[str, Any]] = []

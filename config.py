@@ -447,7 +447,7 @@ SMALL_FINAL_TIERS = frozenset({"NVIDIA"})  # 8B-class: never final answers
 # is unchanged (see test_role_tables_shape); order stays quality-first with
 # these lanes last.
 WEAK_FINAL_TIERS = frozenset({
-    "Mistral", "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
+    "NVIDIA", "Mistral", "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
     "OpenRouter Laguna", "OpenRouter Free Router",
 })
 SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [

@@ -318,6 +318,15 @@ async def current_user(
                 authenticated=False,
                 method="ephemeral",
             )
+        else:
+            # No valid visitor header: use a fixed anonymous ID instead of
+            # a fresh random one per request. This prevents unbounded
+            # store-cache growth (RAM DoS) from requests without headers.
+            result = AuthResult(
+                identity=UserIdentity(id="anonymous", email=None, source="ephemeral"),
+                authenticated=False,
+                method="ephemeral",
+            )
     user_id = result.identity.id
     source = result.identity.source
     peer = request.client.host if request.client else ""

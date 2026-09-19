@@ -476,19 +476,6 @@ class FileStore:
         ext = self.validate_upload(data, original_name)
         # Disk-space guard BEFORE quotas — host full takes precedence
         _check_disk_space(len(data))
-        # Quotas BEFORE any write: count and bytes across staged uploads.
-        existing = self.list_uploads()
-        if len(existing) >= MAX_UPLOADS_PER_USER:
-            raise FileValidationError(
-                f"Too many stored uploads (max {MAX_UPLOADS_PER_USER}). "
-                "Delete old files or wait for retention cleanup."
-            )
-        used = sum(m.size for m in existing)
-        if used + len(data) > MAX_USER_BYTES:
-            raise FileValidationError(
-                "Storage quota exceeded. Delete old files or wait for "
-                "retention cleanup."
-            )
         display = sanitize_filename(original_name)
         upload_id = _new_id()
         stored = f"{upload_id}_{sanitize_filename(display)}"
@@ -510,7 +497,22 @@ class FileStore:
             size=len(data),
             created=time.time(),
         )
+        # Quotas and registry update atomically under the registry lock.
+        # This prevents TOCTOU race where concurrent uploads could exceed
+        # quotas between the check and the registry write.
         def _add_upload(registry: Dict[str, Any]) -> None:
+            existing = list(registry.values())
+            if len(existing) >= MAX_UPLOADS_PER_USER:
+                raise FileValidationError(
+                    f"Too many stored uploads (max {MAX_UPLOADS_PER_USER}). "
+                    "Delete old files or wait for retention cleanup."
+                )
+            used = sum(m.get("size", 0) for m in existing)
+            if used + len(data) > MAX_USER_BYTES:
+                raise FileValidationError(
+                    "Storage quota exceeded. Delete old files or wait for "
+                    "retention cleanup."
+                )
             registry[upload_id] = asdict(meta)
 
         self._update_registry(self.uploads_registry, _add_upload)

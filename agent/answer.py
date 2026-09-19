@@ -16,7 +16,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from services.context_budget import CTX_SUMMARY_TOKENS, fit_text
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.budget import BudgetExhausted, RequestBudget
+from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled
 from agent.prompts import _as_text, _memory_data_block, _messages_to_langchain
 from agent.reflection import reflect_and_improve
 
@@ -121,6 +121,8 @@ def _verify_citations(output: str, sources: Sequence[Dict[str, str]],
             return (output.rstrip() + "\n\n[Note: this answer links pages "
                     "beyond what was retrieved this turn — open them critically.]")
         return output
+    except (BudgetExhausted, TurnCancelled):
+        raise
     except Exception:
         return output
 
