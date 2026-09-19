@@ -1,0 +1,70 @@
+{
+  "title": "Pluto Tools & KB",
+  "panels": [
+    {
+      "title": "Tool Call Duration",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(pluto_tool_call_duration_seconds_bucket[5m]))",
+          "legendFormat": "{{tool}} {{execution_mode}}"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "title": "Tool Success/Failure",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(pluto_tool_calls_total[5m])",
+          "legendFormat": "{{tool}} {{status}}"
+        }
+      ],
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "title": "Parallel vs Serial",
+      "type": "piechart",
+      "targets": [
+        {"expr": "pluto_tool_parallel_vs_serial_total"}
+      ],
+      "gridPos": {"x": 0, "y": 8, "w": 6, "h": 6}
+    },
+    {
+      "title": "KB Search Latency",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(pluto_kb_search_duration_seconds_bucket[5m]))",
+          "legendFormat": "{{backend}}"
+        }
+      ],
+      "gridPos": {"x": 6, "y": 8, "w": 12, "h": 8}
+    },
+    {
+      "title": "KB Cache Hit Rate",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(pluto_kb_cache_hits_total{result=\"hit\"}[5m]) / rate(pluto_kb_cache_hits_total[5m])",
+          "legendFormat": "hit rate"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8}
+    },
+    {
+      "title": "FAISS Index Size",
+      "type": "graph",
+      "targets": [
+        {"expr": "pluto_kb_index_size", "legendFormat": "{{user_id}}"}
+      ],
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8}
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s"
+}

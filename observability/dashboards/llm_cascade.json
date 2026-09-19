@@ -1,0 +1,62 @@
+{
+  "title": "Pluto LLM Cascade",
+  "panels": [
+    {
+      "title": "Call Duration by Tier",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(pluto_llm_call_duration_seconds_bucket{tier=~\"$tier\"}[5m]))",
+          "legendFormat": "{{tier}} p95"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "title": "Fallback Rate",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(pluto_llm_tier_fallbacks_total[5m])",
+          "legendFormat": "{{requested_tier}} \u2192 {{actual_tier}} ({{reason}})"
+        }
+      ],
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "title": "Token Usage (prompt/completion)",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(pluto_llm_tokens_total[5m])",
+          "legendFormat": "{{tier}} {{direction}}"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}
+    },
+    {
+      "title": "Provider Errors",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(pluto_llm_provider_errors_total[5m])",
+          "legendFormat": "{{tier}} {{error_kind}}"
+        }
+      ],
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}
+    },
+    {
+      "title": "Active Tier Distribution",
+      "type": "piechart",
+      "targets": [
+        {"expr": "pluto_llm_active_tier"}
+      ],
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8}
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s"
+}

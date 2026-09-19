@@ -1,0 +1,88 @@
+groups:
+  - name: pluto.rules
+    interval: 30s
+    rules:
+      # Golden signals
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(pluto_http_requests_total{status_code=~"5.."}[5m]))
+          / sum(rate(pluto_http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate (>5%)"
+          description: "{{ $value | humanizePercentage }} of requests failing"
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(pluto_http_request_duration_seconds_bucket[5m])) by (le)) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency > 10s"
+          description: "p95 = {{ $value }}s"
+
+      # LLM cascade
+      - alert: CascadeExhausted
+        expr: |
+          increase(pluto_llm_tier_fallbacks_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High cascade fallback rate"
+          description: "{{ $value }} fallbacks in 5m \u2014 free tiers may be exhausted"
+
+      - alert: TierUnavailable
+        expr: |
+          sum(rate(pluto_llm_provider_errors_total[5m])) by (tier) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tier {{ $labels.tier }} error rate high"
+          description: "Error rate: {{ $value }}/s"
+
+      # Rate limits
+      - alert: RateLimitSaturation
+        expr: |
+          sum(rate(pluto_rate_limit_rejections_total[5m])) by (action) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate limit rejections for {{ $labels.action }}"
+          description: "{{ $value }} rejections/s"
+
+      # Storage
+      - alert: DiskSpaceLow
+        expr: |
+          (pluto_storage_free_bytes / pluto_storage_total_bytes) < 0.15
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space < 15%"
+          description: "{{ $value | humanizePercentage }} free"
+
+      - alert: MigrationStuck
+        expr: |
+          pluto_storage_migration_status == -1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage migration failed for user {{ $labels.user_id }}"
+
+      # System
+      - alert: HighMemoryUsage
+        expr: |
+          process_resident_memory_bytes / 1024 / 1024 / 1024 > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory > 2GB"
+          description: "RSS = {{ $value }} GB"

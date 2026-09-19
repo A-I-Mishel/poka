@@ -31,11 +31,11 @@ jobs:
       - name: "Lint (ruff: pyflakes + runtime errors)"
         run: python -m ruff check backend config.py services agent tools tests
       - name: Run tests with coverage (mocked providers, no API calls)
-        run: python -m pytest tests/ --cov=backend --cov=services --cov=agent --cov=tools --cov=config --cov-report=term-missing --cov-fail-under=60
+        run: python -m pytest tests/ --cov=backend --cov=services --cov=agent --cov=tools --cov=config --cov-report=term-missing --cov-fail-under=65
       - name: Validate observability + deploy config
         run: |
           pip install pyyaml
-          python -c "import json,glob; [json.load(open(f)) for f in glob.glob('observability/dashboards/*.json')]; print('dashboards ok')"
+          python -c "import json,glob,sys; files=glob.glob('observability/dashboards/*.json'); assert files, 'no dashboards tracked — observability/ must be committed'; [json.load(open(f)) for f in files]; print('dashboards ok: %d' % len(files))"
           python -c "import yaml; d=yaml.safe_load(open('render.yaml')); assert d['services'][0]['healthCheckPath']=='/api/health', 'healthCheckPath drift'; print('render ok')"
 
   frontend:

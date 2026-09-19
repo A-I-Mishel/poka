@@ -1,0 +1,60 @@
+{
+  "title": "Pluto System",
+  "panels": [
+    {
+      "title": "CPU Usage",
+      "type": "graph",
+      "targets": [
+        {"expr": "rate(process_cpu_seconds_total[5m])", "legendFormat": "CPU"}
+      ],
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 6}
+    },
+    {
+      "title": "Memory Usage",
+      "type": "graph",
+      "targets": [
+        {"expr": "process_resident_memory_bytes", "legendFormat": "RSS"},
+        {"expr": "process_virtual_memory_bytes", "legendFormat": "VMS"}
+      ],
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 6}
+    },
+    {
+      "title": "GC Collections",
+      "type": "graph",
+      "targets": [
+        {"expr": "rate(python_gc_collections_total[5m])", "legendFormat": "gen{{generation}}"}
+      ],
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 6}
+    },
+    {
+      "title": "Threads",
+      "type": "graph",
+      "targets": [
+        {"expr": "process_threads", "legendFormat": "threads"}
+      ],
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 6}
+    },
+    {
+      "title": "Open FDs",
+      "type": "graph",
+      "targets": [
+        {"expr": "process_open_fds", "legendFormat": "FDs"},
+        {"expr": "process_max_fds", "legendFormat": "max"}
+      ],
+      "gridPos": {"x": 0, "y": 6, "w": 12, "h": 6}
+    },
+    {
+      "title": "Uptime",
+      "type": "stat",
+      "targets": [
+        {"expr": "time() - process_start_time_seconds", "legendFormat": "uptime"}
+      ],
+      "gridPos": {"x": 12, "y": 6, "w": 6, "h": 6}
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s"
+}

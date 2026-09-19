@@ -1,0 +1,57 @@
+title: "LLM Tier Failure Cascade"
+description: "Verify graceful fallback when tiers fail"
+steady-state-hypothesis:
+  title: "System handles requests normally"
+  probes:
+    - type: probe
+      name: "health-check"
+      provider:
+        type: http
+        url: "http://localhost:8000/api/health"
+        timeout: 5
+      tolerance:
+        type: probe
+        name: "health-ok"
+        provider:
+          type: python
+          module: chaosplt.http
+          func: "status_code"
+          arguments:
+            response: "{{probe.health-check}}"
+        tolerance: 200
+
+method:
+  - type: action
+    name: "block-gemini"
+    provider:
+      type: process
+      path: "iptables"
+      arguments: "-A OUTPUT -d api.generativeai.google.com -j DROP"
+    pauses:
+      after: 10
+
+  - type: probe
+    name: "request-during-outage"
+    provider:
+      type: http
+      url: "http://localhost:8000/api/chat/send"
+      method: POST
+      headers:
+        Content-Type: application/json
+        Authorization: "Bearer {{ secrets.token }}"
+      body: '{"content": "Hello", "deep_mode": false}'
+    tolerance: 200
+
+  - type: action
+    name: "restore-gemini"
+    provider:
+      type: process
+      path: "iptables"
+      arguments: "-D OUTPUT -d api.generativeai.google.com -j DROP"
+
+  - type: probe
+    name: "health-after-restore"
+    provider:
+      type: http
+      url: "http://localhost:8000/api/health"
+    tolerance: 200

@@ -1,0 +1,37 @@
+title: "Network Partition to Provider Endpoints"
+description: "Simulate 500ms latency + 10% packet loss to LLM APIs"
+method:
+  - type: action
+    name: "add-latency"
+    provider:
+      type: process
+      path: "tc"
+      arguments: "qdisc add dev eth0 root netem delay 500ms loss 10%"
+    pauses:
+      after: 5
+
+  - type: probe
+    name: "requests-with-latency"
+    provider:
+      type: python
+      module: chaosplt.python
+      func: "run_load_test"
+      arguments:
+        duration: 30
+        rps: 5
+    tolerance:
+      type: probe
+      name: "latency-check"
+      provider:
+        type: python
+        module: chaosplt.python
+        func: "check_p95_latency"
+        arguments:
+          threshold_seconds: 15
+
+  - type: action
+    name: "remove-latency"
+    provider:
+      type: process
+      path: "tc"
+      arguments: "qdisc del dev eth0 root"

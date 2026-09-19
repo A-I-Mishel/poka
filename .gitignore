@@ -33,9 +33,13 @@ load_tests/
 .ruff_cache/
 .venv/
 
-# Generated/local artifacts (never commit)
-chaos/
-load-test/
-locustfile.py
-observability/
-.github/workflows/load-test.yml
+# Local run artifacts (never commit) — source files in chaos/, load-test/,
+# observability/ and locustfile.py ARE tracked; only their outputs are ignored.
+chaos/results.json
+chaos/*.log
+load-test/results/
+load-test/*.log
+summary.json
+results.json
+locust-report*
+server.log

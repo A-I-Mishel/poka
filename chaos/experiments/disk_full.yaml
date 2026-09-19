@@ -1,0 +1,32 @@
+title: "Disk Full Degradation"
+description: "Fill data volume to 95%, verify graceful degradation"
+method:
+  - type: action
+    name: "fill-disk"
+    provider:
+      type: process
+      path: "dd"
+      arguments: "if=/dev/zero of=/app/data/fill bs=1M count=2048"  # Fill ~2GB
+
+  - type: probe
+    name: "write-operations"
+    provider:
+      type: http
+      url: "http://localhost:8000/api/chat/send"
+      method: POST
+      body: '{"content": "Test"}'
+    tolerance: 507  # Insufficient Storage
+
+  - type: action
+    name: "cleanup"
+    provider:
+      type: process
+      path: "rm"
+      arguments: "-f /app/data/fill"
+
+  - type: probe
+    name: "recovery"
+    provider:
+      type: http
+      url: "http://localhost:8000/api/health"
+    tolerance: 200
