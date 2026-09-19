@@ -14,6 +14,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from backend import schemas
 from backend.deps import (
     SESSION_COOKIE,
@@ -39,6 +43,39 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # Browsers keep the session in an HttpOnly cookie so injected JS
 # cannot exfiltrate it via localStorage. 30d to match the server TTL.
 _SESSION_MAX_AGE = 30 * 86400
+
+
+def _is_secure(request: Request) -> bool:
+    """True when the original client request used HTTPS.
+
+    Direct detection via request.url.scheme, plus X-Forwarded-Proto when
+    behind a trusted proxy (Render terminates TLS at its load balancer
+    and forwards plain HTTP, so without this the app thinks every prod
+    request is http and cross-site cookies fall back to Lax — login 200s
+    yet never sticks). Only honored when PLUTO_TRUST_PROXY=true, so a
+    client can't spoof https on a direct connection.
+    """
+    try:
+        if (request.url.scheme or "").lower() == "https":
+            return True
+    except Exception:
+        logger.debug("cookie scheme read failed", exc_info=True)
+    try:
+        from services.secrets import get_secret
+
+        trust = (get_secret("PLUTO_TRUST_PROXY", "false") or "false").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+    except Exception:
+        trust = False
+    if trust:
+        try:
+            proto = (request.headers.get("x-forwarded-proto", "") or "").split(",")[0].strip().lower()
+            if proto == "https":
+                return True
+        except Exception:
+            logger.debug("forwarded-proto read failed", exc_info=True)
+    return False
 
 
 def _is_cross_site(request: Request) -> bool:
@@ -69,11 +106,7 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
     CSRF for cookie sessions is still enforced via the X-Pluto-Csrf
     header (backend/deps.py _require_csrf).
     """
-    try:
-        scheme = (request.url.scheme or "").lower()
-    except Exception:
-        scheme = ""
-    secure = scheme == "https"
+    secure = _is_secure(request)
     samesite = "none" if (_is_cross_site(request) and secure) else "lax"
     response.set_cookie(
         SESSION_COOKIE,
@@ -90,11 +123,7 @@ def _clear_session_cookie(response: Response, request: Request | None = None) ->
     # Mirror the set attributes so the browser actually drops a
     # SameSite=None;Secure cookie (a Lax, non-Secure delete is ignored
     # for it and the user would stay "logged in").
-    try:
-        scheme = ((request.url.scheme if request is not None else "") or "").lower()
-    except Exception:
-        scheme = ""
-    secure = scheme == "https"
+    secure = _is_secure(request) if request is not None else False
     samesite = "none" if (request is not None and _is_cross_site(request) and secure) else "lax"
     response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, samesite=samesite)
 

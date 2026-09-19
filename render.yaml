@@ -9,7 +9,11 @@ services:
     name: pluto-api
     runtime: python
     buildCommand: "pip install -r requirements.lock"
-    startCommand: "uvicorn backend.main:app --host 0.0.0.0 --port $PORT"
+    # --proxy-headers: Render terminates TLS at its load balancer and
+    # forwards plain HTTP + X-Forwarded-Proto. Without this uvicorn
+    # reports scheme=http, so Secure/SameSite=None session cookies fall
+    # back to Lax and Vercel-UI logins never stick (401 loop).
+    startCommand: "uvicorn backend.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'"
     healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
