@@ -144,6 +144,14 @@ RATE_LIMIT_BUCKET_STATE = Gauge(
     registry=REGISTRY,
 )
 
+# ---- Image Bridge (vision-to-text surrogate cache) ----
+IMAGE_BRIDGE_EVENTS = Counter(
+    f"{METRICS_PREFIX}_image_bridge_events_total",
+    "Image bridge outcomes (cache hits/misses, conversions)",
+    ["event"],  # "hit" | "miss" | "convert_ok" | "convert_failed"
+    registry=REGISTRY,
+)
+
 # ---- Application Info ----
 APP_INFO = Info(f"{METRICS_PREFIX}_app", "Application metadata", registry=REGISTRY)
 

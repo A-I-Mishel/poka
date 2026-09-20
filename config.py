@@ -149,6 +149,11 @@ def _make_gemini(model: str, key: str, temperature: float):
     (4.x, consolidated google-genai SDK) deprecated/removed it.
     request_timeout is kept on every attempt: it is the native HTTP
     timeout that truly aborts hung provider calls.
+    max_retries=0 everywhere: SDK-level tenacity retries (2s/4s/8s...
+    backoff per attempt) multiply free-tier quota burn — the daily
+    allowance is ~20 requests — and add minutes before the cascade can
+    fail over. The cascade IS the retry mechanism (across tiers, with
+    cooldowns); one attempt per call fails fast into it.
     """
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -158,6 +163,7 @@ def _make_gemini(model: str, key: str, temperature: float):
         temperature=temperature,
         request_timeout=MODEL_TIMEOUT_SECONDS,
         max_output_tokens=MODEL_MAX_TOKENS,
+        max_retries=0,
     )
     try:
         return ChatGoogleGenerativeAI(
@@ -165,7 +171,13 @@ def _make_gemini(model: str, key: str, temperature: float):
             convert_system_message_to_human=True,  # type: ignore[call-arg]
         )
     except TypeError:
-        return ChatGoogleGenerativeAI(**base)  # type: ignore[arg-type]
+        try:
+            return ChatGoogleGenerativeAI(**base)  # type: ignore[arg-type]
+        except TypeError:
+            # Ancient releases without max_retries: retry storm accepted,
+            # cascade still bounds the damage via timeouts + cooldowns.
+            base.pop("max_retries", None)
+            return ChatGoogleGenerativeAI(**base)  # type: ignore[arg-type]
 
 
 def get_tier2_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
@@ -227,6 +239,9 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
                 # Native HTTP timeout: truly aborts hung provider calls.
                 request_timeout=MODEL_TIMEOUT_SECONDS,
                 max_tokens=MODEL_MAX_TOKENS,
+                # Fail fast into the cascade (see _make_gemini): SDK
+                # retries burn free-tier quota and delay tier fallback.
+                max_retries=0,
             ),
         )
     except Exception:
@@ -278,6 +293,8 @@ def _get_generic_openai_tier(
                 temperature=temperature,
                 request_timeout=MODEL_TIMEOUT_SECONDS,
                 max_tokens=MODEL_MAX_TOKENS,
+                # Fail fast into the cascade (see _make_gemini).
+                max_retries=0,
             ),
         )
     except Exception:
@@ -340,6 +357,8 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
                 # Native HTTP timeout: truly aborts hung provider calls.
                 request_timeout=MODEL_TIMEOUT_SECONDS,
                 max_tokens=MODEL_MAX_TOKENS,
+                # Fail fast into the cascade (see _make_gemini).
+                max_retries=0,
             ),
         )
     except Exception:

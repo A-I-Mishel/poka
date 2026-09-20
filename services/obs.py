@@ -10,6 +10,7 @@ from services.metrics import (
     HTTP_REQUEST_DURATION,
     HTTP_REQUESTS_TOTAL,
     HTTP_ACTIVE_CONNECTIONS,
+    IMAGE_BRIDGE_EVENTS,
     LLM_CALL_DURATION,
     LLM_TOKEN_USAGE,
     LLM_TIER_FALLBACKS,
@@ -219,6 +220,15 @@ def set_rate_limit_bucket_state(action: str, identity: str, used: int, remaining
     RATE_LIMIT_BUCKET_STATE.labels(action=action, identity=identity, metric="used").set(used)
     RATE_LIMIT_BUCKET_STATE.labels(action=action, identity=identity, metric="remaining").set(remaining)
     RATE_LIMIT_BUCKET_STATE.labels(action=action, identity=identity, metric="limit").set(limit)
+
+
+# ---- Image Bridge ----
+def record_image_bridge(event: str) -> None:
+    """Count one image-bridge outcome (hit/miss/convert_ok/convert_failed)."""
+    try:
+        IMAGE_BRIDGE_EVENTS.labels(event=str(event or "unknown")).inc()
+    except Exception:
+        logger.debug("image bridge metric failed", exc_info=True)
 
 
 # ---- Legacy event() compatibility ----

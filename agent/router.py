@@ -27,6 +27,37 @@ _GREETING_RE = re.compile(
 )
 _UPLOAD_ID_RE = re.compile(r"[0-9a-f]{16}")
 
+# Untrusted-data appendages (bridge transcripts, memory blocks) must not
+# steer routing: their vocabulary ("generated"→create, "current"→research)
+# describes DATA, not user intent. Attachment hints ([Attached ...])
+# are NOT boundary tags and keep counting toward intent.
+_DATA_BOUNDARY_RE = re.compile(
+    r"<(?:memory-data|relevant-memory-data|user-memory-data|"
+    r"project-context|untrusted-tool-output)>.*?"
+    r"</(?:memory-data|relevant-memory-data|user-memory-data|"
+    r"project-context|untrusted-tool-output)>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DATA_TRAILER_RE = re.compile(
+    r"\(\s*The block above is .*?\)", re.IGNORECASE | re.DOTALL
+)
+
+
+def _strip_data_appendages(text: str) -> str:
+    """Remove boundary-wrapped data + its trailer for routing (never raises).
+
+    The model still receives the full text; only route signals and UX
+    typo notes ignore appendages, so a transcript's vocabulary can never
+    tip rule_route or paint "Interpreted X as Y" for words the user
+    did not type.
+    """
+    try:
+        stripped = _DATA_BOUNDARY_RE.sub("", str(text or ""))
+        return _DATA_TRAILER_RE.sub("", stripped)
+    except Exception:
+        logger.debug("data appendage strip failed", exc_info=True)
+        return str(text or "")
+
 
 # --- classifier-fallthrough telemetry (Milestone 1a) ---
 # In-memory counters of rule_route inputs that match nothing, keyed by a
@@ -192,7 +223,7 @@ def rule_route(user_input: str) -> Optional[str]:
     tool choice always stays with the model, so a wrong route degrades
     gracefully instead of breaking tool use.
     """
-    raw = user_input.lower().strip()
+    raw = _strip_data_appendages(user_input).lower().strip()
     if not raw:
         _record_routed()
         return "simple"
@@ -201,8 +232,9 @@ def rule_route(user_input: str) -> Optional[str]:
         return "simple"
     # Normalize once: typo-correct + canonicalize creation verbs
     # ("turn/convrt" -> "create") so downstream lists stay small.
+    # Normalization runs on the appendage-stripped text (same reason).
     try:
-        text = _normalize_text(user_input)
+        text = _normalize_text(_strip_data_appendages(user_input))
     except Exception:
         text = raw
     hits = set()
@@ -278,7 +310,7 @@ def rule_route_conf(user_input: str) -> tuple:
     NOTE: calls rule_route (which records stats) once — no extra counting here.
     """
     try:
-        task = rule_route(user_input)
+        task = rule_route(_strip_data_appendages(user_input))
     except Exception:
         return (None, 0.0)
     if task is None:
@@ -300,11 +332,14 @@ def get_route_corrections(user_input: str) -> list:
 
     Display-filtered: routing-internal rewrites (verb canonicalization),
     capitalized proper nouns, and affix/stemming maps are never shown.
+    Typo notes also ignore boundary-wrapped data appendages, so image
+    transcripts can never paint "Interpreted X as Y" for words the user
+    did not type.
     """
     try:
         from services.normalize import get_display_corrections as _corr
 
-        pairs = _corr(user_input)
+        pairs = _corr(_strip_data_appendages(user_input))
         return [(str(o), str(n)) for o, n in (pairs or [])]
     except Exception:
         return []

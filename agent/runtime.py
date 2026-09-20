@@ -77,6 +77,42 @@ _HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
 _VISION_TIER_NAMES = ("Gemini 3.6 Flash", "Gemini 3.5 Flash")
 
 
+# Bridge transcript wrapper (routing-neutral by construction — see note
+# at the injection site). Exported for the routing-neutrality test.
+BRIDGE_NOTE_WRAPPER = (
+    "\n\n[Note: a picture the user shared is shown below as "
+    "words. Answer from those words; if they lack the detail "
+    "needed, say so instead of guessing.]"
+    "\n")
+
+
+def _vision_degraded(request_id: str) -> Dict[str, Any]:
+    """Degraded no-vision answer with the actual tier state (never raises).
+
+    States not-configured vs cooling-with-wait so users wait instead of
+    rapid-retrying — each failed retry re-arms the cooldown it waits out.
+    """
+    try:
+        vision_why = _vision_unavailable_reason()
+    except Exception:
+        logger.debug("req=%s vision reason failed", request_id, exc_info=True)
+        vision_why = "unavailable"
+    return {
+        "output": (
+            "I couldn't view that image — no vision-capable model (Gemini) "
+            f"answered ({vision_why}). Check that the image is <5MB/<25MP. "
+            "If Gemini is cooling down, please wait out the stated time "
+            "before resending — rapid retries extend the cooldown. "
+            "Switching to Gemini 3.6 Flash only helps once it has recovered."
+        ),
+        "active_tier": "vision-unavailable",
+        "task_type": "vision",
+        "request_id": request_id,
+        "tools_used": [],
+        "sources": [],
+    }
+
+
 def _format_cooldown(seconds: Any) -> str:
     """Compact wait time for cooldown messaging ("~6h", "~55m", "~40s")."""
     try:
@@ -222,6 +258,33 @@ def answer_with_fallback(
     tokens = TokenStream(on_token, on_reset)
     live = tokens if tokens.streaming else None
 
+    # Image bridge (vision-to-text): a cached/persisted transcript lets ANY
+    # text tier answer with zero vision calls. Single-image turns convert
+    # once (one vision call, then cached for follow-ups); multi-image
+    # turns keep the legacy live-vision path below. When conversion
+    # itself fails, live vision would fail identically (same tiers, same
+    # checks), so we degrade directly instead of burning more quota.
+    if image_upload_ids and len(image_upload_ids) == 1:
+        bridge_note = ""
+        try:
+            from services.image_bridge import describe_image_for_text
+            bridge_note = describe_image_for_text(
+                image_upload_ids[0], question_hint=user_input, budget=budget)
+        except Exception:
+            logger.debug("req=%s bridge failed", request_id, exc_info=True)
+            bridge_note = ""
+        if bridge_note:
+            # Answer via the normal text cascade below (any tier): the
+            # transcript is untrusted data, cited as such. Attribution
+            # (tier/task) then reflects the real answering tier.
+            # Wording is routing-neutral by construction: create-verbs
+            # ("generated" normalizes to "create"!) or doc keywords here
+            # would tip rule_route into creative/research. Verified:
+            # rule_route(user + this note) == rule_route(user).
+            user_input = user_input + BRIDGE_NOTE_WRAPPER + bridge_note
+            image_upload_ids = []
+        else:
+            return _vision_degraded(request_id)
     # Vision fast-path: attached images go to a vision-capable tier with
     # real image content (never a "you cannot view images" dead end when
     # such a tier is configured). Falls through to the normal cascade
@@ -233,32 +296,7 @@ def answer_with_fallback(
         )
         if vision_hit is not None:
             return vision_hit
-        # ponytail: vision requested but no vision tier answered — degraded
-        # directly instead of burning a text-tier call that just says
-        # "can't see". Upgrade to queued retry when Gemini quota recovers.
-        # Vision is Gemini-only by design (services.vision._VISION_TIERS):
-        # the message below states the actual tier state (not configured
-        # vs cooling with remaining wait) so users stop rapid-retrying —
-        # each failed retry re-arms the cooldown it is waiting out.
-        try:
-            vision_why = _vision_unavailable_reason()
-        except Exception:
-            logger.debug("req=%s vision reason failed", request_id, exc_info=True)
-            vision_why = "unavailable"
-        return {
-            "output": (
-                "I couldn't view that image — no vision-capable model (Gemini) "
-                f"answered ({vision_why}). Check that the image is <5MB/<25MP. "
-                "If Gemini is cooling down, please wait out the stated time "
-                "before resending — rapid retries extend the cooldown. "
-                "Switching to Gemini 3.6 Flash only helps once it has recovered."
-            ),
-            "active_tier": "vision-unavailable",
-            "task_type": "vision",
-            "request_id": request_id,
-            "tools_used": [],
-            "sources": [],
-        }
+        return _vision_degraded(request_id)
     history: List[BaseMessage] = list(chat_history) if chat_history else []
     history_list: List[Dict[str, Any]] = list(raw_messages) if raw_messages else []
     combined_notes: str = memory_notes
