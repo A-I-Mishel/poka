@@ -164,6 +164,10 @@ _PDF_TEXT_W = _PDF_PAGE_W - 2 * _PDF_MARGIN
 _PDF_TOP = _PDF_PAGE_H - _PDF_MARGIN
 _PDF_BOTTOM = _PDF_MARGIN + 12.0
 
+# Title size is unique (h1 is 17): it identifies title-header lines so a
+# decorative break right after the title cannot orphan it on page 1.
+_PDF_TITLE_SIZE: float = 22.0
+
 # font_key -> (pdf_basefont, avg char width as fraction of size)
 _PDF_FONTS: Dict[str, Tuple[str, str, float]] = {
     "body": ("F1", "Helvetica", 0.50),
@@ -228,8 +232,8 @@ def _blocks_to_pdf_lines(title: str, blocks: List[Tuple[str, Any]]) -> List[Tupl
     """Flatten blocks to (font_key, size, indent, text) drawable lines."""
     out: List[Tuple[str, float, float, str]] = []
     if title and title.strip():
-        for line in _pdf_wrap(_strip_inline(title.strip()), "bold", 22.0):
-            out.append(("bold", 22.0, 0.0, line))
+        for line in _pdf_wrap(_strip_inline(title.strip()), "bold", _PDF_TITLE_SIZE):
+            out.append(("bold", _PDF_TITLE_SIZE, 0.0, line))
         out.append(("body", 11.0, 0.0, ""))
     for kind, payload in blocks:
         if kind == "pagebreak":
@@ -282,10 +286,32 @@ def _blocks_to_pdf_lines(title: str, blocks: List[Tuple[str, Any]]) -> List[Tupl
 def _build_pdf(title: str, blocks: List[Tuple[str, Any]]) -> bytes:
     """Serialize drawable lines to a minimal multi-page PDF (A4)."""
     draw = _blocks_to_pdf_lines(title, blocks)
-    pages: List[List[Tuple[str, float, float, str]]] = [[]]
+    # Collapse edge/consecutive page breaks: decorative leading/trailing
+    # `---` (and doubles) must never yield empty first/last pages.
+    # Mid-content breaks still paginate (documented contract).
+    ops: List[Tuple[str, float, float, str]] = []
     for op in draw:
+        if op[0] == "__break__" and (not ops or ops[-1][0] == "__break__"):
+            continue
+        ops.append(op)
+    while ops and ops[-1][0] == "__break__":
+        ops.pop()
+    def _page_has_content(page: List[Tuple[str, float, float, str]]) -> bool:
+        """True once real content (beyond title header + blanks) exists."""
+        try:
+            return any(bool(str(text or "").strip()) and abs(float(size) - _PDF_TITLE_SIZE) > 0.01
+                       for _, size, _, text in page)
+        except Exception:
+            return bool(page)
+
+    pages: List[List[Tuple[str, float, float, str]]] = [[]]
+    for op in ops:
         if op[0] == "__break__":
-            pages.append([])
+            # A break with no real content yet (title header, blanks,
+            # doubles) is decorative: skip it instead of orphaning the
+            # title or emitting blank pages.
+            if _page_has_content(pages[-1]):
+                pages.append([])
             continue
         _, size, _, _ = op
         leading = max(12.0, size * 1.35)
@@ -444,7 +470,10 @@ def create_pdf(title: str, markdown_text: str) -> str:
     this tool over create_markdown/create_doc: the named format wins,
     never substitute another format. Supported input:
     # / ## / ### headings, paragraphs, - bullets, 1. numbered lists,
-    > quotes, ``` code blocks, | tables |, --- page breaks.
+    > quotes, ``` code blocks, | tables |. A --- line forces a page
+    break: use it ONLY between genuinely separate pages, never as
+    decoration — short documents must contain no --- at all, or one
+    page of content spills across several near-empty pages.
 
     To convert an uploaded Word/PDF/text file: first read it with
     read_document/read_pdf, restructure the extracted text as lightweight
