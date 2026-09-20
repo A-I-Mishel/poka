@@ -225,6 +225,23 @@ def _apply_teaching_session(
             "then say Next to continue."
         )
     send_text += window_hint
+    # No-refetch note: when the verified window is complete inline (OK
+    # status, full-bodied, untruncated), teach from the text above instead
+    # of re-fetching the whole file. The read pointer stays for
+    # diagram/overflow pages named by other notes; overflow, thin
+    # (title-only), and truncated windows keep the fetch behavior.
+    try:
+        if (status == "OK"
+                and TEACHING_INLINE_OVERFLOW not in window_hint
+                and "title-only" not in window_hint
+                and "truncated to fit context" not in window_hint):
+            send_text += (
+                "\n\n[Teach ONLY from the verified window text above; do not "
+                "re-fetch the file and ignore the read pointer above unless "
+                "a later note names diagram/overflow pages.]"
+            )
+    except Exception:
+        logger.debug("teaching no-refetch note failed", exc_info=True)
     # Last window of a file: close with a compact section review.
     try:
         if status == "OK" and total and end >= total:

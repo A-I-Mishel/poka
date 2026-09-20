@@ -33,11 +33,21 @@ def _five_slide_deck():
     prs = Presentation()
     layout = prs.slide_layouts[6]  # blank: shapes fully ours
     bodies = [
-        "Alpha concept: search trees expand nodes level by level.",
-        "Beta concept: heuristics estimate distance to the goal.",
-        "Gamma concept: A star balances cost so far and estimate.",
-        "Delta concept: greedy search picks the best successor only.",
-        "Epsilon concept: plateaus trap local search without progress.",
+        "Alpha concept: search trees expand nodes level by level, "
+        "tracking visited states carefully to avoid repeat work and "
+        "wasted effort during traversal of large problem spaces.",
+        "Beta concept: heuristics estimate distance to the goal quickly, "
+        "guiding expansion toward promising regions first while keeping "
+        "the search focused and efficient throughout the whole process.",
+        "Gamma concept: A star balances cost so far and estimate together, "
+        "adding both terms into one evaluation function that guarantees "
+        "optimal paths when the heuristic never overestimates true cost.",
+        "Delta concept: greedy search picks the best successor only, "
+        "ignoring path history entirely, which runs fast but risks missing "
+        "better routes hidden behind temporarily worse-looking first moves.",
+        "Epsilon concept: plateaus trap local search without progress, "
+        "since flat regions offer no gradient signal at all, forcing random "
+        "restarts or sideways moves to escape the featureless dead zones.",
     ]
     for i, body in enumerate(bodies, start=1):
         slide = prs.slides.add_slide(layout)
@@ -95,3 +105,56 @@ def test_nonteaching_turn_keeps_full_deck_seed(tmp_path, monkeypatch):
     sent = seen["input"]
     assert "Alpha concept" in sent
     assert "Epsilon concept" in sent
+
+
+def _title_only_deck():
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    layout = prs.slide_layouts[6]
+    for i in ("Alpha", "Beta", "Gamma"):
+        slide = prs.slides.add_slide(layout)
+        box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5),
+                                       Inches(9), Inches(1))
+        box.text_frame.text = i
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def test_full_window_carries_no_refetch_note(tmp_path, monkeypatch):
+    from backend.chatflow import run_chat
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-norefetch")
+    meta = _upload(ctx, _five_slide_deck())
+    seen = {}
+    _fake_agent(monkeypatch, seen)
+    run_chat(ctx, "teach me this lecture slide by slide",
+             upload_ids=[meta.id])
+    sent = seen["input"]
+    assert "do not re-fetch" in sent
+    # Tool pointer stays so diagrams/overflow still work.
+    assert meta.id in sent
+
+
+def test_thin_window_keeps_fetch_behavior(tmp_path, monkeypatch):
+    from backend.chatflow import run_chat
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-thin")
+    meta = _upload(ctx, _title_only_deck())
+    seen = {}
+    _fake_agent(monkeypatch, seen)
+    run_chat(ctx, "teach me this lecture slide by slide",
+             upload_ids=[meta.id])
+    sent = seen["input"]
+    assert "title-only" in sent
+    assert "do not re-fetch" not in sent
+
+
+def test_system_prompt_softened_fetch_order():
+    import agent.prompts as prompts_mod
+
+    assert "without re-fetching" in prompts_mod.SYSTEM_PROMPT
+    # Pinned concept/format tokens survive the rewording.
+    assert "## Concept:" in prompts_mod.SYSTEM_PROMPT
