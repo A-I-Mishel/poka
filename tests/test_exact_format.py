@@ -41,3 +41,10 @@ def test_creation_binding_still_offers_both():
         "convert the question paper in pdf")}
     assert "create_pdf" in names
     assert "create_markdown" in names
+
+
+def test_no_placeholder_links_or_phantom_sources():
+    from agent.prompts import SYSTEM_PROMPT
+
+    assert "never invent placeholder links" in SYSTEM_PROMPT
+    assert "slide decks" in SYSTEM_PROMPT
