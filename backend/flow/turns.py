@@ -374,8 +374,23 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
     for position, attach in enumerate(attachments, start=1):
         send_text += attachment_hint(
             attach["kind"], attach["id"], attach["name"], position, total)
+    # Teaching containment: when this turn will take the teaching path
+    # (same predicates the gate below uses), do NOT seed the full-deck
+    # text hint — the teaching stage's window hint carries only the
+    # current slides, and the model must not see slides it was not
+    # shown. The tool pointer above stays so read_document/read_pdf_page
+    # keep working for diagrams and overflow files.
+    try:
+        _teaching_turn = bool(
+            _is_teaching_request(text)
+            or _is_teaching_continuation(text, current)
+            or _is_pace_feedback(text, current)
+        )
+    except Exception:
+        _teaching_turn = False
     for attach in attachments:
-        send_text += _attachment_text_hint(ctx, attach)
+        if not _teaching_turn:
+            send_text += _attachment_text_hint(ctx, attach)
 
     user_msg: Dict[str, Any] = {
         "role": "user",

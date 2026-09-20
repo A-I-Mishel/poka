@@ -175,6 +175,11 @@ def stream(req: schemas.SendRequest, request: Request,
                 obs_event("request.cancelled", user=user_id)
             except Exception:
                 logger.debug("obs_event cancelled failed", exc_info=True)
+            # Terminal event even here: a bare stream end surfaces in the
+            # UI as "Stream ended without a result" with no retry context.
+            yield "data: " + json.dumps(
+                {"type": "error",
+                 "detail": "Generation was stopped before finishing."}) + "\n\n"
             return
         if "error" in outcome:
             yield "data: " + json.dumps(

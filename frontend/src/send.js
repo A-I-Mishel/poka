@@ -106,6 +106,7 @@ function streamInto(bodyEl, onMeta) {
       var decoder = new TextDecoder();
       var buf = "";
       var result = null;
+      var gotText = false;
       var pendingText = null, raf = null;
       function flushToken() {
         raf = null;
@@ -116,6 +117,7 @@ function streamInto(bodyEl, onMeta) {
         }
       }
       function scheduleToken(t) {
+        if (t) gotText = true;
         pendingText = t;
         if (raf) return;
         raf = requestAnimationFrame(flushToken);
@@ -125,7 +127,16 @@ function streamInto(bodyEl, onMeta) {
           if (step.done) {
             if (raf) { cancelAnimationFrame(raf); raf = null; }
             if (pendingText !== null) { bodyEl.innerHTML = md(pendingText) + '<span class="caret"></span>'; pendingText = null; }
-            if (!result) throw new Error("Stream ended without a result.");
+            if (!result) {
+              if (gotText) {
+                // The stream died after tokens arrived (proxy cutoff on a
+                // long generation): keep the rendered partial answer and
+                // let the normal refresh run instead of wiping the bubble.
+                resolve({ partial: true });
+                return;
+              }
+              throw new Error("Stream ended without a result.");
+            }
             resolve(result);
             return;
           }
@@ -196,6 +207,7 @@ async function sendText(text, files, reuse) {
       if (meta && meta.active_tier) setActiveTier(meta.active_tier, true, meta.fallback && meta.fallback.reason);
     });
     if (result && result.warnings && result.warnings.length) toast(result.warnings[0]);
+    if (result && result.partial) toast("Response cut off — partial answer kept. Resend to continue.");
     if (result) rememberApprovalTokens(result.pending_approvals);
     if (result && result.active_tier) setActiveTier(result.active_tier, true, result.fallback && result.fallback.reason);
     await refreshChats();
