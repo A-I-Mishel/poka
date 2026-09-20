@@ -292,9 +292,10 @@ svg{display:block;flex-shrink:0}
   .composer-bar{gap:5px}
   .grow{display:none}
   .seg{order:1}
+  .attach-wrap{order:1}
   .toggle{height:32px;width:32px;padding:0;justify-content:center;gap:0}
   .toggle span{display:none}
-  .send{width:34px;height:32px;margin-left:auto}
+  .send{order:2;width:34px;height:32px;margin-left:auto}
   .bubble{max-width:100%;border-radius:12px}
   .msg.ai{gap:8px}
   .mark-p{display:none}
