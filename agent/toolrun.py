@@ -354,7 +354,8 @@ def _note_tier_failure(tier_name: Any, error: Any) -> None:
         logger.debug("tier failure cooldown record failed", exc_info=True)
 
 
-def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None) -> List[Any]:
+def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None,
+                          task_type: Optional[str] = None) -> List[Any]:
     """Typo-tolerant tool binding on normalized text (single source).
 
     Lazy-binds to keep small-context lanes (GitHub 8k) from 400s.
@@ -362,7 +363,9 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None) -> List[An
     "craete", "pyton") + verb canonicalization ("turn"->"create"),
     so keyword lists stay canonical — no hard-coded typo variants.
     tier_name optionally trims heavy lanes (MCP/code) on 8k tiers;
-    None keeps the default minimal set. Never raises; short tokens
+    None keeps the default minimal set. task_type optionally applies
+    trusted experience lessons (reorder only: proven tools first, never
+    added or removed). Never raises; short tokens
     stay exact-only ("do"/"to" != "doc").
     """
     try:
@@ -458,7 +461,55 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None) -> List[An
                 out = [t for t in out if getattr(t, "name", "") not in ("list_mcp_tools", "call_mcp_tool")]
     except Exception:
         logger.debug("tier-aware trim failed", exc_info=True)
+    try:
+        out = _apply_lesson_order(out, task_type)
+    except Exception:
+        logger.debug("lesson reorder failed", exc_info=True)
     return out if out else list(tools)
+
+
+def _apply_lesson_order(bound: List[Any], task_type: Optional[str]) -> List[Any]:
+    """Bias bound tools toward trusted experience lessons (never raises).
+
+    Moves proven-sequence tools for this task type to the front, in
+    sequence order; tools not in any lesson keep their relative order
+    after. Lessons never add tools (only bound ones reorder) and never
+    remove any — bounded blast radius by construction. Records an
+    applied metric only when the order actually changed.
+    """
+    try:
+        task = str(task_type or "").strip().lower()
+        if not task or not bound:
+            return bound
+        from services.context import get_current_user_id
+        from services.experience import get_trusted_sequences
+
+        sequences = get_trusted_sequences(task, get_current_user_id() or "")
+        if not sequences:
+            return bound
+        order: List[str] = []
+        for seq in sequences:
+            for name in seq or []:
+                if name and name not in order:
+                    order.append(str(name))
+        if not order:
+            return bound
+        rank = {name: i for i, name in enumerate(order)}
+        before = [getattr(t, "name", "") for t in bound]
+        front = [t for t in bound if getattr(t, "name", "") in rank]
+        rest = [t for t in bound if getattr(t, "name", "") not in rank]
+        front.sort(key=lambda t: rank.get(getattr(t, "name", ""), 0))
+        result = front + rest
+        if [getattr(t, "name", "") for t in result] != before:
+            try:
+                from services.obs import record_lesson_event as _emit
+                _emit("applied")
+            except Exception:
+                logger.debug("lesson applied metric failed", exc_info=True)
+        return result
+    except Exception:
+        logger.debug("lesson order failed", exc_info=True)
+        return bound
 
 
 HANDOFF_MAX_CHARS: int = 8000
@@ -578,6 +629,7 @@ def run_tool_loop(
     strict: bool = False,
     partial_state: Optional[Dict[str, Any]] = None,
     handoff: str = "",
+    task_type: Optional[str] = None,
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -771,7 +823,7 @@ def run_tool_loop(
         # filter_tools_for_hint). Inner wrapper kept so existing
         # call sites/tests calling the closure keep working.
         try:
-            return filter_tools_for_hint(hint)
+            return filter_tools_for_hint(hint, task_type=task_type)
         except Exception:
             logger.debug("tool filter failed; binding full set", exc_info=True)
             return list(tools)
@@ -823,7 +875,8 @@ def run_tool_loop(
             try:
                 try:
                     bound = round_llm.bind_tools(
-                        filter_tools_for_hint(user_input, tier_name=tier_name))
+                        filter_tools_for_hint(user_input, tier_name=tier_name,
+                                              task_type=task_type))
                 except Exception:
                     bound = round_llm.bind_tools(_filtered_tools(user_input))
             except BudgetExhausted:

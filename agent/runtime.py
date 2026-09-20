@@ -113,6 +113,45 @@ def _vision_degraded(request_id: str) -> Dict[str, Any]:
     }
 
 
+def _record_turn_episode(outcome: str, task_type: str, tools_used: Any,
+                         active_tier: str, budget: Any, started_at: float,
+                         fallback: Any = None, quality: str = "clean") -> None:
+    """Record one task episode for self-improvement mining (never raises).
+
+    Tiny and metadata-only (task shape, tool names, outcome, quality,
+    cost): never prompts, keys, file bytes, or user data. Quality marks
+    whether the turn needed rework (reflection rewrite / format repair
+    downgrades to polished); mining weights evidence accordingly.
+    Powers the experience ledger; mining and trust gating live in
+    services.experience.
+    """
+    try:
+        from services.experience import record_episode
+
+        try:
+            reason = ""
+            if isinstance(fallback, dict):
+                reason = str(fallback.get("reason", "") or "")[:64]
+        except Exception:
+            reason = ""
+        try:
+            cost = {
+                "llm": int(getattr(budget, "llm_calls", 0) or 0),
+                "tools": int(getattr(budget, "tool_calls", 0) or 0),
+                "rounds": int(getattr(budget, "rounds", 0) or 0),
+                "latency_ms": max(0, int((time.time() - float(started_at)) * 1000)),
+            }
+        except Exception:
+            cost = {}
+        record_episode(get_current_user_id() or "", task_type,
+                       tools_used, outcome,
+                       signals={"fallback": reason} if reason else {},
+                       cost=cost, tier=str(active_tier or ""),
+                       quality=quality)
+    except Exception:
+        logger.debug("episode record failed", exc_info=True)
+
+
 def _format_cooldown(seconds: Any) -> str:
     """Compact wait time for cooldown messaging ("~6h", "~55m", "~40s")."""
     try:
@@ -555,6 +594,9 @@ def answer_with_fallback(
                 task=task_type, llm_calls=budget.llm_calls,
                 tool_calls=budget.tool_calls,
             )
+            _record_turn_episode("degraded" if degraded else "ok",
+                                 task_type, [], active_tier, budget,
+                                 started_at, fallback=degraded)
             return {
                 "output": output_simple,
                 "active_tier": active_tier,
@@ -569,6 +611,8 @@ def answer_with_fallback(
         except (RuntimeError, BudgetExhausted) as e:
             logger.warning("req=%s failed: %s", request_id, e)
             obs_event("request.end", status="error", request_id=request_id, errkind=type(e).__name__)
+            _record_turn_episode("failed", task_type, [], "",
+                                 budget, started_at)
             raise RuntimeError(f"{e} (ref {request_id})") from e
 
     use_planning = deep_mode and task_type in ("multi_step", "creative")
@@ -661,6 +705,10 @@ def answer_with_fallback(
     tooled_tiers: List[str] = []
     final_tier_box: List[str] = []
     attempt_no: List[int] = [0]
+    # Reflection verdict for evidence quality: a rewritten draft means
+    # the turn needed rework (polished, half weight) rather than clean
+    # first-try success. Tier-agnostic boolean, no content stored.
+    reflected_box: List[bool] = []
 
     def _answer_tooled(tier_name: str, llm: BaseLanguageModel) -> str:
         # Shared with the planning stage: a tier that dies on the
@@ -695,6 +743,7 @@ def answer_with_fallback(
                     strict=is_strict_tier(tier_name),
                     partial_state=continuity,
                     handoff=handoff_text,
+                    task_type=task_type,
                 )
             else:
                 draft = run_tool_loop(
@@ -707,6 +756,7 @@ def answer_with_fallback(
                     strict=is_strict_tier(tier_name),
                     partial_state=continuity,
                     handoff=handoff_text,
+                    task_type=task_type,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
                 try:
@@ -725,6 +775,7 @@ def answer_with_fallback(
                     # attempt's tier — not whichever tier ran the draft.
                     draft = improved
                     final_tier[:] = [writer or tier_name]
+                    reflected_box[:] = [True]
             elif not final_tier:
                 final_tier[:] = [tier_name]
             if task_type == "research":
@@ -803,6 +854,10 @@ def answer_with_fallback(
             task=task_type, llm_calls=budget.llm_calls,
             tool_calls=budget.tool_calls, timeouts=budget.timeouts,
         )
+        _record_turn_episode("degraded" if degraded_tooled else "ok",
+                             task_type, used_tools, active_tier, budget,
+                             started_at, fallback=degraded_tooled,
+                             quality="polished" if reflected_box else "clean")
         return {
             "output": output,
             "active_tier": active_tier,
@@ -817,6 +872,10 @@ def answer_with_fallback(
     except (RuntimeError, BudgetExhausted) as e:
         logger.warning("req=%s failed: %s", request_id, e)
         obs_event("request.end", status="error", request_id=request_id, errkind=type(e).__name__)
+        # Partial names survive: the failed attempt's executed tools still
+        # count as evidence (oppose) for mining, instead of evaporating.
+        _record_turn_episode("failed", task_type, used_tools, "", budget,
+                             started_at)
         raise RuntimeError(f"{e} (ref {request_id})") from e
 
 

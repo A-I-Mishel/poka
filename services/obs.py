@@ -11,6 +11,7 @@ from services.metrics import (
     HTTP_REQUESTS_TOTAL,
     HTTP_ACTIVE_CONNECTIONS,
     IMAGE_BRIDGE_EVENTS,
+    LESSON_EVENTS,
     LLM_CALL_DURATION,
     LLM_TOKEN_USAGE,
     LLM_TIER_FALLBACKS,
@@ -229,6 +230,15 @@ def record_image_bridge(event: str) -> None:
         IMAGE_BRIDGE_EVENTS.labels(event=str(event or "unknown")).inc()
     except Exception:
         logger.debug("image bridge metric failed", exc_info=True)
+
+
+# ---- Experience ----
+def record_lesson_event(event: str) -> None:
+    """Count one self-improvement ledger event (episode/mined/trusted/applied)."""
+    try:
+        LESSON_EVENTS.labels(event=str(event or "unknown")).inc()
+    except Exception:
+        logger.debug("lesson metric failed", exc_info=True)
 
 
 # ---- Legacy event() compatibility ----

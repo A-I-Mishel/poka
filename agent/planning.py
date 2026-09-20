@@ -89,6 +89,7 @@ def plan_then_execute(
     strict: bool = False,
     partial_state: Optional[Dict[str, Any]] = None,
     handoff: str = "",
+    task_type: Optional[str] = None,
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
@@ -113,6 +114,7 @@ def plan_then_execute(
             on_progress, request_id, cancel, strict,
             partial_state=partial_state if isinstance(partial_state, dict) else None,
             handoff=handoff,
+            task_type=task_type,
         )
 
     if budget is not None:

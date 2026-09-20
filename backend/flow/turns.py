@@ -444,6 +444,16 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         if repaired:
             assistant_msg = dict(assistant_msg)
             assistant_msg["content"] = fixed
+            # Same-turn refinement, not a second episode: the turn
+            # completed but needed structural repair, so its evidence
+            # counts half instead of full (one turn, one episode).
+            try:
+                from services.experience import amend_last_episode
+
+                amend_last_episode(ctx.user_id, task_type,
+                                   assistant_msg.get("tools", []), "polished")
+            except Exception:
+                logger.debug("repair evidence amend failed", exc_info=True)
         _log_teaching_format(send_text, str(assistant_msg.get("content", "")),
                              tier, repaired=repaired, violations=len(left))
     except Exception:
@@ -695,9 +705,25 @@ def regenerate_chat(ctx: UserContext, index: int,
     if isinstance(assistant_msg, dict) and assistant_msg.get("failed") is True:
         # Regenerating a failed marker retries it IN PLACE (replace,
         # never append): otherwise the dead marker and the fresh answer
-        # render as phantom "versions" of each other.
+        # render as phantom "versions" of each other. No counter-evidence:
+        # the failure itself was already recorded as a failed episode.
         _replace_message_atomic(store, index, fresh_msg)
     else:
+        # Regenerating a COMPLETED answer is wholesale user rejection of
+        # that strategy: record counter-evidence against the original
+        # turn's tool sequence (task inferred deterministically; skip
+        # when unroutable rather than guessing). The fresh answer then
+        # records its own episode on completion as usual.
+        try:
+            from agent.router import rule_route
+            from services.experience import record_counter_evidence
+
+            orig_tools = assistant_msg.get("tools", []) if isinstance(assistant_msg, dict) else []
+            regen_task = rule_route(str(user_msg.get("content", "") or "")) if isinstance(user_msg, dict) else None
+            if orig_tools and regen_task:
+                record_counter_evidence(ctx.user_id, regen_task, orig_tools)
+        except Exception:
+            logger.debug("regen counter-evidence failed", exc_info=True)
         _append_turn_atomic(store, fresh_msg)
     return {
         "message": fresh_msg,

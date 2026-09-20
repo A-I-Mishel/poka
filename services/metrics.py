@@ -152,6 +152,14 @@ IMAGE_BRIDGE_EVENTS = Counter(
     registry=REGISTRY,
 )
 
+# ---- Experience (self-improvement ledger) ----
+LESSON_EVENTS = Counter(
+    f"{METRICS_PREFIX}_lesson_events_total",
+    "Self-improvement ledger events",
+    ["event"],  # "episode" | "mined" | "trusted" | "applied"
+    registry=REGISTRY,
+)
+
 # ---- Application Info ----
 APP_INFO = Info(f"{METRICS_PREFIX}_app", "Application metadata", registry=REGISTRY)
 
