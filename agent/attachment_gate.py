@@ -27,6 +27,18 @@ DOC_NOUNS = (
     "pdf", "document", "documents", "docx", "doc", "docs", "word",
     "pptx", "ppt", "powerpoint",
     "presentation", "deck", "slides", "slide", "spreadsheet", "csv",
+    # Exam-paper phrases (multi-word: substring match on normalized text,
+    # so "quesylon paper" still hits after typo correction). Bare "paper"
+    # stays OUT deliberately: "write a paper" is an essay request, not a
+    # file reference.
+    "question paper", "exam paper", "test paper", "q paper",
+)
+# Past-upload reference ("the question paper i uploaded", "the file i
+# uploaded"): the user points at history, not a new topic. Checked AFTER
+# new-topic intents so "play the song i uploaded" stays music.
+PAST_UPLOAD_SIGNALS = (
+    "i uploaded", "my upload", "uploaded file", "uploaded paper",
+    "uploaded image", "uploaded photo", "uploaded pdf", "uploaded doc",
 )
 VISION_EXPLICIT = (
     "this image", "that image", "the image", "this photo", "the photo",
@@ -228,7 +240,21 @@ def decide(
             return {"use_images": [], "use_docs": [], "clarify": None,
                     "reason": "new-intent"}
 
-        # 5b. Short continuation reuses most-recent file so "continue" /
+        # 5b. Past-upload reference ("do you have info on the paper i
+        # uploaded"): no type nouns fired above, but the user points at
+        # history. Single available modality reuses its most recent file;
+        # both modalities clarify (fail-closed, like ambiguous-multi).
+        if (imgs or dcs) and _signals(t, PAST_UPLOAD_SIGNALS):
+            if imgs and not dcs:
+                return {"use_images": list(imgs)[-1:], "use_docs": [],
+                        "clarify": None, "reason": "past-upload-image"}
+            if dcs and not imgs:
+                return {"use_images": [], "use_docs": list(dcs)[-1:],
+                        "clarify": None, "reason": "past-upload-doc"}
+            return {"use_images": [], "use_docs": [],
+                    "clarify": CLARIFY_TEXT, "reason": "past-upload-clarify"}
+
+        # 5c. Short continuation reuses most-recent file so "continue" /
         # "next" after a long doc answer keeps teaching instead of
         # restarting blind. Length-guarded: long new questions that
         # happen to contain "next" stay default-deny.
