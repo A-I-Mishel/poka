@@ -75,7 +75,9 @@ _HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
                  "read_pdf", "analyze_csv")
 
 # Vision-capable tier names (mirrors services.vision._VISION_TIERS).
-_VISION_TIER_NAMES = ("Gemini 3.6 Flash", "Gemini 3.5 Flash")
+# Cohere trails the Gemini lanes: backup only, and only when its
+# configured model is vision-capable (COHERE_MODEL=command-a-vision-*).
+_VISION_TIER_NAMES = ("Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere")
 
 
 # Bridge transcript wrapper (routing-neutral by construction — see note
@@ -100,11 +102,10 @@ def _vision_degraded(request_id: str) -> Dict[str, Any]:
         vision_why = "unavailable"
     return {
         "output": (
-            "I couldn't view that image — no vision-capable model (Gemini) "
+            "I couldn't view that image — no vision-capable model "
             f"answered ({vision_why}). Check that the image is <5MB/<25MP. "
-            "If Gemini is cooling down, please wait out the stated time "
-            "before resending — rapid retries extend the cooldown. "
-            "Switching to Gemini 3.6 Flash only helps once it has recovered."
+            "If a vision model is cooling down, please wait out the stated "
+            "time before resending — rapid retries extend the cooldown."
         ),
         "active_tier": "vision-unavailable",
         "task_type": "vision",
@@ -186,7 +187,7 @@ def _vision_unavailable_reason() -> str:
         states = [e for e in snap
                   if isinstance(e, dict) and e.get("name") in _VISION_TIER_NAMES]
         if states and all(not s.get("configured", True) for s in states):
-            return "not configured (GEMINI_API_KEY missing on server)"
+            return "not configured (no vision-model key on server)"
         cooling = [s for s in states if s.get("skipped")]
         if cooling:
             remaining = 0.0

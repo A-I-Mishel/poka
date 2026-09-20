@@ -27,7 +27,10 @@ VISION_EXTS = frozenset({"png", "jpg", "jpeg", "webp", "gif", "bmp"})
 
 # Tier names known to accept image content blocks. Unknown tiers are
 # treated as text-only so we never send images into the void.
-_VISION_TIERS = ("gemini",)
+# Cohere is backup-only: it trails the Gemini lanes in cascade order and
+# only sees images when its configured model is vision-capable
+# (COHERE_MODEL=command-a-vision-07-2025); the default Command A is text.
+_VISION_TIERS = ("gemini", "cohere")
 
 
 def vision_supported_tier(tier_name: str) -> bool:

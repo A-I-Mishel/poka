@@ -22,9 +22,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Converter tiers: Gemini-only (product decision — vision stays single
-# provider; the bridge multiplies its quota, it does not diversify it).
-_CONVERTER_TIERS = ("Gemini 3.6 Flash", "Gemini 3.5 Flash")
+# Converter tiers in order: Gemini lanes first, Cohere as backup.
+# Cohere only converts when its configured model is vision-capable
+# (COHERE_MODEL=command-a-vision-07-2025); otherwise its attempt fails
+# fast into the next tier like any other vision miss.
+_CONVERTER_TIERS = ("Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere")
 
 # Surrogate cap: transcripts must fit the context budget next to real
 # tool output (CTX_EXTERNAL_TOKENS). Longer notes truncate with a mark.

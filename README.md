@@ -69,7 +69,7 @@ python -m pytest tests/ -q
 | `GITHUB_MODELS_TOKEN` | no | GitHub Models free tier (PAT with `models:read`) |
 | `MISTRAL_API_KEY` | no | Mistral free evaluation tier (no card) |
 | `NVIDIA_API_KEY` | no | NVIDIA NIM free trial tier (NGC key, no card) |
-| `COHERE_API_KEY` | no | Cohere Command tier (direct key, OpenAI-compatible endpoint) |
+| `COHERE_API_KEY` | no | Cohere Command tier (direct key, OpenAI-compatible endpoint). Set `COHERE_MODEL=command-a-vision-07-2025` to also use it as backup vision lane behind Gemini |
 | `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
 | `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
 | `PLUTO_USER_ID` | no | Pin a stable local/dev identity |
