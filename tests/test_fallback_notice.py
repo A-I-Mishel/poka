@@ -44,6 +44,7 @@ def test_failure_kind_maps_to_reason():
     assert _friendly_reason("rate_limit") == "rate-limited"
     assert _friendly_reason("timeout") == "timed out"
     assert _friendly_reason("auth") == "unavailable (auth)"
+    assert _friendly_reason("capacity") == "capacity-limited"
     assert _friendly_reason("bogus-kind") == "temporarily unavailable"
 
 

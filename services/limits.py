@@ -236,10 +236,15 @@ SLOW_TIER_LATENCY_SECONDS: float = 45.0
 # Tier cooldowns (agent cascade): driven by classify_provider_error kinds.
 # Timeouts are congestion, not outage (brief cool, 2nd consecutive strike);
 # quota errors mean hours of darkness (daily resets — no 10-minute re-probes);
-# auth/invalid config never heals by retrying (long); server/network/unknown
+# capacity errors (bare service-unavailable, no quota evidence) mean minutes
+# of outage: longer than transient so outage nights stop hammering, far
+# shorter than quota so recovery is picked up promptly. Provider-supplied
+# delays (Retry-After / retryDelay) override downward in both paths.
+# Auth/invalid config never heals by retrying (long); server/network/unknown
 # are transient (default window).
 TIER_COOLDOWN_TIMEOUT_SECONDS: float = 60.0
 TIER_COOLDOWN_TRANSIENT_SECONDS: float = 600.0
+TIER_COOLDOWN_CAPACITY_SECONDS: float = 1800.0
 TIER_COOLDOWN_QUOTA_SECONDS: float = 6 * 3600.0
 TIER_COOLDOWN_PERMANENT_SECONDS: float = 3600.0
 TIMEOUT_STRIKES_BEFORE_COOL: int = 2

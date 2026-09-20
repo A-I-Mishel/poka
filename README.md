@@ -128,7 +128,7 @@ Sessions work in both auth modes.
 ## Model configuration
 
 Role-based tier tables (first live tier wins, failed tiers cool down).
-Final answers use the synthesis table (Gemini-led, no 8B-class tiers);
+Final answers use the synthesis table (Groq-led, no 8B-class tiers);
 dumb calls (classification, summaries, planning, reflection) use the
 cheap table; the full cascade below is the escape hatch when synthesis
 is down (answers then carry a degraded marker):
@@ -168,7 +168,7 @@ vocabulary with `python scripts/mine_fallthrough.py` or
 `GET /api/ops/router` (scrubbed, no PII) — grow the synonym table,
 never ad-hoc keyword branches.
 
-Answer quality: synthesis stays Gemini-led and quality-first (weak
+Answer quality: synthesis stays Groq-led and volume-first (weak
 lanes — Mistral, Gemma 26B, Ling Fin, Laguna, Free Router — answer
 only when quality tiers are down, marked `fallback: degraded`);
 grounding applies to every tier and synthesis; research drafts earn

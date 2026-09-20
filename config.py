@@ -464,24 +464,29 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
 
 
 # Role-based tier tables (quota architecture): synthesis for final answers
-# (quality-first, Gemini-led, no 8B-class tiers); cheap for dumb calls
+# (volume-first, Groq-led, no 8B-class tiers); cheap for dumb calls
 # (classification, summaries, planning, reflection); the full cascade
 # remains the escape hatch when synthesis is down (answers then carry a
 # degraded marker). Tables hold (name, getter) pairs like TIER_GETTERS.
+# Gemini stays second/third as the quality/vision escalation lane: the
+# cascade reaches it automatically when Groq fails, and an explicit
+# user tier pick still jumps the queue. Groq's free pool (1K RPD / 200K
+# TPD) absorbs normal traffic; Gemini's 20 RPD/model pool is reserved
+# for vision conversion and genuine Groq failures.
 SMALL_FINAL_TIERS = frozenset({"NVIDIA"})  # 8B-class: never final answers
 # Weak final-answer tiers: small or nondeterministic lanes that answer only
 # when quality tiers are down. Runtime marks their answers degraded so the
 # UI can be honest ("quality models unavailable"). Shape of SYNTHESIS_TIERS
-# is unchanged (see test_role_tables_shape); order stays quality-first with
+# is unchanged (see test_role_tables_shape); order stays volume-first with
 # these lanes last.
 WEAK_FINAL_TIERS = frozenset({
     "NVIDIA", "Mistral", "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
     "OpenRouter Laguna", "OpenRouter Free Router",
 })
 SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
+    ("Groq", get_tier_groq_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
-    ("Groq", get_tier_groq_llm),
     ("GitHub Models", get_tier_github_models_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),

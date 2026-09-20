@@ -18,6 +18,7 @@ import agent  # package-attr routing: tier-table doubles on agent stay effective
 from agent.budget import BudgetExhausted, TurnCancelled
 from services.limits import (
     SLOW_TIER_LATENCY_SECONDS,
+    TIER_COOLDOWN_CAPACITY_SECONDS,
     TIER_COOLDOWN_PERMANENT_SECONDS,
     TIER_COOLDOWN_QUOTA_SECONDS,
     TIER_COOLDOWN_TIMEOUT_SECONDS,
@@ -29,7 +30,8 @@ from services.limits import (
 # live model (cool-down still expires so recovered tiers return).
 # Cool-down length is driven by the classify_provider_error kind:
 # timeouts are congestion (brief, 2nd consecutive strike); quota errors
-# mean hours of darkness; auth/invalid config never heals by retrying.
+# mean hours of darkness; capacity errors (bare outage, no quota
+# evidence) mean minutes; auth/invalid config never heals by retrying.
 SKIP_AFTER_FAILS: int = 1
 _TIER_FAILS: Dict[str, int] = {}
 _TIER_TIMEOUTS: Dict[str, int] = {}
@@ -58,6 +60,7 @@ def _friendly_reason(kind: str) -> str:
         "auth": "unavailable (auth)",
         "invalid": "unavailable (rejected)",
         "server": "temporarily unavailable",
+        "capacity": "capacity-limited",
         "network": "unreachable",
     }.get(kind, "temporarily unavailable")
 
@@ -120,7 +123,57 @@ def _retry_after_seconds(error: Any) -> Optional[float]:
                 return parsed
         except (TypeError, ValueError):
             continue
+    # Google JSON bodies carry the delay instead of (or as well as) the
+    # header: {"error": {..., "details": [{"retryDelay": "49s"}]}}.
+    try:
+        for match in re.finditer(r'"retryDelay"\s*:\s*"?(\d+(?:\.\d+)?)\s*s?"?', str(error or "")):
+            try:
+                parsed = float(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+    except Exception:
+        logger.debug("retryDelay body parse failed", exc_info=True)
     return None
+
+
+# Structured provider reason tokens, matched against flattened error
+# text (non-alphanumerics stripped, lowercased) so camelCase, SNAKE,
+# and quoted-JSON variants all hit uniformly. Quota reasons prove
+# quota exhaustion; capacity reasons prove outage WITHOUT quota
+# evidence. "overloaded" is capacity-only corroboration here: Google
+# emits it on both 429s (which already carry quota language) and bare
+# 503s (which must not inherit a 6-hour quota ban).
+_QUOTA_REASONS = (
+    "ratelimitexceeded",
+    "quotaexceeded",
+    "resourceexhausted",
+)
+_CAPACITY_REASONS = (
+    "serviceunavailable",
+    "overloaded",
+)
+
+
+def _provider_reason(error: Any) -> str:
+    """Structured failure reason from provider payloads (never raises).
+
+    Returns "quota", "capacity", or "". Quota language anywhere in the
+    payload wins over capacity language (a 503 body quoting quota is
+    quota exhaustion, not an outage).
+    """
+    try:
+        flat = re.sub(r"[^a-z0-9]", "", str(error or "").lower())
+        if not flat:
+            return ""
+        if any(token in flat for token in _QUOTA_REASONS):
+            return "quota"
+        if any(token in flat for token in _CAPACITY_REASONS):
+            return "capacity"
+        return ""
+    except Exception:
+        return ""
 
 
 def classify_provider_error(error: Any) -> Tuple[str, bool]:
@@ -148,16 +201,20 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
         or ("reasoning" in lowered and "signature" in lowered)
     ):
         return ("unknown", True)
+    # Structured provider evidence first: a quota or capacity reason in
+    # the payload outranks substring guessing (a 503 body quoting quota
+    # is quota exhaustion; "overloaded" alone is outage, never quota).
     # Prefer parsed int status; use \b-bounded regex for text fallbacks so
     # "1400"/"4000" don't misclassify as 400 (1h invalid cooldown).
+    reason = _provider_reason(error)
     if (
         status == 429
+        or reason == "quota"
         or re.search(r"\b429\b", text) is not None
         or "quota" in lowered
         or "rate limit" in lowered
         or "freeusagelimit" in lowered
         or "resource_exhausted" in lowered
-        or "overloaded" in lowered
         or "usage limit" in lowered
         or "usagelimit" in lowered
         or re.search(r"\b529\b", text) is not None
@@ -175,10 +232,17 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
     ):
         return ("auth", False)
     if (
-        status in (500, 502, 503, 504)
+        reason == "capacity"
+        or status == 503
+        or re.search(r"\b503\b", text) is not None
+    ):
+        # Bare service-unavailable / capacity outage WITHOUT quota
+        # evidence: intermediate path, never the 6-hour quota ban.
+        return ("capacity", True)
+    if (
+        status in (500, 502, 504)
         or re.search(r"\b500\b", text) is not None
         or re.search(r"\b502\b", text) is not None
-        or re.search(r"\b503\b", text) is not None
         or re.search(r"\b504\b", text) is not None
         or "internal" in lowered
         or "unavailable" in lowered
@@ -217,21 +281,36 @@ def _record_tier_success(name: str) -> None:
         _TIER_SKIP_UNTIL.pop(name, None)
 
 
+def _provider_delay(window: float, error: Any = None) -> float:
+    """Provider-supplied delay when shorter than the window, else the window.
+
+    Covers Retry-After headers and retryDelay JSON bodies (parsed by
+    _retry_after_seconds): a provider asking for 2 minutes beats both
+    the 6-hour quota blanket and the 30-minute capacity blanket.
+    """
+    try:
+        retry_after = _retry_after_seconds(error)
+        if retry_after is not None and 0 < retry_after < window:
+            return retry_after
+    except Exception:
+        logger.debug("provider delay parse failed", exc_info=True)
+    return window
+
+
 def _cooldown_for_kind(kind: str, error: Any = None) -> float:
     """Cool-down window for one classify_provider_error kind.
 
-    Rate-limit windows prefer the provider's own Retry-After when it is
+    Rate-limit windows prefer the provider's own delay when it is
     shorter than the blanket quota cool-down, so a 60s-per-provider 429
-    recovers the tier in a minute instead of hours.
+    recovers the tier in a minute instead of hours. Capacity windows do
+    the same against the shorter capacity blanket.
     """
     if kind == "timeout":
         return TIER_COOLDOWN_TIMEOUT_SECONDS
     if kind == "rate_limit":
-        window: float = TIER_COOLDOWN_QUOTA_SECONDS
-        retry_after = _retry_after_seconds(error)
-        if retry_after is not None and 0 < retry_after < window:
-            return retry_after
-        return window
+        return _provider_delay(TIER_COOLDOWN_QUOTA_SECONDS, error)
+    if kind == "capacity":
+        return _provider_delay(TIER_COOLDOWN_CAPACITY_SECONDS, error)
     if kind in ("auth", "invalid"):
         return TIER_COOLDOWN_PERMANENT_SECONDS
     return TIER_COOLDOWN_TRANSIENT_SECONDS
@@ -436,7 +515,13 @@ def reset_tier_state(name: Optional[str] = None) -> int:
 def _all_skipped_permanent(
     tiers: Sequence[Tuple[str, Callable[[], Optional[BaseLanguageModel]]]],
 ) -> bool:
-    """True when every tier is cooled for quota/auth/invalid (hammer would burn quota)."""
+    """True when every tier is cooled for quota/auth/invalid (hammer would burn quota).
+
+    Capacity outages stay hammer-capable by design: they recover in
+    minutes, and the capacity cool-down itself (not this gate) is what
+    stops outage-night hammering — a recovered tier answers immediately
+    on expiry instead of waiting out a quota-scale ban.
+    """
     for name, _ in tiers:
         if not _tier_skipped(name):
             return False

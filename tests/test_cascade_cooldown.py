@@ -23,6 +23,7 @@ from agent.cascade import (
     classify_provider_error,
 )
 from services.limits import (
+    TIER_COOLDOWN_CAPACITY_SECONDS,
     TIER_COOLDOWN_PERMANENT_SECONDS,
     TIER_COOLDOWN_QUOTA_SECONDS,
     TIER_COOLDOWN_TIMEOUT_SECONDS,
@@ -96,6 +97,14 @@ def test_transient_kinds_keep_default_window():
         assert _remaining(name) == pytest.approx(TIER_COOLDOWN_TRANSIENT_SECONDS, abs=5.0)
 
 
+def test_capacity_cools_for_minutes_not_hours():
+    _record_tier_failure("c", "capacity")
+    assert _tier_skipped("c")
+    assert _remaining("c") == pytest.approx(TIER_COOLDOWN_CAPACITY_SECONDS, abs=10.0)
+    assert _remaining("c") > TIER_COOLDOWN_TRANSIENT_SECONDS
+    assert _remaining("c") < TIER_COOLDOWN_QUOTA_SECONDS
+
+
 def test_cooled_tier_leaves_usable_set():
     tiers = [("a", lambda: "A"), ("b", lambda: "B")]
     _record_tier_failure("a", "server")
@@ -128,7 +137,7 @@ def test_classify_uses_status_code_attribute():
     # No substring to match — solely the 429 status.
     assert classify_provider_error(_HttpError(status_code=429))[0] == "rate_limit"
     assert classify_provider_error(_HttpError(status_code=401))[0] == "auth"
-    assert classify_provider_error(_HttpError(status_code=503))[0] == "server"
+    assert classify_provider_error(_HttpError(status_code=503))[0] == "capacity"
     assert classify_provider_error(_HttpError(status_code=408))[0] == "timeout"
 
 
