@@ -267,6 +267,51 @@ def _content_hash(content: str) -> str:
     return hashlib.sha1(content.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()
 
 
+_IDENTITY_SUBJECTS = ("your name", "call you", "about yourself",
+                      "your identity", "who are you")
+_IDENTITY_ASKS = ("?", "could you", "please", "tell me", "let me know",
+                  "what should", "may i")
+
+
+def _assistant_asked_identity(text: Any) -> bool:
+    """True when an assistant message asks the user for identity.
+
+    Conservative: needs both an identity subject and a question/request
+    shape, so statements like "I don't know your name" do not qualify.
+    """
+    if not isinstance(text, str):
+        return False
+    lowered = text.lower()
+    return (any(s in lowered for s in _IDENTITY_SUBJECTS)
+            and any(a in lowered for a in _IDENTITY_ASKS))
+
+
+def _bare_name_reply(text: Any) -> Optional[str]:
+    """Return the name when a message is just a name, else None.
+
+    Only 1-2 alphabetic tokens within a length cap, excluding guard
+    words. A bare reply is meaningless alone ("hey", "ok"); it only
+    becomes a name candidate next to an identity question (checked by
+    the caller via adjacency), so this helper judges the shape only.
+    """
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    if not stripped or len(stripped) > 24:
+        return None
+    parts = stripped.split()
+    if not 1 <= len(parts) <= 2:
+        return None
+    lowered = [p.lower() for p in parts]
+    if not all(p.isalpha() for p in parts):
+        return None
+    if stripped.lower() in _NON_NAME_WORDS:
+        return None
+    if any(p in _NON_NAME_WORDS for p in lowered):
+        return None
+    return stripped.title()[:120]
+
+
 def _fallback_key(fact: Dict[str, Any]) -> str:
     """Deterministic canonical key for a fact (fail-closed fallback).
 
@@ -443,7 +488,7 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
     already = len(processed)
 
     new_facts = 0
-    for msg in messages:
+    for idx, msg in enumerate(messages):
         if not isinstance(msg, dict) or msg.get("role") != "user":
             continue
         content = msg.get("content", "")
@@ -454,7 +499,24 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
             continue
         seen.add(digest)
         processed.append(digest)
-        for fact in extract_facts_from_message(content):
+        msg_facts = extract_facts_from_message(content)
+        if not any(f.get("type") == "name" for f in msg_facts):
+            # Bare-name reply: a lone name ("mishel") is only meaningful
+            # directly after the assistant asked for identity. Adjacency
+            # is positional (no gap turns); confidence stays honestly low.
+            prev = messages[idx - 1] if idx > 0 else None
+            prev_content = prev.get("content") if isinstance(prev, dict) \
+                and prev.get("role") == "assistant" else None
+            bare = _bare_name_reply(content)
+            if bare is not None and _assistant_asked_identity(prev_content):
+                msg_facts.append({
+                    "type": "name",
+                    "value": bare,
+                    "polarity": "positive",
+                    "confidence": "low",
+                    "source": "inferred",
+                })
+        for fact in msg_facts:
             fact["date"] = utcnow_iso()
             norm = None
             if callable(normalize):
