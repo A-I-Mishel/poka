@@ -87,6 +87,8 @@ def plan_then_execute(
     cheap_tiers: Optional[Sequence] = None,
     cancel: Optional[Callable[[], bool]] = None,
     strict: bool = False,
+    partial_state: Optional[Dict[str, Any]] = None,
+    handoff: str = "",
 ) -> str:
     """Two-phase handling: write a plan first, then execute it with tools.
 
@@ -109,6 +111,8 @@ def plan_then_execute(
             used_tools, used_sources, project_context,
             llm_provider, tier_trace, on_token, on_reset, final_tier,
             on_progress, request_id, cancel, strict,
+            partial_state=partial_state if isinstance(partial_state, dict) else None,
+            handoff=handoff,
         )
 
     if budget is not None:
@@ -162,7 +166,18 @@ def plan_then_execute(
             "Expected output: one sentence with the average.\n\n"
             f"Request: {user_input}\nPlan:"
         )
-        plan_text = _ask_plan_default(plan_prompt)
+        # Retry reuse: a stored plan from a failed attempt of THIS turn
+        # (same request) skips the planning call — one fewer model call
+        # burned and the same steps preserved for the replacement model.
+        plan_text = ""
+        try:
+            if isinstance(partial_state, dict):
+                plan_text = str(partial_state.get("plan_text", "") or "").strip()
+        except Exception:
+            plan_text = ""
+            logger.debug("stored plan read failed", exc_info=True)
+        if not plan_text:
+            plan_text = _ask_plan_default(plan_prompt)
         unknown = _unknown_plan_tools(plan_text)
         if unknown:
             # One bounded replan naming only real tools, then proceed
@@ -177,6 +192,11 @@ def plan_then_execute(
         # Bounded before injection into the execution prompt: a runaway
         # plan must not crowd the context budget.
         plan_text = plan_text[:PLAN_MAX_CHARS]
+        try:
+            if isinstance(partial_state, dict):
+                partial_state["plan_text"] = plan_text
+        except Exception:
+            logger.debug("plan stash failed", exc_info=True)
         execution_prompt = (
             f"Follow this plan to complete the request:\n{plan_text}\n\n"
             f"Original request: {user_input}\n\n"

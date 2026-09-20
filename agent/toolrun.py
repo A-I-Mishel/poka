@@ -461,6 +461,61 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None) -> List[An
     return out if out else list(tools)
 
 
+HANDOFF_MAX_CHARS: int = 8000
+
+
+def build_continuity_handoff(ledger: Optional[Dict[str, Any]]) -> str:
+    """Render a bounded retry handoff from attempt-ledger state.
+
+    Tells the replacement model what a failed attempt already verified
+    so it continues instead of redoing (or re-asking for) completed
+    work: tool results, consulted sources, and any draft. Empty ledger
+    yields "" (today's cold retry). Never raises.
+    """
+    try:
+        if not isinstance(ledger, dict):
+            return ""
+        # Sources and draft are small and load-bearing (citations must
+        # survive); the results transcript yields budget to them first.
+        suffix_parts: List[str] = []
+        sources = [s for s in (ledger.get("sources") or [])
+                   if isinstance(s, dict)]
+        if sources:
+            lines = []
+            for s in sources[:6]:
+                title = str(s.get("title", "") or "").strip()[:100]
+                url = str(s.get("url", "") or "").strip()[:200]
+                lines.append(f"- {title} — {url}" if url else f"- {title}")
+            if lines:
+                suffix_parts.append(
+                    "Previously consulted sources (cite them, do not re-fetch):\n"
+                    + "\n".join(lines))
+        draft = str(ledger.get("last_text", "") or "").strip()
+        if draft:
+            suffix_parts.append(
+                "A previous attempt drafted this (verify or reuse it rather "
+                f"than restarting):\n{draft}")
+        suffix = ("\n\n".join(suffix_parts) + "\n" if suffix_parts else "")
+        results = str(ledger.get("tool_results_text", "") or "").strip()
+        results_budget = max(500, HANDOFF_MAX_CHARS - len(suffix) - 400)
+        head = ("[Turn continuity: a previous model attempt failed partway. "
+                "Continue its work below.]\n")
+        body_parts: List[str] = []
+        if results:
+            body_parts.append(
+                "Already-completed tool work this turn (do NOT redo it and "
+                "do NOT ask the user to re-supply its inputs — reuse these "
+                f"verified results):\n{results[:results_budget]}")
+        if suffix_parts:
+            body_parts.extend(suffix_parts)
+        if not body_parts:
+            return ""
+        return (head + "\n\n".join(body_parts))[:HANDOFF_MAX_CHARS]
+    except Exception:
+        logger.debug("handoff render failed", exc_info=True)
+        return ""
+
+
 def run_tool_loop(
     llm_instance: BaseLanguageModel,
     user_input: str,
@@ -482,6 +537,8 @@ def run_tool_loop(
     request_id: Optional[str] = None,
     cancel: Optional[Callable[[], bool]] = None,
     strict: bool = False,
+    partial_state: Optional[Dict[str, Any]] = None,
+    handoff: str = "",
 ) -> str:
     """Run one request through an explicit tool loop with clean history.
 
@@ -525,6 +582,14 @@ def run_tool_loop(
     can show "working" activity while no answer tokens flow yet.
     It never raises into the loop (failures are swallowed).
 
+    When partial_state (a dict) is provided, the loop writes through
+    Pluto-owned continuity state on every step: collected tool-result
+    text, source records, tool names, and the latest draft text — all
+    capped. If this attempt later fails, the OUTER cascade retry reads
+    the ledger and hands Model B the verified results instead of
+    forcing a cold redo (the reported "Model B forgets everything"
+    defect). Nothing here changes what is returned on success.
+
     When final_tier is provided, the tier that produced the returned
     answer is recorded into it (single-element replace): the round
     tier for direct answers, the last round's tier for final
@@ -559,6 +624,18 @@ def run_tool_loop(
         *fitted_history,
     ]
     search_blob_texts: List[str] = []
+    ledger: Dict[str, Any] = partial_state if isinstance(partial_state, dict) else {}
+
+    def _ledger_write() -> None:
+        """Write-through continuity state (bounded, never raises)."""
+        try:
+            ledger["tool_results_text"] = "\n".join(last_results).strip()[:6000]
+            ledger["tools"] = [t for t in (used_tools or []) if isinstance(t, str)][:20]
+            ledger["sources"] = [dict(s) for s in (used_sources or [])
+                                 if isinstance(s, dict)][:6]
+            ledger["last_text"] = str(last_text or "")[:2000]
+        except Exception:
+            logger.debug("continuity ledger write failed", exc_info=True)
 
     def _record_tool(name: Any) -> None:
         """Note an executed tool for provenance (known tools only)."""
@@ -644,6 +721,11 @@ def run_tool_loop(
             )
         )
     messages.append(HumanMessage(content=user_input))
+    if handoff and str(handoff).strip():
+        # Retry after a failed attempt: verified prior results ride as
+        # their own message (tool binding still keys on user_input only,
+        # so handoff vocabulary cannot perturb tool choice).
+        messages.append(HumanMessage(content=str(handoff).strip()[:8000]))
 
     def _filtered_tools(hint: str) -> List[Any]:
         # Single funnel: centralized typo-tolerant binding (see
@@ -741,6 +823,7 @@ def run_tool_loop(
         if text:
             last_text = text
             last_text_tier = round_tier
+            _ledger_write()
         tool_calls: List[Any] = list(getattr(response, "tool_calls", None) or [])
         # Fallback: leaked JSON in content (free-tier tool-calling failure)
         if not tool_calls:
@@ -803,6 +886,7 @@ def run_tool_loop(
                 "[budget] Tool budget exhausted; no further tool calls. "
                 "Synthesize from results so far."
             )
+            _ledger_write()
             break
         for result_text in last_results:
             _note_search(result_text)
@@ -811,7 +895,9 @@ def run_tool_loop(
                 "[budget] External content budget exhausted; "
                 "synthesize from results so far."
             )
+            _ledger_write()
             break
+        _ledger_write()
         messages.append(
             HumanMessage(
                 content=(

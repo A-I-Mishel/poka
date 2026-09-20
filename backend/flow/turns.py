@@ -6,8 +6,10 @@ backend.flow.stages, the teaching stage in backend.flow.teaching.
 
 from typing import (Any, Dict, List, Optional, Tuple)
 import logging
+from fastapi import HTTPException
 from langchain_core.messages import BaseMessage, HumanMessage
 import agent
+from agent.budget import BudgetExhausted, TurnCancelled
 from agent.executor import ExecutorBusyError
 from services.limits import MAX_CHAT_TITLE_CHARS, MAX_DISPLAY_NAME_CHARS
 from services.storage import (is_valid_id, new_conversation_id)
@@ -413,11 +415,27 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             "corrections": [],
         }
 
-    assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
-        ctx, send_text, prior_history, prior_raw, vision_ids,
-        memory_notes, project_context, bool(deep_mode),
-        bool(force_search), active_tier, on_token, on_reset,
-        on_progress, cancel)
+    try:
+        assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
+            ctx, send_text, prior_history, prior_raw, vision_ids,
+            memory_notes, project_context, bool(deep_mode),
+            bool(force_search), active_tier, on_token, on_reset,
+            on_progress, cancel)
+    except TurnCancelled:
+        # Client went away: nobody left to read a marker. Re-raise
+        # untouched (never persisted, never cooled, never salvaged).
+        raise
+    except (BudgetExhausted, RuntimeError, HTTPException) as e:
+        # Failed turns used to persist NOTHING — not even the user's
+        # message — so any retry started cold and Model B redid (or
+        # lost) Model A's work. Persist user + failed marker instead:
+        # regenerating the marker retries in place with full history.
+        # Rate-limit rejections happen before user_msg exists, so they
+        # never reach here; validation errors (ValueError) are the
+        # caller's to fix, not to retry.
+        _append_turn_atomic(store, user_msg, _failed_turn_message(
+            e, bool(force_search), bool(deep_mode)))
+        raise
 
     try:
         fixed, repaired, left = _maybe_repair_teaching_turn(
@@ -449,6 +467,40 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
     }
 
 
+def _failed_turn_reason(error: Any) -> str:
+    """Short user-facing cause for a failed-turn marker (never raises)."""
+    try:
+        if isinstance(error, BudgetExhausted):
+            return "the request hit its time/call limits partway"
+        if isinstance(error, HTTPException):
+            try:
+                code = int(getattr(error, "status_code", 0) or 0)
+            except Exception:
+                code = 0
+            if code == 503:
+                return "the server was busy"
+            if code == 429:
+                return "a rate limit was hit"
+            return "the server had trouble"
+        return "all models were unavailable"
+    except Exception:
+        return "all models were unavailable"
+
+
+def _failed_turn_message(error: Any, force_search: bool, deep_mode: bool) -> Dict[str, Any]:
+    """Recoverable failed-turn marker (user request stays retryable)."""
+    return {
+        "role": "assistant",
+        "content": (
+            f"I couldn't complete that request ({_failed_turn_reason(error)}). "
+            "Your message is saved — tap Regenerate to retry it in place, "
+            "or send a follow-up to continue."),
+        "time": utcnow_iso(),
+        "failed": True,
+        **_assistant_meta([], [], bool(force_search), bool(deep_mode), "", None),
+    }
+
+
 def _append_turn_atomic(store: Any, *msgs: Dict[str, Any]) -> None:
     """Append messages atomically (read-modify-write under lock)."""
     clean = [dict(m) for m in msgs if isinstance(m, dict)]
@@ -472,6 +524,49 @@ def _append_turn_atomic(store: Any, *msgs: Dict[str, Any]) -> None:
         # Fallback for test doubles without _mutate_chats.
         chats, current, _w = _load_state(store)
         store.save_chats(chats, list(current) + clean)
+
+
+def _replace_message_atomic(store: Any, index: int, msg: Dict[str, Any]) -> None:
+    """Replace the message at index atomically (regenerate-in-place)."""
+    clean = dict(msg) if isinstance(msg, dict) else {}
+
+    def _is_failed_slot(msgs: Any) -> bool:
+        try:
+            return (isinstance(index, int) and isinstance(msgs, list)
+                    and 0 <= index < len(msgs)
+                    and isinstance(msgs[index], dict)
+                    and msgs[index].get("role") == "assistant"
+                    and msgs[index].get("failed") is True)
+        except Exception:
+            return False
+
+    def _fn(data: Any) -> Any:
+        if not isinstance(data, dict):
+            data = {}
+        current = data.get("current", [])
+        if not isinstance(current, list):
+            current = []
+        if _is_failed_slot(current):
+            updated = list(current)
+            updated[index] = clean
+            data["current"] = updated
+        else:
+            # Slot shifted or healed under us (concurrent turn): append
+            # rather than overwrite a live answer or drop the fresh one.
+            data["current"] = list(current) + ([clean] if clean else [])
+        return data
+
+    try:
+        store._mutate_chats(_fn)
+    except AttributeError:
+        # Fallback for test doubles without _mutate_chats.
+        chats, current, _w = _load_state(store)
+        if _is_failed_slot(current):
+            current = list(current)
+            current[index] = clean
+        else:
+            current = list(current) + ([clean] if clean else [])
+        store.save_chats(chats, current)
 
 
 def _complete_turn_guarded(ctx: UserContext, send_text: str,
@@ -597,7 +692,13 @@ def regenerate_chat(ctx: UserContext, index: int,
     if persisted:
         fresh_msg = dict(fresh_msg)
         fresh_msg["pending_approvals"] = persisted
-    _append_turn_atomic(store, fresh_msg)
+    if isinstance(assistant_msg, dict) and assistant_msg.get("failed") is True:
+        # Regenerating a failed marker retries it IN PLACE (replace,
+        # never append): otherwise the dead marker and the fresh answer
+        # render as phantom "versions" of each other.
+        _replace_message_atomic(store, index, fresh_msg)
+    else:
+        _append_turn_atomic(store, fresh_msg)
     return {
         "message": fresh_msg,
         "active_tier": tier,

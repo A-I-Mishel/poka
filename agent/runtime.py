@@ -567,12 +567,19 @@ def answer_with_fallback(
 
     use_planning = deep_mode and task_type in ("multi_step", "creative")
 
-    # Tool names and source records executed by the SUCCESSFUL tier
-    # attempt only. Failed attempts re-raise for fallback, discarding
-    # their partial entries so recorded provenance always belongs to
-    # the final response.
+    # Tool names and source records executed by ANY tier attempt this
+    # turn. Failed attempts keep their entries: the tools DID run, and
+    # the continuity ledger below hands their verified results to the
+    # replacement model — so recorded provenance belongs to the final
+    # response instead of evaporating with the failed attempt.
     used_tools: List[str] = []
     used_sources: List[Dict[str, str]] = []
+    # Pluto-owned continuity ledger (per turn): write-through partial
+    # state — tool-result text, sources, tool names, latest draft, plan.
+    # Bounded (~10k chars total); files stay vault references, never
+    # bytes. Survives across _answer_tooled attempts so Model B
+    # continues Model A's verified work instead of redoing it.
+    continuity: Dict[str, Any] = {}
 
     def _make_tier_provider(pinned: Optional[Tuple[str, BaseLanguageModel]] = None,
                             failed: Optional[set] = None):
@@ -647,6 +654,7 @@ def answer_with_fallback(
 
     tooled_tiers: List[str] = []
     final_tier_box: List[str] = []
+    attempt_no: List[int] = [0]
 
     def _answer_tooled(tier_name: str, llm: BaseLanguageModel) -> str:
         # Shared with the planning stage: a tier that dies on the
@@ -654,10 +662,20 @@ def answer_with_fallback(
         # it immediately (true continuation, no wasted retry on dead).
         prefailed: set = set()
         provider = _make_tier_provider(pinned=(tier_name, llm), failed=prefailed)
-        mark = len(used_tools)
-        mark_sources = len(used_sources)
+        attempt_no[0] += 1
+        # Retry attempts inherit the failed attempt's verified work via
+        # a bounded handoff message; the first attempt runs clean.
+        handoff_text = ""
+        if attempt_no[0] > 1:
+            try:
+                from agent.toolrun import build_continuity_handoff
+                handoff_text = build_continuity_handoff(continuity)
+            except Exception:
+                logger.debug("req=%s handoff build failed", request_id, exc_info=True)
+                handoff_text = ""
         final_tier_box[:] = []
         final_tier: List[str] = final_tier_box
+        draft = ""
         try:
             if use_planning:
                 draft = plan_then_execute(
@@ -669,6 +687,8 @@ def answer_with_fallback(
                     cheap_tiers=(CHEAP_TIERS if tiers is None else None),
                     cancel=cancel,
                     strict=is_strict_tier(tier_name),
+                    partial_state=continuity,
+                    handoff=handoff_text,
                 )
             else:
                 draft = run_tool_loop(
@@ -679,6 +699,8 @@ def answer_with_fallback(
                     project_context, provider, tooled_tiers, live, on_reset,
                     final_tier, on_progress, request_id, cancel,
                     strict=is_strict_tier(tier_name),
+                    partial_state=continuity,
+                    handoff=handoff_text,
                 )
             if should_reflect(task_type, draft, user_input, deep_mode):
                 try:
@@ -707,8 +729,15 @@ def answer_with_fallback(
                     cheap_tiers=(CHEAP_TIERS if tiers is None else None))
             return draft
         except Exception:
-            del used_tools[mark:]
-            del used_sources[mark_sources:]
+            # Keep executed names (the tools DID run this turn) and stash
+            # any complete draft: the next attempt's handoff continues
+            # from them instead of starting cold. BudgetExhausted and
+            # TurnCancelled propagate untouched (no retry follows).
+            try:
+                if draft and str(draft).strip():
+                    continuity["last_text"] = str(draft)[:2000]
+            except Exception:
+                logger.debug("req=%s draft stash failed", request_id, exc_info=True)
             raise
 
     degraded_tooled: Optional[Dict[str, str]] = None

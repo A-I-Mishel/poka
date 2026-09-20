@@ -902,6 +902,61 @@ def _repair_teaching_draft(
         return draft, False
 
 
+_TEACHING_REFUSAL_RE = re.compile(
+    r"re-upload|no content|cannot|unable|couldn|could not|no extractable|"
+    r"only .*titles|status\s*=\s*(empty|denied|failed)",
+    re.IGNORECASE,
+)
+
+_TEACHING_WINDOW_NAME_RE = re.compile(
+    r"\[Verified content of '((?:[^'\\]|\\.)*)'", re.IGNORECASE,
+)
+_TEACHING_ATTACHED_NAME_RE = re.compile(
+    r"\[Attached (?:PDF|document|CSV)[^]]*?'((?:[^'\\]|\\.)*)'\s+with upload ID",
+    re.IGNORECASE,
+)
+
+
+def _unescape_hint_name(raw: str) -> str:
+    """Reverse _escape_hint for header backfill (never raises)."""
+    try:
+        text = str(raw or "")
+        return (text.replace("\\\\", "\\").replace("\\[", "[").replace("\\]", "]")
+                    .replace('\\"', '"').strip())
+    except Exception:
+        return ""
+
+
+def _teaching_header_from_send(send_text: str, scope: Tuple[int, int]) -> str:
+    """Canonical source header for this turn's window, or "" (never raises).
+
+    Parsed from the request hints the gate built (verified window first,
+    attachment hint fallback). Lets headerless-but-substantive answers
+    (salvage/partial/degraded first turns) keep the teaching cursor
+    instead of silently restarting the session.
+    """
+    try:
+        start, end = int(scope[0]), int(scope[1])
+    except Exception:
+        return ""
+    try:
+        text = str(send_text or "")
+        name = ""
+        m = _TEACHING_WINDOW_NAME_RE.search(text)
+        if m:
+            name = _unescape_hint_name(m.group(1))
+        if not name:
+            m = _TEACHING_ATTACHED_NAME_RE.search(text)
+            if m:
+                name = _unescape_hint_name(m.group(1))
+        if not name:
+            return ""
+        return f"📘 FILE: {name}\nSlides: {start}-{end}\n\n"
+    except Exception:
+        logger.debug("teaching header backfill failed", exc_info=True)
+        return ""
+
+
 def _maybe_repair_teaching_turn(
     send_text: str,
     content: str,
@@ -918,16 +973,28 @@ def _maybe_repair_teaching_turn(
         scope = _teaching_scope_from_send(send_text)
         if scope is None:
             return content, False, []
+        # Headerless-but-substantive answers (salvage/partial/degraded
+        # first turns) would otherwise lose the teaching cursor and
+        # restart the session. Backfill the canonical header from the
+        # request hints — never for refusals (a "re-upload" answer must
+        # not fake progress and advance the cursor past untaught slides).
+        backfilled = False
+        if "📘 file:" not in str(content or "").lower():
+            if not _TEACHING_REFUSAL_RE.search(str(content or "")):
+                header = _teaching_header_from_send(send_text, scope)
+                if header:
+                    content = header + str(content or "").lstrip()
+                    backfilled = True
         reasons = _validate_teaching_draft(content, scope[0], scope[1])
         if not reasons:
-            return content, False, []
+            return content, backfilled, []
         fixed, repaired = _repair_teaching_draft(
             send_text, content, reasons, tier, on_token, on_reset)
         if repaired:
             scope2 = _teaching_scope_from_send(send_text)
             left = _validate_teaching_draft(fixed, scope2[0], scope2[1]) if scope2 else reasons
             return fixed, True, left
-        return content, False, reasons
+        return content, backfilled, reasons
     except Exception:
         return content, False, []
 

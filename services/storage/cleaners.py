@@ -164,6 +164,10 @@ def clean_messages(messages: Any) -> List[Dict[str, Any]]:
             entry: Dict[str, Any] = {"role": m["role"], "content": m["content"]}
             if isinstance(m.get("time"), str):
                 entry["time"] = m["time"]
+            if m.get("failed") is True:
+                # Failed-turn marker (persisted user request + error bubble):
+                # regenerating it retries in place, so the flag must survive.
+                entry["failed"] = True
             if isinstance(m.get("image"), str):
                 entry["image"] = m["image"]
             if isinstance(m.get("images"), list):
