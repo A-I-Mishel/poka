@@ -265,6 +265,23 @@ def _apply_attachment_gate(ctx: UserContext, gate_text: str,
                     "\n\n[Note: the user refers to file(s) sent earlier in "
                     "this conversation; use the upload ID(s) above.]"
                 )
+    # Image-thread follow-up: disputes/drills ("I think ii) is c") carry
+    # no nouns for the gate above, yet reference shared Q&A context from
+    # a recent image. Reuse it so text tiers answer from the transcript
+    # instead of asking for wording they could read themselves.
+    if not vision_ids and not attachments:
+        try:
+            from agent.attachment_gate import is_image_followup as _followup
+            follow_id = _followup(gate_text, history)
+            if follow_id:
+                vision_ids = [str(follow_id)]
+                send_text += (
+                    "\n\n[Note: the user refers to image(s) sent earlier in "
+                    "this conversation; their content is provided alongside "
+                    "this request when answered by a vision-capable model.]"
+                )
+        except Exception:
+            logger.debug("image followup reuse failed", exc_info=True)
     return send_text, vision_ids, None
 
 

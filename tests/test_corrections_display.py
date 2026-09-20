@@ -52,6 +52,14 @@ def test_affix_maps_never_shown():
     assert get_display_corrections("from these notes") == []
 
 
+def test_abbreviation_collapse_never_shown():
+    # text->txt is a valid word abbreviated, not a typo. Routing still
+    # normalizes silently (txt helps doc-intent detection).
+    assert get_display_corrections("All visible text in reading order") == []
+    assert get_display_corrections("read this text") == []
+    assert normalize_text("read this text") == "read this txt"
+
+
 def test_full_teaching_request_clean():
     shown = get_display_corrections(
         "Hey i have an exam on this topic can you teach me slide by "

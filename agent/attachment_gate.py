@@ -68,6 +68,77 @@ _PPT_EXT_RE = re.compile(r"\.(pptx?|odp)\s*$", re.IGNORECASE)
 
 CLARIFY_TEXT = "Are you referring to the image, PDF, or presentation?"
 
+# Image-thread follow-ups: dispute or drill into the previous answer
+# ("I think ii) is c", "are you sure?", "why?", "explain q2").
+# These carry no image nouns/pronouns, so decide() default-denies them —
+# yet they reference shared Q&A context established by a recent image
+# (the 10:41 "I think ii) is c" turn asked Groq about option texts it
+# never received). Length-guarded like continuations; new-topic intents
+# always win; recency window keeps old images out.
+_IMAGE_FOLLOWUP_DISPUTE = (
+    "i think", "are you sure", "is that right", "r u sure",
+    "wrong", "incorrect", "actually", "but ", "no,",
+    "why", "explain",
+)
+_IMAGE_FOLLOWUP_OPTION_RE = re.compile(
+    r"\b[ivx]{1,4}\)|\boption\s+[a-d]\b|\bq\s*\d+|\bquestion\s+(?:[ivx]{1,4}|\d+)",
+    re.IGNORECASE,
+)
+_IMAGE_FOLLOWUP_MAX_CHARS: int = 160
+_IMAGE_FOLLOWUP_WINDOW: int = 4
+
+
+def _history_image_ids(history: Sequence[Dict[str, Any]],
+                       window: int = _IMAGE_FOLLOWUP_WINDOW) -> List[str]:
+    """Upload IDs of images in recent user messages, oldest first."""
+    found: List[str] = []
+    try:
+        recent = list(history or [])[-max(1, int(window)):]
+        for m in recent:
+            if not isinstance(m, dict):
+                continue
+            if str(m.get("role", "") or "").lower() != "user":
+                continue
+            atts = m.get("attachments")
+            if isinstance(atts, list):
+                for a in atts:
+                    if (isinstance(a, dict) and a.get("kind") == "image"
+                            and a.get("id") and a["id"] not in found):
+                        found.append(str(a["id"]))
+            for key in ("image", "images"):
+                val = m.get(key)
+                items = val if isinstance(val, list) else [val]
+                for v in items:
+                    if v and str(v) not in found:
+                        found.append(str(v))
+    except Exception:
+        logger.debug("history image scan failed", exc_info=True)
+    return found
+
+
+def is_image_followup(text: str, history: Sequence[Dict[str, Any]]) -> Optional[str]:
+    """Most-recent image ID when text disputes/drills the image thread.
+
+    Returns None for new-topic intents, stale images (outside the
+    recency window), and long messages (likely new questions that
+    happen to contain "why"). Never raises.
+    """
+    try:
+        t = str(text or "").lower().strip()
+        if not t or len(t) > _IMAGE_FOLLOWUP_MAX_CHARS:
+            return None
+        if _signals(t, NEW_INTENT_SIGNALS):
+            return None
+        option_ref = _IMAGE_FOLLOWUP_OPTION_RE.search(t) is not None
+        dispute = _signals(t, _IMAGE_FOLLOWUP_DISPUTE)
+        if not (option_ref or dispute):
+            return None
+        recent = _history_image_ids(history)
+        return recent[-1] if recent else None
+    except Exception:
+        logger.debug("image followup check failed", exc_info=True)
+        return None
+
 
 def _stem(name: str) -> str:
     base = os.path.basename(str(name or ""))

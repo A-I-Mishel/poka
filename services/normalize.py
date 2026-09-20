@@ -243,7 +243,10 @@ def get_display_corrections(text: str) -> List[Tuple[str, str]]:
       are dropped;
     - fuzzy overreach on valid words (single->singer) is dropped: only
       typo shapes (transposition, single insert/delete/substitute)
-      are shown.
+      are shown;
+    - abbreviation-collapse (text->txt) is dropped: when the "fix" only
+      shortens the token into a known vocab word, the user wrote a
+      valid word, not a typo. Routing still normalizes silently.
     Routing itself is untouched: normalize_text() still applies every
     rewrite above (teacher still routes teach-intent, prepare still
     routes create-intent).
@@ -265,6 +268,8 @@ def get_display_corrections(text: str) -> List[Tuple[str, str]]:
                 if _is_affix_pair(str(typed).lower(), str(n).lower()):
                     continue
                 if not _is_typo_shape(str(typed).lower(), str(n).lower()):
+                    continue
+                if len(str(typed)) > len(str(n)) and str(n).lower() in _VOCAB:
                     continue
                 shown.append((typed, n))
             except Exception:
