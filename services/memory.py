@@ -36,7 +36,19 @@ _MEMORY_DIR: str = ""
 _state = threading.local()
 
 _NEGATION_RE = re.compile(r"\b(don't|dont|do not|never|hate|dislike|avoid)\b")
-_EXPLICIT_RE = re.compile(r"\b(remember this|remember that|my name is|always)\b")
+_EXPLICIT_RE = re.compile(r"\b(remember this|remember that|my name is|call me|always)\b")
+
+# Single words that are never a person's name. Guards the broad "i am X" /
+# "this is X" name patterns below so "i am happy" or "this is great" are
+# not stored as the user's name.
+_NON_NAME_WORDS = frozenset({
+    "happy", "sad", "glad", "sorry", "fine", "good", "bad", "busy", "tired",
+    "ready", "done", "here", "there", "back", "new", "sure", "afraid",
+    "stuck", "lost", "confused", "working", "looking", "trying", "going",
+    "coming", "doing", "asking", "wondering", "hoping", "showing", "sharing",
+    "great", "awesome", "cool", "nice", "ok", "okay", "right", "wrong",
+    "available", "offline", "online", "bored", "sick", "ill",
+})
 
 # Communication-style requests → stored as type="style" facts (DATA for
 # prompts, never instructions). First match text is the saved value;
@@ -140,9 +152,18 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
         return facts
     content_lower = content.lower()
 
-    name_match = re.search(r"my name is (\w+)", content_lower)
+    # Name mentions in everyday phrasings ("i am mishel", "i'm sam",
+    # "call me ana", "this is bob", "my name is zed"). The broad "i am X"
+    # / "this is X" forms are guarded by _NON_NAME_WORDS so moods and
+    # gerunds ("i am happy", "i am working") never become a stored name.
+    name_match = re.search(
+        r"(?:my name is|call me|this is|i am|i'm|\bim) (\w+)",
+        content_lower,
+    )
     if name_match:
-        facts.append(_new_fact("name", name_match.group(1).title(), content_lower))
+        candidate = name_match.group(1)
+        if candidate not in _NON_NAME_WORDS:
+            facts.append(_new_fact("name", candidate.title(), content_lower))
 
     for style_value, pattern in _STYLE_PATTERNS:
         if re.search(pattern, content_lower):
@@ -328,6 +349,14 @@ def format_memory_for_prompt(mem: Dict[str, Any]) -> str:
 
     if mem.get("user_name"):
         lines.append(f"User name: {mem['user_name']}")
+    else:
+        # Fallback for names stored before user_name tracking existed:
+        # a bare name fact still reaches every prompt.
+        names = [f["value"] for f in mem.get("facts", [])
+                 if isinstance(f, dict) and f.get("type") == "name"
+                 and str(f.get("value", "")).strip()]
+        if names:
+            lines.append(f"User name: {names[-1]}")
 
     likes = [
         f["value"] for f in mem.get("facts", [])

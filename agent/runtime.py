@@ -345,8 +345,16 @@ def answer_with_fallback(
     obs_event("request.start", request_id=request_id)
 
     try:
-        if history_list:
-            update_memory_incremental(history_list)
+        # Mine the current message too, not just prior history: turns.py
+        # passes prior messages only, so a fact told on the last (or only)
+        # turn of a chat — e.g. "i am mishel" — would otherwise never be
+        # mined, and cross-chat memory would silently miss it. Content
+        # hashes in update_memory_incremental dedup repeats.
+        mine_msgs = list(history_list)
+        if isinstance(user_input, str) and user_input.strip():
+            mine_msgs.append({"role": "user", "content": user_input})
+        if mine_msgs:
+            update_memory_incremental(mine_msgs)
     except Exception:
         logger.debug("req=%s memory update failed", request_id, exc_info=True)
     try:
