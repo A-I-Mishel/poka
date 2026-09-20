@@ -87,7 +87,9 @@ def test_wire_reuses_doc_in_gate_stage(tmp_path, monkeypatch):
         ctx, "do you have any information on the quesylon paper i uploaded?",
         hist, [], [],
         "do you have any information on the quesylon paper i uploaded?", None)
-    # No vault record for doc1 here, so avail_docs is empty: assert the
-    # pure-decision path instead (covered above) and that nothing crashes.
-    assert clarify is None
+    # No vault record for doc1 here (deleted/expired), so avail_docs is
+    # empty: the past-upload-none clarify explains files stay with their
+    # chat instead of a silent deny.
+    assert clarify is not None
+    assert "stay with the chat" in clarify
     assert isinstance(send, str)

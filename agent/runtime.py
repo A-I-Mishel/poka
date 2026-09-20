@@ -62,7 +62,7 @@ from agent.planning import plan_then_execute
 from agent.prompts import STRICT_GROUNDING_PARAGRAPH, _as_text, _build_system_prompt, _messages_to_langchain, is_strict_tier, strip_internal_reasoning
 from agent.reflection import should_reflect
 from agent.router import classify_task, get_route_corrections, rule_route, rule_route_conf
-from agent.toolrun import MAX_TOOL_ROUNDS, run_tool_loop
+from agent.toolrun import MAX_TOOL_ROUNDS, is_degenerate_answer, run_tool_loop
 from agent.vision import _try_vision_answer
 
 logger = logging.getLogger(__name__)
@@ -495,7 +495,13 @@ def answer_with_fallback(
                     on_token=live,
                     tier_name=_name,
                 )
-            return _as_text(response.content)
+            text_out = _as_text(response.content)
+            if is_degenerate_answer(text_out, user_input):
+                # Single-token glitch ("B" stored as a whole answer):
+                # fail over to the next tier instead of persisting junk.
+                # Numbering-only exam replies are exempt inside the check.
+                raise RuntimeError("degenerate model response")
+            return text_out
 
         # Synthesis table first; the full cascade is the escape hatch when
         # synthesis is down (answers then carry a degraded marker). Custom

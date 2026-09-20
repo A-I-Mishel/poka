@@ -305,6 +305,18 @@ def decide(
             return {"use_images": [], "use_docs": [], "clarify": CLARIFY_TEXT,
                     "reason": "ambiguous-multi-clarify"}
 
+        # 6b. Past-upload reference with nothing in THIS conversation:
+        # files stay with the chat they were uploaded in, so "the paper
+        # i uploaded" in a fresh chat cannot resolve. Say exactly that
+        # instead of a generic deny (which reads as "re-upload blindly").
+        if _signals(t, PAST_UPLOAD_SIGNALS):
+            return {"use_images": [], "use_docs": [],
+                    "clarify": ("I don't see that upload in this conversation — "
+                                "files stay with the chat they were uploaded in. "
+                                "Please re-upload it here (or share its upload ID) "
+                                "and I'll read it right away."),
+                    "reason": "past-upload-none"}
+
         # 7. No reference: default deny.
         return {"use_images": [], "use_docs": [], "clarify": None,
                 "reason": "no-reference"}

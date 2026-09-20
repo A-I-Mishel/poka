@@ -463,6 +463,45 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None) -> List[An
 
 HANDOFF_MAX_CHARS: int = 8000
 
+# Single-token model glitches ("B" persisted as a whole answer) must fail
+# over instead of being stored. Numbering-only exam answers ("D", "4",
+# "i) 1 ii) 3") are the exception: they are complete by design.
+_MCQ_NUMBERING_OUT_RE = _re.compile(
+    r"\b[ivx]{1,4}\)\s*[a-d0-9]+\b|\b\d+\s*[).:]\s*[a-d]\b",
+    _re.IGNORECASE,
+)
+_MCQ_NUMBERING_ASK_RE = _re.compile(
+    r"only mention the correct|numbering|don't write any sentence|"
+    r"\bmcq\b|choose the correct option|most appropriate option|"
+    r"letter only|just the letter",
+    _re.IGNORECASE,
+)
+
+
+def is_degenerate_answer(text: Any, user_input: str = "") -> bool:
+    """True when model text is too short to be an answer (never raises).
+
+    A stripped length below 2 characters ("", "B") can never carry an
+    answer — except numbering-only exam replies ("D", "4"), which are
+    exempt when shaped like numbering or when the request asked for
+    numbering/letters only. Everything longer passes untouched ("No.",
+    "Yes", "ok" stay exactly as the model wrote them).
+    """
+    try:
+        t = str(text or "").strip().strip(".,;:!?\"'").strip()
+        if len(t) >= 2:
+            return False
+        if not t:
+            return True
+        if _MCQ_NUMBERING_OUT_RE.search(t):
+            return False
+        if _MCQ_NUMBERING_ASK_RE.search(str(user_input or "")):
+            return False
+        return True
+    except Exception:
+        logger.debug("degenerate check failed", exc_info=True)
+        return False
+
 
 def build_continuity_handoff(ledger: Optional[Dict[str, Any]]) -> str:
     """Render a bounded retry handoff from attempt-ledger state.
@@ -850,16 +889,20 @@ def run_tool_loop(
             except Exception:
                 logger.debug("progress callback failed", exc_info=True)
         if not tool_calls:
-            if not text and llm_provider is not None:
-                # Empty model output with no tool calls: treat as a tier
-                # failure and retry the SAME round on the next live tier
-                # instead of returning a dead-end message. Exceptions already
-                # fail over this way; empty content (common on rate-limited
-                # free tiers) must too. Don't burn the round budget on it.
+            if (not text or is_degenerate_answer(text, user_input)) and llm_provider is not None:
+                # Empty or degenerate ("B") model output with no tool calls:
+                # treat as a tier failure and retry the SAME round on the
+                # next live tier instead of persisting junk as the answer.
+                # Exceptions already fail over this way; empty content
+                # (common on rate-limited free tiers) must too. Numbering-
+                # only exam answers are exempt inside is_degenerate_answer.
+                # Don't burn the round budget on it.
                 _note_tier_failure(tier_name, RuntimeError("empty model response"))
                 rounds_used = max(0, rounds_used - 1)
                 continue
             _note_final_tier(round_tier)
+            if is_degenerate_answer(text, user_input):
+                return _with_sources("I couldn't generate a response. Please try again.")
             return _with_sources(text if text else "I couldn't generate a response. Please try again.")
         try:
             # Parallel execution for read-only tools, serial for mutating
