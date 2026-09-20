@@ -22,11 +22,15 @@ import threading
 from pathlib import Path
 from services.storage import StorageError, _read_json, _write_json
 from services.timeutil import utcnow_iso
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 MEMORY_FILE: str = "structured_memory.json"
 MAX_FACTS: int = 50
 MAX_PROCESSED_HASHES: int = 300
+# Contradiction supersedes keep this many prior snapshots on the fact.
+# History is audit/state-history only: never rendered as active memory,
+# never used by retrieval, never injected into prompts.
+MAX_HISTORY_SNAPSHOTS: int = 3
 
 # Memory directory is thread-local: the API binds it per request to the
 # authenticated user's vault, so concurrent users can never observe or
@@ -120,14 +124,45 @@ def save_structured_memory(mem: Dict[str, Any]) -> bool:
         return False
 
 
-def _new_fact(fact_type: str, value: str, content_lower: str) -> Dict[str, str]:
-    """Build a fact record with polarity/confidence/source metadata."""
+def _segment_around(text: str, start: int, end: int) -> str:
+    """Widest comma/semicolon/sentence-delimited segment around [start, end).
+
+    Same-clause modifiers ("always" in "always be formal with me") stay in
+    scope, while other clauses ("i hate tea" after the comma in "i like
+    coffee, i hate tea") stay out. The span itself is always included.
+    """
+    delims = list(re.finditer(r"[,;.!?\n]", text))
+    left = 0
+    for m in delims:
+        if m.end() <= start:
+            left = m.end()
+        else:
+            break
+    right = len(text)
+    for m in delims:
+        if m.start() >= end:
+            right = m.start()
+            break
+    return text[left:right]
+
+
+def _new_fact(fact_type: str, value: str, content_lower: str,
+              span: Optional[str] = None) -> Dict[str, str]:
+    """Build a fact record with polarity/confidence/source metadata.
+
+    Polarity and explicitness are scoped to the candidate's matched span
+    so signals from other clauses in the same message never bleed across
+    candidates: "Call me Sam, I like coffee" must not upgrade coffee, and
+    "I like coffee, I hate tea" must not negate coffee. A missing/blank
+    span falls back to the whole message (legacy behavior).
+    """
     value = re.split(r"[,;]", value.strip(), maxsplit=1)[0].strip()[:120]
-    explicit = bool(_EXPLICIT_RE.search(content_lower))
+    scope = span if isinstance(span, str) and span.strip() else content_lower
+    explicit = bool(_EXPLICIT_RE.search(scope))
     return {
         "type": fact_type,
         "value": value,
-        "polarity": "negative" if _NEGATION_RE.search(content_lower) else "positive",
+        "polarity": "negative" if _NEGATION_RE.search(scope) else "positive",
         "confidence": "high" if explicit else "low",
         "source": "explicit" if explicit else "inferred",
     }
@@ -163,11 +198,18 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
     if name_match:
         candidate = name_match.group(1)
         if candidate not in _NON_NAME_WORDS:
-            facts.append(_new_fact("name", candidate.title(), content_lower))
+            facts.append(_new_fact(
+                "name", candidate.title(), content_lower,
+                _segment_around(content_lower, name_match.start(0),
+                                name_match.end(0))))
 
     for style_value, pattern in _STYLE_PATTERNS:
-        if re.search(pattern, content_lower):
-            facts.append(_new_fact("style", style_value, content_lower))
+        style_match = re.search(pattern, content_lower)
+        if style_match:
+            facts.append(_new_fact(
+                "style", style_value, content_lower,
+                _segment_around(content_lower, style_match.start(0),
+                                style_match.end(0))))
 
     pref_patterns = [
         r"i (?:prefer|like|want|need) (.+)",
@@ -178,22 +220,44 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
     ]
     for pattern in pref_patterns:
         for match in re.finditer(pattern, content_lower):
-            groups = [g for g in match.groups() if g]
-            value = groups[-1].strip() if groups else ""
-            if value:
-                facts.append(_new_fact("preference", value, content_lower))
+            # Scope polarity/explicitness to this clause only: the value
+            # capture is greedy, so "i like coffee, i hate tea" would
+            # otherwise borrow "hate" from the next clause. The scope is
+            # the pattern head plus the truncated value ("i like coffee").
+            idx = next((i for i in range(len(match.groups()), 0, -1)
+                        if match.group(i)), None)
+            raw_value = match.group(idx).strip() if idx else ""
+            if not raw_value:
+                continue
+            head = match.string[match.start(0):match.start(idx)] if idx else ""
+            value = re.split(r"[,;]", raw_value, maxsplit=1)[0].strip()[:120]
+            facts.append(_new_fact("preference", raw_value, content_lower,
+                                   head + value))
 
-    if any(w in content_lower for w in ["presentation", "slides", "ppt"]):
-        facts.append(_new_fact("task_pattern", "frequently creates presentations", content_lower))
-    if any(w in content_lower for w in ["email", "professor", "deadline"]):
-        facts.append(_new_fact("task_pattern", "frequently emails professors", content_lower))
+    for keywords, pattern_value in (
+        (("presentation", "slides", "ppt"), "frequently creates presentations"),
+        (("email", "professor", "deadline"), "frequently emails professors"),
+    ):
+        hit = next((w for w in keywords if w in content_lower), None)
+        if hit is not None:
+            at = content_lower.index(hit)
+            facts.append(_new_fact(
+                "task_pattern", pattern_value, content_lower,
+                _segment_around(content_lower, at, at + len(hit))))
 
     project_match = re.search(r"(?:working on|project(?: called)?|my project) ([\w\s-]{2,60})", content_lower)
     if project_match:
-        facts.append(_new_fact("project", project_match.group(1).strip().title(), content_lower))
+        facts.append(_new_fact(
+            "project", project_match.group(1).strip().title(), content_lower,
+            _segment_around(content_lower, project_match.start(0),
+                            project_match.end(0))))
 
-    if re.search(r"\b(for now|temporarily|just today|for today)\b", content_lower):
-        facts.append(_new_fact("temporary", content.strip()[:120], content_lower))
+    temporary_match = re.search(r"\b(for now|temporarily|just today|for today)\b", content_lower)
+    if temporary_match:
+        facts.append(_new_fact(
+            "temporary", content.strip()[:120], content_lower,
+            _segment_around(content_lower, temporary_match.start(0),
+                            temporary_match.end(0))))
 
     return facts
 
@@ -203,26 +267,126 @@ def _content_hash(content: str) -> str:
     return hashlib.sha1(content.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()
 
 
-def _merge_fact(mem: Dict[str, Any], fact: Dict[str, str]) -> bool:
-    """Merge one fact with dedup; upgrades confidence on re-confirmation.
+def _fallback_key(fact: Dict[str, Any]) -> str:
+    """Deterministic canonical key for a fact (fail-closed fallback).
 
-    Returns True when the stored state changed.
+    Lowercase alphanumeric tokens only: trivial variants ("coffee." vs
+    "coffee!") share a key while distinct meanings ("coffee" vs
+    "iced coffee") never collide. Used only when the semantic
+    normalizer is unavailable; never merges across fact types.
     """
+    clean = re.sub(r"[^a-z0-9 ]", "", str(fact.get("value", "")).lower())
+    clean = re.sub(r"\s+", " ", clean).strip()[:120]
+    return str(fact.get("type", "")) + ":" + clean
+
+
+def _resolve_existing(mem: Dict[str, Any], fact: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Find the stored fact a candidate relates to.
+
+    Canonical-key match first (semantic regime), then the legacy exact
+    (type, value) match so pre-key records keep working. Returns None
+    when nothing relates.
+    """
+    key = fact.get("key")
+    if key:
+        for existing in mem["facts"]:
+            if (isinstance(existing, dict)
+                    and existing.get("type") == fact.get("type")
+                    and existing.get("key") == key):
+                return existing
     for existing in mem["facts"]:
-        if existing.get("value") == fact.get("value") and existing.get("type") == fact.get("type"):
-            if fact.get("confidence") == "high" and existing.get("confidence") != "high":
-                existing["confidence"] = "high"
-                existing["source"] = fact.get("source", "explicit")
-                existing["date"] = fact.get("date", existing.get("date", ""))
-                return True
-            return False
+        if (isinstance(existing, dict)
+                and existing.get("value") == fact.get("value")
+                and existing.get("type") == fact.get("type")):
+            return existing
+    return None
+
+
+_SEMNORM_VERDICTS = ("equivalent", "related", "contradictory", "new", "ambiguous")
+
+
+def _append_fact(mem: Dict[str, Any], fact: Dict[str, Any]) -> bool:
+    """Append a fact with FIFO cap; always reports a state change."""
     mem["facts"].append(fact)
     if len(mem["facts"]) > MAX_FACTS:
         mem["facts"] = mem["facts"][-MAX_FACTS:]
     return True
 
 
-def update_memory_incremental(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _merge_fact(mem: Dict[str, Any], fact: Dict[str, str],
+                norm: Optional[Dict[str, Any]] = None) -> bool:
+    """Merge one fact with semantic-aware dedup.
+
+    Args:
+        mem: Structured memory dict (mutated in place).
+        fact: New candidate fact (verbatim value preserved as-is).
+        norm: Optional normalizer verdict {"verdict", "key", "confidence"}.
+            verdict is one of equivalent|related|contradictory|new|
+            ambiguous; unknown verdicts degrade to "new". None preserves
+            the legacy exact-match behavior.
+
+    Returns True when the stored state changed.
+    """
+    norm = norm if isinstance(norm, dict) else {}
+    verdict = norm.get("verdict") if norm.get("verdict") in _SEMNORM_VERDICTS else "new"
+    key = norm.get("key") or fact.get("key") or _fallback_key(fact)
+    fact = dict(fact, key=key)
+    if verdict == "ambiguous":
+        # Ambiguous candidates never arrive confident and never upgrade.
+        fact = dict(fact, confidence="low", source="inferred")
+
+    if verdict == "related":
+        # Related is not equivalent: keep separate unless byte-identical.
+        for existing in mem["facts"]:
+            if (isinstance(existing, dict)
+                    and existing.get("value") == fact.get("value")
+                    and existing.get("type") == fact.get("type")):
+                return False
+        return _append_fact(mem, fact)
+
+    existing = _resolve_existing(mem, fact)
+    if existing is None:
+        return _append_fact(mem, fact)
+
+    if verdict == "contradictory" and existing.get("polarity") != fact.get("polarity"):
+        # Supersede: snapshot the old state (bounded audit history), then
+        # flip the active fields. Polarity is always the candidate's own,
+        # so positive can never silently become negative or vice versa.
+        history = existing.get("history")
+        if not isinstance(history, list):
+            history = []
+        history = history + [{
+            "value": existing.get("value"),
+            "polarity": existing.get("polarity"),
+            "date": existing.get("date", ""),
+        }]
+        existing["history"] = history[-MAX_HISTORY_SNAPSHOTS:]
+        existing["value"] = fact["value"]
+        existing["polarity"] = fact.get("polarity")
+        existing["confidence"] = fact.get("confidence", "low")
+        existing["source"] = fact.get("source", "inferred")
+        existing["key"] = key
+        existing["date"] = fact.get("date", existing.get("date", ""))
+        return True
+
+    # Equivalent, same-state contradiction (deterministic repeat), or
+    # legacy path: refresh in place, upgrade confidence on re-confirmation.
+    changed = False
+    if key and not existing.get("key"):
+        # Adopt the canonical key onto a pre-key record so future
+        # merges key-match; legacy exact matching keeps working.
+        existing["key"] = key
+        changed = True
+    if fact.get("confidence") == "high" and existing.get("confidence") != "high":
+        existing["confidence"] = "high"
+        existing["source"] = fact.get("source", "explicit")
+        existing["date"] = fact.get("date", existing.get("date", ""))
+        return True
+    return changed
+
+
+def update_memory_incremental(messages: List[Dict[str, Any]],
+                                normalize: Optional[Callable[[Dict[str, Any], List[Dict[str, Any]]], Optional[Dict[str, Any]]]] = None) -> Dict[str, Any]:
     """Mine only newly added user messages; persist only when state changed.
 
     Tracks content digests in `_processed_hashes` (capped) so a 10-message
@@ -232,6 +396,14 @@ def update_memory_incremental(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     Args:
         messages: Raw chat message dicts with 'role'/'content'.
+        normalize: Optional semantic normalizer called once per newly
+            extracted candidate as normalize(candidate_copy, neighbors)
+            where neighbors are same-type stored facts as
+            {type, value, polarity} dicts. Returns {"verdict", "key",
+            "confidence"} or None to keep legacy behavior. Any exception
+            degrades to legacy merging; the callable must never mine the
+            raw message itself (candidate-gating: extraction boundaries
+            stay authoritative).
 
     Returns:
         {"processed": n_new_messages, "new_facts": n, "saved": bool}.
@@ -260,9 +432,21 @@ def update_memory_incremental(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         processed.append(digest)
         for fact in extract_facts_from_message(content):
             fact["date"] = utcnow_iso()
+            norm = None
+            if callable(normalize):
+                try:
+                    neighbors = [
+                        {"type": f.get("type"), "value": f.get("value"),
+                         "polarity": f.get("polarity")}
+                        for f in mem["facts"]
+                        if isinstance(f, dict) and f.get("type") == fact.get("type")
+                    ][-10:]
+                    norm = normalize(dict(fact), neighbors)
+                except Exception:
+                    norm = None
             if fact["type"] == "name":
                 mem["user_name"] = fact["value"]
-            if _merge_fact(mem, fact):
+            if _merge_fact(mem, fact, norm):
                 new_facts += 1
 
     added = len(processed) - already
