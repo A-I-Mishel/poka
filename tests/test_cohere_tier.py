@@ -30,6 +30,8 @@ def test_placeholder_key_is_skipped(monkeypatch):
 
 def test_client_built_with_key(monkeypatch):
     monkeypatch.setenv("COHERE_API_KEY", "test-key")
+    # Hermetic against a dev .env that overrides COHERE_MODEL.
+    monkeypatch.delenv("COHERE_MODEL", raising=False)
     client = config.get_tier_cohere_llm()
     assert client is not None
     assert _model_of(client) == config.COHERE_MODEL

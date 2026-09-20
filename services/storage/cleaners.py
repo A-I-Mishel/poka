@@ -237,6 +237,13 @@ def _clean_chat_record(value: Any) -> Optional[Dict[str, Any]]:
         record["id"] = value["id"]
     if is_valid_id(value.get("project_id")):
         record["project_id"] = value["project_id"]
+    # ponytail: episodic summaries (attached at archive for long chats)
+    # must survive save/load round-trips instead of being silently
+    # dropped; bounded like the writer (EPISODIC_SUMMARY_CHARS). No
+    # behavior change for records without one.
+    summary = value.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        record["summary"] = summary.strip()[:2000]
     # ponytail: legacy chats lack updated_at — drop it, sort treats missing as oldest
     updated = value.get("updated_at")
     if isinstance(updated, str) and updated.strip():
