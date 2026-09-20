@@ -301,6 +301,8 @@ svg{display:block;flex-shrink:0}
   .toggle span{display:none}
   .seg{flex-shrink:0}
   .send{width:34px;height:32px;flex-shrink:0}
+  .attach-wrap .menu{left:auto;right:0;max-width:calc(100vw - 32px)}
+  .attach-wrap .menu small{white-space:normal;text-align:right;max-width:45vw;line-height:1.4}
   .bubble{max-width:100%;border-radius:12px}
   .msg.ai{gap:8px}
   .mark-p{display:none}
