@@ -143,6 +143,8 @@ svg{display:block;flex-shrink:0}
 .chip-x{width:18px;height:18px;border-radius:4px;display:grid;place-items:center;color:var(--t3);font-size:10px}
 .chip-x:hover{color:var(--tx);background:rgba(128,128,128,.15)}
 .composer-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.tools-left{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+.tools-right{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .grow{flex:1}
 .seg{display:flex;padding:2px;background:var(--bg);border:1px solid var(--bd);border-radius:7px;position:relative}
 .seg-thumb{position:absolute;top:2px;bottom:2px;left:0;width:0;background:var(--s2);border-radius:5px;transition:transform .22s cubic-bezier(.3,1.2,.4,1),width .22s cubic-bezier(.3,1.2,.4,1)}
@@ -288,14 +290,17 @@ svg{display:block;flex-shrink:0}
   body{font-size:13px}
   .chat-col{padding:14px 10px 8px}
   .composer-wrap{padding:6px 8px calc(8px + env(safe-area-inset-bottom,0px))}
-  .composer{border-radius:12px;padding:8px 8px 6px}
-  .composer-bar{gap:5px}
+  .composer{border-radius:12px;padding:10px 8px 6px}
+  .composer textarea{min-height:48px}
+  .composer-bar{gap:6px;flex-wrap:nowrap;border-top:1px solid var(--bd);margin:2px -8px 0;padding:8px 8px 0}
+  .tools-left{gap:5px;flex:1;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .tools-left::-webkit-scrollbar{display:none}
+  .tools-right{gap:5px;margin-left:auto}
   .grow{display:none}
-  .seg{order:1}
-  .attach-wrap{order:1}
-  .toggle{height:32px;width:32px;padding:0;justify-content:center;gap:0}
+  .toggle{height:32px;width:32px;padding:0;justify-content:center;gap:0;flex-shrink:0}
   .toggle span{display:none}
-  .send{order:2;width:34px;height:32px;margin-left:auto}
+  .seg{flex-shrink:0}
+  .send{width:34px;height:32px;flex-shrink:0}
   .bubble{max-width:100%;border-radius:12px}
   .msg.ai{gap:8px}
   .mark-p{display:none}
