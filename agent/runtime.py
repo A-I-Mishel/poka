@@ -73,6 +73,68 @@ SHORT_DIRECT_CHARS: int = 60
 _HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
                  "read_pdf", "analyze_csv")
 
+# Vision-capable tier names (mirrors services.vision._VISION_TIERS).
+_VISION_TIER_NAMES = ("Gemini 3.6 Flash", "Gemini 3.5 Flash")
+
+
+def _format_cooldown(seconds: Any) -> str:
+    """Compact wait time for cooldown messaging ("~6h", "~55m", "~40s")."""
+    try:
+        total = max(0, int(round(float(seconds or 0))))
+    except Exception:
+        return ""
+    if total >= 3600:
+        hours, rest = divmod(total, 3600)
+        mins = rest // 60
+        return f"~{hours}h{mins}m" if mins else f"~{hours}h"
+    if total >= 60:
+        return f"~{total // 60}m"
+    return f"~{total}s"
+
+
+def _vision_unavailable_reason() -> str:
+    """Short reason for the vision-degraded message (never raises).
+
+    Distinguishes "Gemini not configured" from "cooling down with a
+    remaining wait" using tier_status_snapshot(), so users wait instead
+    of rapid-retrying (retries re-arm the cooldown). Falls back to the
+    last recorded tier error, then "unavailable".
+    """
+    try:
+        from agent.cascade import _friendly_reason, last_tier_error, tier_status_snapshot
+
+        try:
+            snap = tier_status_snapshot() or []
+        except Exception:
+            snap = []
+        states = [e for e in snap
+                  if isinstance(e, dict) and e.get("name") in _VISION_TIER_NAMES]
+        if states and all(not s.get("configured", True) for s in states):
+            return "not configured (GEMINI_API_KEY missing on server)"
+        cooling = [s for s in states if s.get("skipped")]
+        if cooling:
+            remaining = 0.0
+            kinds = []
+            for s in cooling:
+                try:
+                    remaining = max(remaining, float(s.get("cooldown_remaining_s", 0) or 0))
+                except Exception:
+                    logger.debug("vision cooldown parse failed", exc_info=True)
+                kind = str(s.get("last_error_kind", "") or "")
+                if kind and kind not in kinds:
+                    kinds.append(kind)
+            reason = _friendly_reason(kinds[0]) if kinds else "cooling down"
+            wait = _format_cooldown(remaining)
+            if wait and "cool" not in reason:
+                return f"{reason}, cooling down {wait}"
+            return f"cooling down {wait}" if wait else reason
+        hit = last_tier_error("Gemini 3.6 Flash") or last_tier_error("Gemini 3.5 Flash")
+        if hit:
+            return _friendly_reason(hit[0])
+    except Exception:
+        logger.debug("vision reason snapshot failed", exc_info=True)
+    return "unavailable"
+
 
 def answer_with_fallback(
     user_input: str,
@@ -174,26 +236,22 @@ def answer_with_fallback(
         # ponytail: vision requested but no vision tier answered — degraded
         # directly instead of burning a text-tier call that just says
         # "can't see". Upgrade to queued retry when Gemini quota recovers.
+        # Vision is Gemini-only by design (services.vision._VISION_TIERS):
+        # the message below states the actual tier state (not configured
+        # vs cooling with remaining wait) so users stop rapid-retrying —
+        # each failed retry re-arms the cooldown it is waiting out.
         try:
-            from agent.cascade import _friendly_reason, last_tier_error
-            hit = last_tier_error("Gemini 3.6 Flash") or last_tier_error("Gemini 3.5 Flash")
-            if hit:
-                why = _friendly_reason(hit[0])
-            else:
-                # ponytail: distinguish not-configured from rate-limited; full
-                # error taxonomy when Gemini adds new vision models.
-                from config import get_tier2_llm, get_tier3_llm
-                if get_tier2_llm() is None and get_tier3_llm() is None:
-                    why = "not configured (GEMINI_API_KEY missing on server)"
-                else:
-                    why = "unavailable"
+            vision_why = _vision_unavailable_reason()
         except Exception:
-            why = "unavailable"
+            logger.debug("req=%s vision reason failed", request_id, exc_info=True)
+            vision_why = "unavailable"
         return {
             "output": (
                 "I couldn't view that image — no vision-capable model (Gemini) "
-                f"answered ({why}). Check that the image is <5MB/<25MP and "
-                "Gemini isn't rate-limited, then resend or pick Gemini 3.6 Flash explicitly."
+                f"answered ({vision_why}). Check that the image is <5MB/<25MP. "
+                "If Gemini is cooling down, please wait out the stated time "
+                "before resending — rapid retries extend the cooldown. "
+                "Switching to Gemini 3.6 Flash only helps once it has recovered."
             ),
             "active_tier": "vision-unavailable",
             "task_type": "vision",
@@ -280,6 +338,16 @@ def answer_with_fallback(
         route_confidence = 0.0
     try:
         route_corrections: list = get_route_corrections(user_input)
+    except Exception:
+        route_corrections = []
+    # Corrections render as "Interpreted X as Y" in the UI: show them only
+    # when the route actually consumed a correction (confidence 0.6
+    # bucket). Exact/multi-signal routes (0.7/0.9) and fallthrough (0.0)
+    # never carry the note, so routing-internal rewrites and stale notes
+    # cannot leak onto unrelated turns.
+    try:
+        if abs(float(route_confidence) - 0.6) > 1e-9:
+            route_corrections = []
     except Exception:
         route_corrections = []
 

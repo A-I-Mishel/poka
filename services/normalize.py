@@ -138,7 +138,14 @@ def normalize_text(text: str) -> str:
 
 
 def get_corrections(text: str) -> Tuple[str, List[Tuple[str, str]]]:
-    """Return (normalized, [(orig, fixed)]) for UX notes. Never raises."""
+    """Return (normalized, [(orig, fixed)]) for routing use. Never raises.
+
+    NOTE: pairs include routing-internal rewrites (verb canonicalization
+    such as prepare->create) and fuzzy plural/stemming maps
+    (teacher->teach, questions->question). They describe what the router
+    saw, not typos the user made — use get_display_corrections() for
+    anything user-visible.
+    """
     try:
         orig_tokens = _TOKEN_RE.findall(str(text or ""))
         norm = normalize_text(text)
@@ -151,6 +158,122 @@ def get_corrections(text: str) -> Tuple[str, List[Tuple[str, str]]]:
         return norm, pairs
     except Exception:
         return str(text or "").lower(), []
+
+
+# Suffixes whose addition/removal is stemming, not a typo
+# (teacher/teach, questions/question, note/notes). Such pairs must
+# never render as "Interpreted X as Y" in the UI.
+_DISPLAY_AFFIX_SUFFIXES = ("s", "es", "d", "ed", "er", "ing", "ly")
+
+
+def _is_affix_pair(orig_lower: str, fixed: str) -> bool:
+    """True when the pair differs by a bare affix (never raises)."""
+    try:
+        o, n = str(orig_lower or ""), str(fixed or "")
+        if not o or not n or o == n:
+            return False
+        for suffix in _DISPLAY_AFFIX_SUFFIXES:
+            if o == n + suffix or n == o + suffix:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _is_typo_shape(orig_lower: str, fixed: str) -> bool:
+    """True when the pair looks like a genuine typo (never raises).
+
+    Genuine typos are small mechanical slips: a transposition
+    (craete/create), one inserted/deleted char (convrt/convert,
+    pyton/python), or one substituted char (musik/music). Fuzzy
+    overreach such as single->singer (two substitutions on a valid
+    word) is not a typo shape. Never raises.
+    """
+    try:
+        o, n = str(orig_lower or ""), str(fixed or "")
+        if not o or not n or o == n:
+            return False
+        if sorted(o) == sorted(n):
+            return True  # transposition / anagram
+        if abs(len(o) - len(n)) == 1:
+            # Single insertion/deletion: the shorter string is a
+            # subsequence of the longer one with exactly one skip.
+            short, long = (o, n) if len(o) < len(n) else (n, o)
+            skipped = False
+            i = j = 0
+            while i < len(short) and j < len(long):
+                if short[i] == long[j]:
+                    i += 1
+                    j += 1
+                elif skipped:
+                    return False
+                else:
+                    skipped = True
+                    j += 1
+            return True
+        if len(o) == len(n):
+            # Single substitution: exactly one differing position.
+            return sum(1 for a, b in zip(o, n, strict=True) if a != b) == 1
+        return False
+    except Exception:
+        return False
+
+
+def _is_routing_rewrite(orig_lower: str) -> bool:
+    """True when the token was rewritten by verb canonicalization.
+
+    prepare->create and builf->build->create describe routing intent,
+    not user typos — never user-visible. Never raises.
+    """
+    try:
+        fixed = _correct_token(str(orig_lower or ""))
+        return _CANONICAL.get(fixed, fixed) != fixed
+    except Exception:
+        return False
+
+
+def get_display_corrections(text: str) -> List[Tuple[str, str]]:
+    """Return [(orig, fixed)] pairs worth showing in the UI. Never raises.
+
+    Filters get_corrections() down to probable real typos:
+    - routing-internal verb canonicalizations are dropped;
+    - capitalized originals are dropped (proper nouns / sentence starts
+      such as "Tere", "Note" — never "corrected" away);
+    - bare affix/stemming maps (teacher->teach, questions->question)
+      are dropped;
+    - fuzzy overreach on valid words (single->singer) is dropped: only
+      typo shapes (transposition, single insert/delete/substitute)
+      are shown.
+    Routing itself is untouched: normalize_text() still applies every
+    rewrite above (teacher still routes teach-intent, prepare still
+    routes create-intent).
+    """
+    try:
+        # get_corrections() pairs already carry the typed original
+        # (case preserved) alongside the normalized form.
+        _, pairs = get_corrections(text)
+        shown: List[Tuple[str, str]] = []
+        for typed, n in pairs:
+            try:
+                if not typed or not n:
+                    continue
+                # Proper nouns / sentence-initial words: never "correct".
+                if str(typed)[:1].isupper():
+                    continue
+                if _is_routing_rewrite(str(typed).lower()):
+                    continue
+                if _is_affix_pair(str(typed).lower(), str(n).lower()):
+                    continue
+                if not _is_typo_shape(str(typed).lower(), str(n).lower()):
+                    continue
+                shown.append((typed, n))
+            except Exception:
+                logger.debug("display correction filter failed", exc_info=True)
+                continue
+        return shown
+    except Exception:
+        logger.debug("display corrections failed", exc_info=True)
+        return []
 
 
 def fuzzy_hit(text: str, phrase: str, threshold: float = 80.0) -> bool:

@@ -531,6 +531,36 @@ function downloadMarkdown(title, text) {
   a.click();
   setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
+function pdfFileName(title) {
+  return (String(title || "").replace(/[^\w\- ]+/g, "").trim() || "chat").slice(0, 80);
+}
+/* Server-rendered A4 PDF export (POSTs the transcript; the backend owns
+ * layout). Rejects when the request fails so callers can fall back to
+ * the local .md download — export never hard-breaks offline. */
+function downloadChatPdf(title, payload) {
+  var body;
+  if (payload && payload.chat_id) {
+    body = { chat_id: payload.chat_id };
+  } else {
+    body = { title: title, messages: (payload && payload.messages) || [] };
+  }
+  return fetch(apiUrl("/api/chats/export-pdf"), {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+    credentials: "include",
+    body: JSON.stringify(body)
+  }).then(function (res) {
+    if (!res.ok) throw new Error("export failed");
+    return res.blob();
+  }).then(function (blob) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = pdfFileName(title) + ".pdf";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  });
+}
 /* ---------- models (server-driven) ---------- */
 var _lastFallbackKey = "";
 var _lastFallbackAt = 0;
@@ -587,4 +617,4 @@ function renderModelDD() {
 function getCtxId() { return ctxId; }
 function getProjId() { return projId; }
 
-export { initRender, chipForAttachment, rememberApprovalTokens, approvalTokenFor, decideApproval, msgEl, msgMeta, hydrateUploadImages, versionGroup, renderChat, maybeScroll, scrollBottom, refreshChats, refreshProjects, copyText, legacyCopy, stopSpeaking, speakable, speakText, renderRecents, renderProjects, chatMarkdown, downloadMarkdown, setActiveTier, renderModelDD, getCtxId, getProjId };
+export { initRender, chipForAttachment, rememberApprovalTokens, approvalTokenFor, decideApproval, msgEl, msgMeta, hydrateUploadImages, versionGroup, renderChat, maybeScroll, scrollBottom, refreshChats, refreshProjects, copyText, legacyCopy, stopSpeaking, speakable, speakText, renderRecents, renderProjects, chatMarkdown, downloadMarkdown, downloadChatPdf, setActiveTier, renderModelDD, getCtxId, getProjId };

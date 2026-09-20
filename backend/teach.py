@@ -24,6 +24,13 @@ TEACHING_WINDOW_SLIDES: int = 3
 TEACHING_WINDOW_CHARS: int = 6000
 
 
+# A window whose bodies total fewer chars than this is title-only
+# (diagram/scanned pages: titles extract, bodies live in images).
+# The hint then directs the model to read_pdf_page first instead of
+# refusing outright.
+TEACHING_THIN_WINDOW_CHARS: int = 200
+
+
 TEACHING_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
 
 
@@ -665,6 +672,31 @@ def _teaching_window_hint(
         note = ""
         if truncated:
             note = "\n[Note: window text truncated to fit context; teach only what is above.]"
+        try:
+            thin_chars = sum(len(str(b or "")) for _, b in window)
+        except Exception:
+            thin_chars = TEACHING_THIN_WINDOW_CHARS
+        if thin_chars < TEACHING_THIN_WINDOW_CHARS:
+            # Title-only window (diagrams/scanned pages): the model must
+            # try harder before giving up — never bounce the user to
+            # re-upload on the first pass.
+            uid = str(attach.get("id", "") or "")
+            if kind == "pdf":
+                note += (
+                    f"\n[Note: this window is title-only ({thin_chars} chars of body text; "
+                    "content likely lives in diagrams/images). Call read_pdf_page for "
+                    f"{marker}s {start}-{end} (upload ID {uid}) first and teach from those "
+                    "results. Only if those pages are also empty, STOP and ask the user "
+                    "to re-upload with OCR text.]"
+                )
+            else:
+                note += (
+                    f"\n[Note: this window is title-only ({thin_chars} chars of body text; "
+                    "content likely lives in diagrams/images). Teach the concepts behind "
+                    "these titled slides from general knowledge, clearly labeled as "
+                    "general explanation (not slide content), keep it tight, and ask the "
+                    "user for a PDF export with OCR text if they need exact wording.]"
+                )
         if total > end:
             note += f"\n[Note: showing {marker}s {start}-{end} of {total}.]"
         hint = (

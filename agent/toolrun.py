@@ -429,6 +429,26 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None) -> List[An
                     out.append(t)
     except Exception:
         logger.debug("creation safety net failed", exc_info=True)
+    # No-search shapes: web results cannot help and only attach junk
+    # sources. Self-code questions ("give me your code") are answered
+    # from the prompt's self-description; exam MCQs ("select the most
+    # appropriate option", numbering-only answers) come from training
+    # knowledge — a search for either just burns quota and cites
+    # unrelated pages.
+    try:
+        _no_search = (
+            "your code" in raw_low or "your source" in raw_low
+            or "your prompt" in raw_low or "system prompt" in raw_low
+            or "how were you built" in raw_low or "how are you built" in raw_low
+            or "how were you made" in raw_low or "your architecture" in raw_low
+            or "most appropriate option" in raw_low
+            or "only mention the correct" in raw_low
+            or "choose the correct option" in raw_low
+        )
+        if _no_search:
+            out = [t for t in out if getattr(t, "name", "") != "web_search"]
+    except Exception:
+        logger.debug("no-search carve-out failed", exc_info=True)
     # Tier-aware trim: 8k lanes (GitHub Models) skip MCP discovery tools
     # to save context; they re-bind on explicit "mcp" asks via the gmail
     # bucket above (no — MCP stays only when hint names it).

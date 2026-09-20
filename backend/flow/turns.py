@@ -23,6 +23,60 @@ from backend.teach import (_is_pace_feedback, _is_teaching_continuation, _is_tea
 logger = logging.getLogger(__name__)
 
 
+# Identical-text in-flight guard: a client retry/abort-resend of the same
+# message while its first turn is still generating must not launch a
+# second full turn (double quota burn + duplicate answers, e.g. two
+# "teach me slide by slide" answers minutes apart). Keyed per chat file
+# + normalized text; entries are released in run_chat's finally and
+# expire via TTL so a crashed turn can never wedge the chat.
+import threading as _threading
+import time as _time
+
+_INFLIGHT_TURNS: Dict[Tuple[str, str], float] = {}
+_INFLIGHT_LOCK = _threading.Lock()
+_INFLIGHT_TTL_SECONDS: float = 300.0
+
+
+def _inflight_key(chats_path: Any, text: str) -> Tuple[str, str]:
+    """Key for the double-tap guard (never raises)."""
+    try:
+        return (str(chats_path or ""), " ".join(str(text or "").lower().split()))
+    except Exception:
+        return ("", "")
+
+
+def _claim_inflight(key: Tuple[str, str]) -> bool:
+    """Claim an in-flight turn; False when a live duplicate exists."""
+    try:
+        now = _time.time()
+        with _INFLIGHT_LOCK:
+            started = _INFLIGHT_TURNS.get(key)
+            if started is not None and now - float(started) < _INFLIGHT_TTL_SECONDS:
+                return False
+            # Expired or absent: (re)claim. Prune opportunistically.
+            try:
+                expired = [k for k, v in _INFLIGHT_TURNS.items()
+                           if now - float(v) >= _INFLIGHT_TTL_SECONDS]
+                for k in expired:
+                    _INFLIGHT_TURNS.pop(k, None)
+            except Exception:
+                logger.debug("inflight prune failed", exc_info=True)
+            _INFLIGHT_TURNS[key] = now
+            return True
+    except Exception:
+        logger.debug("inflight claim failed; allowing turn", exc_info=True)
+        return True
+
+
+def _release_inflight(key: Tuple[str, str]) -> None:
+    """Release an in-flight turn claim (never raises)."""
+    try:
+        with _INFLIGHT_LOCK:
+            _INFLIGHT_TURNS.pop(key, None)
+    except Exception:
+        logger.debug("inflight release failed", exc_info=True)
+
+
 def _atomic_turn(store: Any, fn: Any) -> Any:
     """Execute a turn atomically under the chat file lock.
 
@@ -239,6 +293,50 @@ def run_chat(ctx: UserContext, content: str,
     if not text:
         raise ValueError("Message is empty.")
     store = ctx.user_store
+    # Double-tap guard BEFORE rate limits: an identical message already
+    # generating in this chat short-circuits without burning quota or
+    # producing a duplicate answer. Regenerates are unaffected (the
+    # prior turn has completed, so no claim is held).
+    _dup_key = _inflight_key(getattr(store, "chats_path", ""), text)
+    if not _claim_inflight(_dup_key):
+        dupe_msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": ("I'm still generating the answer to that message — "
+                        "it will appear above when ready. No need to resend."),
+            "time": utcnow_iso(),
+            **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                               "clarify", None),
+        }
+        _append_turn_atomic(store, {"role": "user", "content": text,
+                                    "time": utcnow_iso()}, dupe_msg)
+        return {
+            "message": dupe_msg,
+            "active_tier": "clarify",
+            "task_type": "clarify",
+            "warnings": [],
+            "fallback": None,
+            "corrections": [],
+        }
+    try:
+        return _run_chat_inner(
+            ctx, text, store, upload_ids, project_id, deep_mode,
+            force_search, active_tier, on_token, on_reset, on_progress,
+            cancel)
+    finally:
+        _release_inflight(_dup_key)
+
+
+def _run_chat_inner(ctx: UserContext, text: str, store: Any,
+                    upload_ids: Optional[List[str]] = None,
+                    project_id: Optional[str] = None,
+                    deep_mode: bool = False,
+                    force_search: bool = False,
+                    active_tier: Optional[str] = None,
+                    on_token: Any = None,
+                    on_reset: Any = None,
+                    on_progress: Any = None,
+                    cancel: Any = None) -> Dict[str, Any]:
+    """Original run_chat body (in-flight claim held by the caller)."""
     _check_limits(ctx.limit_key or ctx.user_id, bool(deep_mode))
 
     # Snapshot state under a short lock hold — never hold the chats lock

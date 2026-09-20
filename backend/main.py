@@ -18,7 +18,7 @@ from services.secrets import get_secret
 
 load_dotenv()
 
-from backend.routers import approvals, artifacts, auth, briefs, chat, chats, memory, meta, observability, ops, projects, uploads, workflows  # noqa: E402
+from backend.routers import approvals, artifacts, auth, briefs, chat, chats, export, memory, meta, observability, ops, projects, uploads, workflows  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +331,7 @@ for _router in (
     auth.router,
     chat.router,
     chats.router,
+    export.router,
     uploads.router,
     artifacts.router,
     projects.router,

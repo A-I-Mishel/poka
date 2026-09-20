@@ -286,10 +286,9 @@ def rule_route_conf(user_input: str) -> tuple:
     if task == "multi_step":
         return (task, 0.7)
     try:
-        from services.normalize import get_corrections as _corr
+        from services.normalize import get_display_corrections as _corr
 
-        _, pairs = _corr(user_input)
-        if pairs:
+        if _corr(user_input):
             return (task, 0.6)
     except Exception:
         logger.debug("route confidence corrections failed", exc_info=True)
@@ -297,11 +296,15 @@ def rule_route_conf(user_input: str) -> tuple:
 
 
 def get_route_corrections(user_input: str) -> list:
-    """[(orig, fixed)] typo corrections for UX notes (never raises)."""
-    try:
-        from services.normalize import get_corrections as _corr
+    """[(orig, fixed)] probable-typo corrections for UX notes (never raises).
 
-        _, pairs = _corr(user_input)
+    Display-filtered: routing-internal rewrites (verb canonicalization),
+    capitalized proper nouns, and affix/stemming maps are never shown.
+    """
+    try:
+        from services.normalize import get_display_corrections as _corr
+
+        pairs = _corr(user_input)
         return [(str(o), str(n)) for o, n in (pairs or [])]
     except Exception:
         return []

@@ -9,7 +9,7 @@ import { S, chats, current, projects, setPref, setChats, setCurrent } from "./st
 import { req } from "./api.js";
 import { ask } from "./auth.js";
 import { openSection, showChat, openTitle } from "./panels.js";
-import { decideApproval, copyText, speakText, renderChat, renderRecents, refreshProjects, refreshChats, downloadMarkdown, chatMarkdown, getCtxId, getProjId, msgEl, msgMeta, renderProjects, setActiveTier, renderModelDD, stopSpeaking, hydrateUploadImages } from "./render.js";
+import { decideApproval, copyText, speakText, renderChat, renderRecents, refreshProjects, refreshChats, downloadMarkdown, downloadChatPdf, chatMarkdown, getCtxId, getProjId, msgEl, msgMeta, renderProjects, setActiveTier, renderModelDD, stopSpeaking, hydrateUploadImages } from "./render.js";
 import { send, sendText, isStreaming, clearComposer, restoreComposer, uploadPending, streamInto } from "./send.js";
 
 /* All DOM wiring lives in initChat(), not at import time, so this
@@ -219,19 +219,30 @@ $("newChatBtn").addEventListener("click", async function () {
 });
 $("exportBtn").addEventListener("click", function () {
   var title = openTitle();
-  downloadMarkdown(title, chatMarkdown(title, current));
-  toast("Chat exported");
+  downloadChatPdf(title, { title: title, messages: current }).then(function () {
+    toast("Chat exported as PDF");
+  }).catch(function () {
+    downloadMarkdown(title, chatMarkdown(title, current));
+    toast("PDF export failed — saved .md instead");
+  });
 });
-/* Export any archived chat without opening it (read-only endpoint). */
+/* Export any archived chat without opening it (read-only endpoints). */
 $("ctxExport").addEventListener("click", async function () {
   $("ctxMenu").classList.add("hidden");
   if (!getCtxId()) return;
   try {
     var data = await req("/api/chats/" + enc(getCtxId()) + "/messages");
     var title = (data && data.title) || "chat";
-    downloadMarkdown(title, chatMarkdown(title, (data && data.messages) || []));
-    toast("Chat exported");
-  } catch (err) { toast("Export failed: " + err.message); }
+    await downloadChatPdf(title, { chat_id: getCtxId() });
+    toast("Chat exported as PDF");
+  } catch (err) {
+    try {
+      var data2 = await req("/api/chats/" + enc(getCtxId()) + "/messages");
+      var title2 = (data2 && data2.title) || "chat";
+      downloadMarkdown(title2, chatMarkdown(title2, (data2 && data2.messages) || []));
+      toast("PDF export failed — saved .md instead");
+    } catch (err2) { toast("Export failed: " + err2.message); }
+  }
 });
 $("modelBtn").addEventListener("click", function (e) {
   e.stopPropagation();
@@ -240,4 +251,4 @@ $("modelBtn").addEventListener("click", function (e) {
 });
 } /* end initChat */
 
-export { initChat, msgEl, renderChat, refreshChats, refreshProjects, sendText, send, copyText, renderRecents, renderProjects, chatMarkdown, setActiveTier, renderModelDD, clearComposer, restoreComposer, uploadPending, streamInto, stopSpeaking, speakText, hydrateUploadImages };
+export { initChat, msgEl, renderChat, refreshChats, refreshProjects, sendText, send, copyText, renderRecents, renderProjects, chatMarkdown, downloadChatPdf, setActiveTier, renderModelDD, clearComposer, restoreComposer, uploadPending, streamInto, stopSpeaking, speakText, hydrateUploadImages };

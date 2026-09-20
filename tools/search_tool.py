@@ -67,25 +67,50 @@ def _format_sources(query: str, sources: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+# Max results from one domain per search: Wikipedia-fallback chains
+# otherwise return 5-6 same-domain chips that carry no information.
+MAX_RESULTS_PER_DOMAIN: int = 2
+
+
+def _cap_domains(sources: List[Dict[str, str]], limit: int = MAX_RESULTS_PER_DOMAIN) -> List[Dict[str, str]]:
+    """Keep at most `limit` results per domain, order preserved (never raises)."""
+    try:
+        seen: Dict[str, int] = {}
+        kept: List[Dict[str, str]] = []
+        for s in sources or []:
+            if not isinstance(s, dict):
+                continue
+            domain = str(s.get("domain", "") or "").lower() or "unknown source"
+            if seen.get(domain, 0) >= max(1, int(limit)):
+                continue
+            seen[domain] = seen.get(domain, 0) + 1
+            kept.append(s)
+        return kept
+    except Exception:
+        logger.debug("domain cap failed; returning uncapped", exc_info=True)
+        return list(sources or [])
+
+
 def search_sources(query: str, max_results: int = MAX_SEARCH_RESULTS) -> Tuple[str, List[Dict[str, str]]]:
     """Run a structured web search. Fully free, keyless chain (stdlib only):
 
     DDG-lite HTML -> Wikipedia full-text -> Wikidata entity facts.
     Returns (formatted_text, sources); ("", []) only when every backend
     is empty or unreachable. Raises ValueError on empty query only —
-    backend failures fall through, never out.
+    backend failures fall through, never out. Per-domain caps keep one
+    backend (usually Wikipedia) from filling every chip.
     """
     query = str(query or "")[:MAX_QUERY_CHARS]
     if not query.strip():
         raise ValueError("empty query")
-    lite = _ddg_lite_search(query, max_results)
+    lite = _cap_domains(_ddg_lite_search(query, max_results))
     if lite:
         return _format_sources(query, lite), lite
-    wiki = _wikipedia_search(query, max_results)
+    wiki = _cap_domains(_wikipedia_search(query, max_results))
     if wiki:
         return (_format_sources(query, wiki)
                 + "\n[Note: results via Wikipedia fallback.]"), wiki
-    facts = _wikidata_search(query)
+    facts = _cap_domains(_wikidata_search(query))
     if facts:
         return (_format_sources(query, facts)
                 + "\n[Note: structured facts via Wikidata fallback.]"), facts
