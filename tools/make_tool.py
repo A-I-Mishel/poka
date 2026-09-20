@@ -439,7 +439,10 @@ def _blocks_to_word_html(title: str, blocks: List[Tuple[str, Any]]) -> str:
 def create_pdf(title: str, markdown_text: str) -> str:
     """Create a PDF document (.pdf file) from lightweight markdown.
 
-    Use ONLY when the user explicitly asks for a PDF. Supported input:
+    Use ONLY when the user explicitly asks for a PDF. If the request
+    mentions PDF anywhere — even alongside "text" or "convert" — prefer
+    this tool over create_markdown/create_doc: the named format wins,
+    never substitute another format. Supported input:
     # / ## / ### headings, paragraphs, - bullets, 1. numbered lists,
     > quotes, ``` code blocks, | tables |, --- page breaks.
 
@@ -498,7 +501,9 @@ def create_markdown(title: str, markdown_text: str) -> str:
 
     Use ONLY when the user explicitly asks for a markdown file, .md
     export, or notes file. Do NOT use for plain chat answers — reply
-    in chat text instead.
+    in chat text instead. If the request mentions PDF, docx, or doc
+    anywhere, use that tool instead — never substitute markdown for a
+    named format.
 
     Args:
         title: File title (becomes the top # heading + filename basis).
