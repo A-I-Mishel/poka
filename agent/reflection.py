@@ -165,9 +165,12 @@ def reflect_and_improve(
         if _has_improve_marker(reflection_text):
             improved = _improved_text(reflection_text)
             # Fail-closed: a weak critic may leak its deliberation
-            # ("Critical assessment ..." table) into the rewrite — strip
-            # any critique scaffold before accepting it. _strip never
-            # raises; the outer handler covers the unexpected anyway.
+            # ("Critical assessment ..." / "Critique of the Original
+            # Draft ..." tables) into the rewrite — strip any critique
+            # scaffold before accepting it (a stripped rewrite that still
+            # carries the improvement beats the stale draft; pure-leak
+            # rewrites strip to nothing and the draft is kept). Helpers
+            # never raise; the outer handler covers the unexpected anyway.
             from agent.prompts import strip_internal_reasoning as _strip
 
             improved = _strip(improved)

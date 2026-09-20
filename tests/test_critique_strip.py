@@ -61,6 +61,79 @@ def test_critique_without_rewrite_untouched():
     assert strip_internal_reasoning(text) == text
 
 
+MISTRAL_LEAK = """Can you generate the question paper in text? Like convert the question paper in pdf again?
+
+---
+Critique of the Original Draft:
+
+Incomplete Request Fulfillment
+The user asked for two distinct actions but the draft omitted the first.
+Missing Key Details
+The original draft did not include the actual text of the question paper.
+---
+
+Improved Version
+
+(Fulfills all requirements, including text conversion and PDF generation.)
+---
+Question Paper (Text Format - Markdown):
+
+**i) Electric flux through a closed surface can be calculated by:**
+A) Gauss' law.
+---
+Verification Notes:
+The questions match the user's earlier options.
+Recall Checkpoints:
+The improved version references prior answers.
+Final Note:
+The original draft failed to fulfill the first request.
+[PASS] only if the user confirms the markdown text matches.
+"""
+
+
+def test_mistral_critique_shape_returns_paper_only():
+    out = strip_internal_reasoning(MISTRAL_LEAK)
+    assert "Critique of the Original Draft" not in out
+    assert "Incomplete Request Fulfillment" not in out
+    assert "Verification Notes" not in out
+    assert "Recall Checkpoints" not in out
+    assert "Final Note" not in out
+    assert "[PASS]" not in out
+    assert "Question Paper (Text Format - Markdown)" in out
+    assert "Gauss' law." in out
+
+
+def test_lone_final_note_untouched():
+    text = "Here is the summary.\n\nFinal Note\n\nThanks for reading!"
+    assert strip_internal_reasoning(text) == text
+
+
+def test_contains_critique_scaffold():
+    from agent.prompts import _contains_critique_scaffold
+
+    assert _contains_critique_scaffold(MISTRAL_LEAK) is True
+    assert _contains_critique_scaffold(CRITIQUE_LEAK) is True
+    assert _contains_critique_scaffold("Just a normal answer.") is False
+    assert _contains_critique_scaffold(
+        "### Critical assessment\n\nNo rewrite here.") is False
+
+
+def test_reflection_strips_scaffolded_rewrite(monkeypatch):
+    from agent import reflection as refl
+
+    class _Resp:
+        content = ("[IMPROVE]\n### Critique of the Original Draft\n\ntable\n\n"
+                   "### Improved Version\n\nNew words here.")
+
+    monkeypatch.setattr(
+        "agent._invoke_bounded", lambda llm, msgs, budget=None: _Resp()
+    )
+    draft = "The original draft answer."
+    out = refl.reflect_and_improve(object(), "req", draft, [], budget=None)
+    assert "New words here." in out
+    assert "Critique of the Original Draft" not in out
+
+
 def test_normal_answers_untouched():
     for text in (
         "Yes. Sam Altman is the CEO of OpenAI.",

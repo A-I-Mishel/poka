@@ -334,41 +334,98 @@ def _scaffold_heading(line: str) -> str | None:
     return match.group(1).upper() if match else None
 
 
-_CRITIQUE_RE = re.compile(
-    r"^[ \t]*(?:#{1,6}[ \t]*)?"
-    r"(?:\d+[.)][ \t]*)?"
-    r"(?:\*{0,2}[ \t]*)?"
-    r"critical assessment\b",
+# Critique/improved heading families (weak tiers phrase the same
+# leaked scaffold many ways: "Critical assessment ...", "Critique of
+# the Original Draft ...", "Improved response ...", "Improved
+# Version ..."). Line-anchored so inline prose ("improved response
+# times matter") never matches. A lone "Final Note"-style heading
+# without the pair never triggers: both headings in order are required.
+_CRITIQUE_RES = tuple(
+    re.compile(
+        r"^[ \t]*(?:#{1,6}[ \t]*)?"
+        r"(?:\d+[.)][ \t]*)?"
+        r"(?:\*{0,2}[ \t]*)?" + pattern,
+        re.IGNORECASE,
+    )
+    for pattern in (
+        r"critical assessment\b",
+        r"critique of (?:the|this|your|my) .*?(?:draft|response|answer|output)\b",
+        r"(?:self[-\s]?critique|draft critique|draft review|response review)\b",
+    )
+)
+_IMPROVED_RES = tuple(
+    re.compile(
+        r"^[ \t]*(?:#{1,6}[ \t]*)?"
+        r"(?:\d+[.)][ \t]*)?"
+        r"(?:\*{0,2}[ \t]*)?" + pattern,
+        re.IGNORECASE,
+    )
+    for pattern in (
+        r"improved (?:response|version|answer)\b",
+        r"(?:corrected|revised|final) (?:version|response|answer)\b",
+    )
+)
+
+# Backward-compatible aliases (single-pattern era).
+_CRITIQUE_RE = _CRITIQUE_RES[0]
+_IMPROVED_RE = _IMPROVED_RES[0]
+
+# Critic-meta sections: never user content, only ever trail a leaked
+# rewrite ("Verification Notes", "Recall Checkpoints", "Final Note",
+# "[PASS] only if ..."). Cut from the salvaged tail, never from
+# ordinary answers (the cut below runs only after the pair matched).
+_META_SECTION_RE = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*{0,2}[ \t]*)?"
+    r"(verification notes|recall checkpoints|final note|"
+    r"clarifications?\s+for\s+the\s+user)\b",
     re.IGNORECASE,
 )
-_IMPROVED_RE = re.compile(
-    r"^[ \t]*(?:#{1,6}[ \t]*)?"
-    r"(?:\d+[.)][ \t]*)?"
-    r"(?:\*{0,2}[ \t]*)?"
-    r"improved response\b",
-    re.IGNORECASE,
-)
+_PASS_LINE_RE = re.compile(r"^[ \t]*\[PASS\].*$", re.IGNORECASE)
+
+
+def _contains_critique_scaffold(text: str) -> bool:
+    """True when a critique+improved heading pair exists in order."""
+    try:
+        lines = str(text or "").splitlines()
+        crit = next(
+            (i for i, line in enumerate(lines)
+             if any(rx.match(line) for rx in _CRITIQUE_RES)),
+            None,
+        )
+        if crit is None:
+            return False
+        return any(rx.match(line) for line in lines[crit + 1:]
+                   for rx in _IMPROVED_RES)
+    except Exception:
+        return False
 
 
 def _strip_critique_scaffold(text: str) -> str:
     """Remove a leaked draft-critique scaffold, keeping the user-ready rewrite.
 
     Weak tiers sometimes emit their self-critique verbatim ("Critical
-    assessment of the draft response" table + "Improved response (ready
-    for user)" rewrite) instead of just answering. When BOTH headings
-    are present (in order), everything up to and including the
-    "Improved response" heading is internal deliberation — return the
-    rewrite after it. With only a critique heading and no rewrite,
-    nothing salvageable exists, so the text is returned unchanged.
-    Never raises.
+    assessment ..." / "Critique of the Original Draft ..." tables +
+    "Improved response ..." / "Improved Version ..." rewrite) instead of
+    just answering. When BOTH headings are present (in order), everything
+    up to and including the improved heading is internal deliberation —
+    return the rewrite after it, cut at the first trailing critic-meta
+    section (verification notes / final note / [PASS] verdicts are critic
+    voice, never the answer). With only a critique heading and no
+    rewrite, nothing salvageable exists, so the text is returned
+    unchanged. Never raises.
     """
     try:
         lines = text.splitlines()
-        crit = next((i for i, line in enumerate(lines) if _CRITIQUE_RE.match(line)), None)
+        crit = next(
+            (i for i, line in enumerate(lines)
+             if any(rx.match(line) for rx in _CRITIQUE_RES)),
+            None,
+        )
         if crit is None:
             return text
         improved = next(
-            (i for i in range(crit + 1, len(lines)) if _IMPROVED_RE.match(lines[i])),
+            (i for i in range(crit + 1, len(lines))
+             if any(rx.match(lines[i]) for rx in _IMPROVED_RES)),
             None,
         )
         if improved is None:
@@ -377,7 +434,13 @@ def _strip_critique_scaffold(text: str) -> str:
         colon = lines[improved].find(":")
         if colon >= 0:
             same_line = lines[improved][colon + 1:].strip(" *\t")
-        tail = "\n".join(lines[improved + 1:]).strip()
+        tail_lines = lines[improved + 1:]
+        cut = next(
+            (i for i, line in enumerate(tail_lines) if _META_SECTION_RE.match(line)),
+            len(tail_lines),
+        )
+        tail_lines = [line for line in tail_lines[:cut] if not _PASS_LINE_RE.match(line)]
+        tail = "\n".join(tail_lines).strip()
         tail = re.sub(r"\A(?:[ \t]*[-*_]{3,}[ \t]*\n)+", "", tail).strip()
         result = "\n\n".join(part for part in (same_line, tail) if part).strip()
         return result if result else text
