@@ -273,7 +273,7 @@ def test_normalizer_prompt_shape_and_parse(monkeypatch):
         [{"type": "name", "value": "Sam", "polarity": "positive"}],
         None, None, "test-req", [("Fake", lambda: object())])
     assert out == {"verdict": "equivalent", "key": "name: sam",
-                   "confidence": "high"}
+                   "confidence": "high", "aliases": []}
     low = seen["prompt"].lower()
     assert "verdict:" in low and "key:" in low and "confidence:" in low
     # Candidate + neighbors travel as DATA lines; the raw user message
