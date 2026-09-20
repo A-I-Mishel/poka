@@ -91,10 +91,99 @@ def _cap_domains(sources: List[Dict[str, str]], limit: int = MAX_RESULTS_PER_DOM
         return list(sources or [])
 
 
+# Head start for the DDG leg: a healthy DDG answer (sub-second) returns
+# before Wikipedia is even started — the old sequential contract (one
+# backend call) preserved exactly on the fast path. Only a slow or
+# stalled DDG triggers the race.
+_DDG_HEAD_START_SECONDS: float = 0.5
+# Grace after the Wikipedia leg finishes while DDG is still running:
+# DDG keeps its preference (fresher, multi-domain) when it answers
+# promptly, but a stalled DDG no longer holds Wikipedia hostage.
+_DDG_PREFERENCE_GRACE_SECONDS: float = 3.0
+
+
+def _race_search_legs(query: str, max_results: int) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """Run DDG-lite and Wikipedia concurrently; return (lite, wiki).
+
+    Wall time becomes max(legs) instead of their sum: on blocked egress
+    DDG burns 15s+15s of timeouts while Wikipedia already answered, so
+    sequential chaining added ~30s of pure waiting per search. Daemon
+    threads (never joined past need) so a stalled leg cannot block the
+    caller or process exit; backends never raise (all catch internally),
+    and the wrapper below treats any failure as empty. Never raises.
+    """
+    box: Dict[str, List[Dict[str, str]]] = {}
+    done: Dict[str, bool] = {}
+
+    def _run(key: str, fn: Any, *args: Any) -> None:
+        try:
+            box[key] = fn(*args)
+        except Exception:
+            logger.debug("search leg %s failed", key, exc_info=True)
+            box[key] = []
+        finally:
+            done[key] = True
+
+    try:
+        import threading as _threading
+        import time as _time
+
+        lite_thread = _threading.Thread(
+            target=_run, args=("lite", _ddg_lite_search, query, max_results))
+        wiki_thread = _threading.Thread(
+            target=_run, args=("wiki", _wikipedia_search, query, max_results))
+        lite_thread.daemon = True
+        wiki_thread.daemon = True
+        started_at = _time.time()
+        lite_thread.start()
+        # Phase 1 — head start: healthy DDG answers here; Wikipedia is
+        # never even called (sequential contract preserved on fast path).
+        while not done.get("lite"):
+            if _time.time() - started_at >= _DDG_HEAD_START_SECONDS:
+                break
+            _time.sleep(0.05)
+        if box.get("lite"):
+            return box["lite"], []
+        # Phase 2 — race: DDG slow/stalled/empty; Wikipedia runs
+        # concurrently. DDG keeps preference with one short grace once
+        # Wikipedia is done. Each leg is bounded by its own fetch
+        # timeouts; the caller's tool timeout bounds the call regardless.
+        wiki_started = False
+        if not done.get("lite"):
+            wiki_thread.start()
+            wiki_started = True
+        grace_deadline: Any = None
+        while not done.get("lite"):
+            if done.get("wiki"):
+                if grace_deadline is None:
+                    grace_deadline = _time.time() + _DDG_PREFERENCE_GRACE_SECONDS
+                if _time.time() >= grace_deadline:
+                    break
+            _time.sleep(0.05)
+        if box.get("lite"):
+            return box["lite"], box.get("wiki") or []
+        # DDG empty/failed/slow: wait out Wikipedia (if still running)
+        # and take whatever it found.
+        if wiki_started:
+            wiki_thread.join()
+        else:
+            wiki_thread.start()
+            wiki_thread.join()
+        return box.get("lite") or [], box.get("wiki") or []
+    except Exception:
+        logger.debug("search race failed; falling back sequential", exc_info=True)
+        try:
+            return _ddg_lite_search(query, max_results), []
+        except Exception:
+            return [], []
+
+
 def search_sources(query: str, max_results: int = MAX_SEARCH_RESULTS) -> Tuple[str, List[Dict[str, str]]]:
     """Run a structured web search. Fully free, keyless chain (stdlib only):
 
     DDG-lite HTML -> Wikipedia full-text -> Wikidata entity facts.
+    The first two legs race concurrently (DDG keeps preference: it wins
+    whenever it returns results); Wikidata stays sequential last resort.
     Returns (formatted_text, sources); ("", []) only when every backend
     is empty or unreachable. Raises ValueError on empty query only —
     backend failures fall through, never out. Per-domain caps keep one
@@ -103,10 +192,11 @@ def search_sources(query: str, max_results: int = MAX_SEARCH_RESULTS) -> Tuple[s
     query = str(query or "")[:MAX_QUERY_CHARS]
     if not query.strip():
         raise ValueError("empty query")
-    lite = _cap_domains(_ddg_lite_search(query, max_results))
+    lite, wiki = _race_search_legs(query, max_results)
+    lite = _cap_domains(lite)
     if lite:
         return _format_sources(query, lite), lite
-    wiki = _cap_domains(_wikipedia_search(query, max_results))
+    wiki = _cap_domains(wiki)
     if wiki:
         return (_format_sources(query, wiki)
                 + "\n[Note: results via Wikipedia fallback.]"), wiki
