@@ -209,7 +209,11 @@ def decide(
             return {"use_images": [], "use_docs": list(dcs)[-1:],
                     "clarify": None, "reason": "page-number"}
 
-        # 3. Explicit type phrases.
+        # 3. Explicit type phrases. Users name modalities loosely
+        # ("photo" for a scanned PDF is the norm in student chats), so an
+        # explicitly named but empty side falls back to the most recent
+        # file of the other side instead of denying. Filenames (step 1)
+        # and slide/page numbers (step 2) stay strict: those are precise.
         has_vexp = _signals(t, VISION_EXPLICIT)
         has_dexp = _signals(t, DOC_EXPLICIT)
         if has_vexp or has_dexp:
@@ -217,18 +221,39 @@ def decide(
             use_d = list(dcs) if has_dexp else []
             if has_vexp and has_dexp:
                 use_i, use_d = list(imgs), list(dcs)
+            if not use_i and not use_d:
+                if has_vexp and dcs:
+                    return {"use_images": [], "use_docs": list(dcs)[-1:],
+                            "clarify": None, "reason": "explicit-vision-fallback-doc"}
+                if has_dexp and imgs:
+                    return {"use_images": list(imgs)[-1:], "use_docs": [],
+                            "clarify": None, "reason": "explicit-doc-fallback-image"}
             return {"use_images": use_i, "use_docs": use_d,
                     "clarify": None, "reason": "explicit-type"}
 
         # 4. Clear current intent via attachment-type nouns.
+        # Cross-modality fallback: noun-level intent ("paper", "photo")
+        # is approximate — a photographed question paper IS the image.
+        # When the named side is empty but the other side has files,
+        # reuse the most recent one instead of denying (the 12:19
+        # "whole question paper" turn asked about a photo). Explicit
+        # type phrases (step 3) and filenames (step 1) stay strict.
         has_v = _signals(t, VISION_NOUNS)
         has_d = _signals(t, DOC_NOUNS) or _SLIDE_RE.search(t) is not None or _PAGE_RE.search(t) is not None
         if has_v and not has_d:
-            return {"use_images": list(imgs), "use_docs": [],
-                    "clarify": None, "reason": "vision-intent"}
+            if imgs:
+                return {"use_images": list(imgs), "use_docs": [],
+                        "clarify": None, "reason": "vision-intent"}
+            if dcs:
+                return {"use_images": [], "use_docs": list(dcs)[-1:],
+                        "clarify": None, "reason": "vision-intent-fallback-doc"}
         if has_d and not has_v:
-            return {"use_images": [], "use_docs": list(dcs),
-                    "clarify": None, "reason": "document-intent"}
+            if dcs:
+                return {"use_images": [], "use_docs": list(dcs),
+                        "clarify": None, "reason": "document-intent"}
+            if imgs:
+                return {"use_images": list(imgs)[-1:], "use_docs": [],
+                        "clarify": None, "reason": "document-intent-fallback-image"}
         if has_v and has_d:
             return {"use_images": list(imgs), "use_docs": list(dcs),
                     "clarify": None, "reason": "both-intents"}

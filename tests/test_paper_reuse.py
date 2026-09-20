@@ -58,6 +58,33 @@ def test_the_file_phrase_prefers_docs():
     assert [e["id"] for e in d["use_docs"]] == ["doc1"]
 
 
+def test_document_nouns_fall_back_to_image():
+    # The 12:19 turn: "not the answer the whole question paper" asked
+    # about a photo — doc nouns with only an image available reuse it.
+    d = decide("not the answer the whole question paper", [IMG], [])
+    assert [e["id"] for e in d["use_images"]] == ["img1"]
+    assert d["clarify"] is None
+
+
+def test_vision_nouns_fall_back_to_doc():
+    d = decide("show me the photo again", [], [DOC])
+    assert [e["id"] for e in d["use_docs"]] == ["doc1"]
+
+
+def test_intent_with_nothing_available_falls_through():
+    d = decide("not the answer the whole question paper", [], [])
+    assert d["use_images"] == [] and d["use_docs"] == []
+    # No past-upload phrasing and no files: plain default deny.
+    assert d["clarify"] is None
+
+
+def test_past_upload_phrasing_with_nothing_available_clarifies():
+    d = decide("the paper i uploaded", [], [])
+    assert d["use_images"] == [] and d["use_docs"] == []
+    assert d["clarify"] is not None
+    assert "stay with the chat" in d["clarify"]
+
+
 def test_new_intent_beats_past_upload():
     d = decide("play the song i uploaded", [IMG], [DOC])
     assert d["use_images"] == [] and d["use_docs"] == []
