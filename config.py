@@ -51,6 +51,11 @@ MISTRAL_MODEL: str = "open-mistral-nemo"
 # Free trial tier, no card, via an NGC API key from build.nvidia.com.
 NVIDIA_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
 NVIDIA_MODEL: str = "meta/llama-3.1-8b-instruct"
+# Cohere via its OpenAI-compatible endpoint (same ChatOpenAI client).
+# Direct API key from dashboard.cohere.com; Command A default is
+# synthesis-grade, so this lane is a full cascade member (not cheap-only).
+COHERE_BASE_URL: str = "https://api.cohere.com/compatibility/v1"
+COHERE_MODEL: str = "command-a-03-2025"
 # OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Free models (Sept 2026; promos rotate — see
 # https://openrouter.ai/models for the current free list).
@@ -334,6 +339,17 @@ def get_tier_nvidia_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI
     )
 
 
+def get_tier_cohere_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """Cohere tier: Command models via the OpenAI-compatible endpoint."""
+    return _get_generic_openai_tier(
+        "Cohere",
+        "COHERE_API_KEY",
+        COHERE_BASE_URL,
+        _model_override("COHERE_MODEL", COHERE_MODEL),
+        temperature,
+    )
+
+
 def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
     """Build an OpenRouter client for one model (shared factory).
 
@@ -416,6 +432,7 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Gemini 3.6 Flash": get_tier2_llm,
     "Gemini 3.5 Flash": get_tier3_llm,
     "GitHub Models": get_tier_github_models_llm,
+    "Cohere": get_tier_cohere_llm,
     "Mistral": get_tier_mistral_llm,
     "NVIDIA": get_tier_nvidia_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
@@ -450,6 +467,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
     ("GitHub Models", get_tier_github_models_llm),
+    ("Cohere", get_tier_cohere_llm),
     ("NVIDIA", get_tier_nvidia_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
@@ -488,6 +506,7 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
     ("GitHub Models", get_tier_github_models_llm),
+    ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),
     ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
