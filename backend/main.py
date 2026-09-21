@@ -294,17 +294,46 @@ app.add_middleware(
 # execute in the UI origin. Downloads force attachment + nosniff +
 # sandbox at the endpoint; this middleware adds the baseline for
 # every response (JSON included).
+#
+# Single-server mode (local uvicorn / Docker) also serves the built UI
+# from this same API, so headers branch by path: /api/* keeps the
+# strict lockdown, while the UI needs its own same-origin assets
+# (default-src 'none' would block its CSS/JS and leave the page
+# unstyled and dead; camera=() would block its photo capture).
+_API_CSP = "default-src 'none'; frame-ancestors 'none'"
+# UI policy: same-origin scripts/styles/images plus the app's actual
+# needs — Google Fonts stylesheet/files, inline styles, data:/blob:
+# images (uploads, camera captures), same-origin /api fetch. No
+# third-party scripts, no eval/workers, never embedded elsewhere.
+_UI_CSP = (
+    "default-src 'self'; base-uri 'self'; object-src 'none'; "
+    "script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' data: https://fonts.gstatic.com; "
+    "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
+_API_PERMISSIONS = "camera=(), microphone=(), geolocation=()"
+# The UI's composer captures photos (video only, no audio); the API
+# itself needs no device access.
+_UI_PERMISSIONS = "camera=(self), microphone=(), geolocation=()"
+
+
 @app.middleware("http")
 async def _security_headers(request, call_next):  # type: ignore[no-untyped-def]
     response = await call_next(request)
+    try:
+        path = str(request.url.path or "")
+    except Exception:
+        path = ""
+    is_api = path == "/api" or path.startswith("/api/")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault(
-        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+        "Permissions-Policy", _API_PERMISSIONS if is_api else _UI_PERMISSIONS
     )
     response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+    response.headers.setdefault("Content-Security-Policy", _API_CSP if is_api else _UI_CSP)
     response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     return response
