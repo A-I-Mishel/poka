@@ -241,8 +241,19 @@ def _pptx_text(blob: bytes) -> tuple:
         from pptx import Presentation
 
         prs = Presentation(_io.BytesIO(blob))
+        try:
+            from services.pptx_images import iter_deck_pictures
+            from services.pptx_images import picture_lines_for_slide as _pic_lines
+
+            _pics_by_slide = {}
+            for _num, _alt, _blob in iter_deck_pictures(prs):
+                _pics_by_slide.setdefault(_num, []).append((_alt, _blob))
+        except Exception:
+            logger.debug("kb pptx picture setup failed", exc_info=True)
+            _pics_by_slide, _pic_lines = {}, None
         parts = []
-        for slide in prs.slides:
+        _img_counter = 0
+        for i, slide in enumerate(prs.slides, start=1):
             for shape in slide.shapes:
                 try:
                     if shape.has_text_frame and shape.text:
@@ -252,6 +263,19 @@ def _pptx_text(blob: bytes) -> tuple:
                 except Exception:
                     logger.debug("pptx shape extract failed; skipping shape", exc_info=True)
                     continue
+            # Embedded pictures: alt text + on-device OCR only here —
+            # services/ never touches agent vision tiers (the read/teach
+            # paths add the vision rung at call time).
+            try:
+                if _pic_lines is not None:
+                    _slide_pics = _pics_by_slide.get(i, [])
+                    if _slide_pics:
+                        _pic_out, _pic_used = _pic_lines(
+                            _slide_pics, _img_counter + 1, None)
+                        _img_counter += _pic_used
+                        parts.extend(_pic_out)
+            except Exception:
+                logger.debug("kb pptx picture lines failed; skipping", exc_info=True)
         text = "\n".join(parts).strip()
         return (text, "") if text else ("", "empty")
     except Exception:

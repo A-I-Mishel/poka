@@ -660,7 +660,30 @@ def _read_pptx_file(path) -> str:
     from pptx import Presentation
 
     prs = Presentation(str(path))
+    try:
+        from services.pptx_images import iter_deck_pictures
+        from services.pptx_images import picture_lines_for_slide as _pic_lines
+
+        _pics_by_slide = {}
+        for _num, _alt, _blob in iter_deck_pictures(prs):
+            _pics_by_slide.setdefault(_num, []).append((_alt, _blob))
+
+        def _vision_ocr(_blob):
+            try:
+                # Lazy: agent.* must not load at tools import time.
+                from agent.vision import vision_ocr_bytes
+
+                return str(vision_ocr_bytes(_blob) or "")
+            except Exception:
+                return ""
+    except Exception:
+        logger.debug("pptx picture setup failed", exc_info=True)
+        _pics_by_slide, _pic_lines = {}, None
+
+        def _vision_ocr(_blob):
+            return ""
     parts = []
+    _img_counter = 0
     for i, slide in enumerate(prs.slides, start=1):
         lines = []
         for shape in slide.shapes:
@@ -678,6 +701,16 @@ def _read_pptx_file(path) -> str:
             except Exception:
                 logger.debug("ppt shape extract failed; skipping shape", exc_info=True)
                 continue
+        try:
+            if _pic_lines is not None:
+                _slide_pics = _pics_by_slide.get(i, [])
+                if _slide_pics:
+                    _pic_out, _pic_used = _pic_lines(
+                        _slide_pics, _img_counter + 1, _vision_ocr)
+                    _img_counter += _pic_used
+                    lines.extend(_pic_out)
+        except Exception:
+            logger.debug("pptx picture lines failed; skipping", exc_info=True)
         if lines:
             parts.append(f"[slide {i}]\n" + "\n".join(lines))
     return "\n".join(parts)

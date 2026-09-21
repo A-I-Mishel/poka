@@ -488,6 +488,34 @@ def _extract_pptx_blocks(path: Any, ext: str) -> List[Tuple[int, str]]:
             # when the bytes are ZIP. Otherwise return [] for KB fallback.
             return []
         blocks: List[Tuple[int, str]] = []
+        # Embedded pictures (diagrams/photos of slides): alt text first,
+        # OCR ladder when absent. Pre-collected deck-wide (bounded) so the
+        # per-slide cap and deck cap hold across slides.
+        pics_by_slide: Dict[int, List[Tuple[str, Any]]] = {}
+        try:
+            from services.pptx_images import iter_deck_pictures
+
+            for _num, _alt, _blob in iter_deck_pictures(prs):
+                pics_by_slide.setdefault(_num, []).append((_alt, _blob))
+        except Exception:
+            logger.debug("teach picture collect failed", exc_info=True)
+            pics_by_slide = {}
+        try:
+            from services.pptx_images import picture_lines_for_slide as _pic_lines
+
+            def _vision_ocr(_blob: Any) -> str:
+                try:
+                    from agent.vision import vision_ocr_bytes
+
+                    return str(vision_ocr_bytes(_blob) or "")
+                except Exception:
+                    return ""
+        except Exception:
+            _pic_lines = None  # type: ignore[assignment]
+
+            def _vision_ocr(_blob: Any) -> str:
+                return ""
+        _img_counter = [0]
         for i, slide in enumerate(getattr(prs, "slides", []) or [], start=1):
             lines: List[str] = []
 
@@ -531,6 +559,19 @@ def _extract_pptx_blocks(path: Any, ext: str) -> List[Tuple[int, str]]:
             except Exception:
                 shapes = []
             _walk_shapes(shapes, lines)
+            # Embedded pictures for this slide (bounded deck-wide above):
+            # alt text first, OCR ladder when absent. Lines join the slide
+            # block so windows, numbering, and citations keep working.
+            try:
+                if _pic_lines is not None:
+                    _slide_pics = pics_by_slide.get(i, [])
+                    if _slide_pics:
+                        _pic_out, _pic_used = _pic_lines(
+                            _slide_pics, _img_counter[0] + 1, _vision_ocr)
+                        _img_counter[0] += _pic_used
+                        lines.extend(_pic_out)
+            except Exception:
+                logger.debug("teach picture lines failed; skipping", exc_info=True)
             text = "\n".join(lines).strip()
             if text:
                 blocks.append((i, text))
