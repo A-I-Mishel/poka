@@ -73,6 +73,9 @@ python -m pytest tests/ -q
 | `PLUTO_USER_ID` | no | Pin a stable local/dev identity |
 | `PLUTO_DATA_DIR` | no (`data/`) | Storage root override (tests use tmp) |
 | `PLUTO_FRONTEND_ORIGIN` | on the API host | Allowed CORS origin(s) of the UI |
+| `PLUTO_ALLOW_OPEN` | no (`false`) | Opt into public-host `open` mode (default fail-closed refuses to start) |
+| `PLUTO_ALLOW_SHARED_VAULT` | no (`false`) | Opt into `PLUTO_USER_ID`+`open` sharing one vault on a public host |
+| `PLUTO_ALLOW_MEMORY_LIMITER` | no (`false`) | Opt into per-process limits with `UVICORN_WORKERS>1` and no `REDIS_URL` |
 | `VITE_API_URL` | on Vercel | Public URL of the API (empty = same origin) |
 | `PLUTO_KB_EMBED_MODEL` | no | Embedding model for document search (default `models/gemini-embedding-001`) |
 | `GOOGLE_CLIENT_ID` | for Gmail | Google OAuth client ID (Desktop app) |
@@ -296,8 +299,10 @@ without failing CI.
 
 ## Known limitations
 
-- Free-tier models are rate-limited (Gemini ~20 req/day) and free
-  OpenCode models change availability without notice.
+- Free-tier models are rate-limited (Gemini ~20 req/day). The
+  OpenCode Zen free tier was retired Sep 2026 (`MissingSessionID`);
+  only paid Zen models remain usable with billing (see Model
+  configuration).
 - Image-only (scanned) PDFs report as such; on-device OCR needs an
   engine that isn't bundled.
 - Vision works on Gemini tiers; other tiers answer from text with an

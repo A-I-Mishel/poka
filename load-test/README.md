@@ -24,6 +24,12 @@ fast with a clear message instead of burning minutes on doomed scenarios.
 
 ### `.github/workflows/load-test.yml`
 
+> Authoritative definition: `.github/workflows/load-test.yml` (this
+> excerpt may lag). All k6/locust jobs are tier-gated (`GEMINI_API_KEY`
+> or `PLUTO_LOAD_TEST_URL`, otherwise skip — not red) and run a
+> `/api/health` tiers preflight that fails fast when no model tier is
+> configured. Backend installs use `requirements.lock`.
+
 ```yaml
 name: Load Testing
 
@@ -186,7 +192,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.lock
           pip install locust
 
       - name: Start Pluto server
@@ -362,8 +368,8 @@ locust -f locustfile.py --host=http://localhost:8000
 
 ### InfluxDB + Grafana
 ```bash
-# Start InfluxDB + Grafana
-docker-compose -f observability/docker-compose.observability.yml up -d
+# Start your own InfluxDB + Grafana (no compose file is shipped;
+# observability/ holds Prometheus rules + Grafana dashboards only)
 
 # Run k6 with InfluxDB output
 k6 run --out influxdb=http://localhost:8086/k6 load-test/k6-scenarios.js

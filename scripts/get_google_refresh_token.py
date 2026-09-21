@@ -7,7 +7,7 @@ One-time interactive setup (opens your browser for Google consent):
         --client-secret YOUR_CLIENT_SECRET
 
 Then put the printed refresh token into .env (local) and Render
-(poka-api Environment Variables) as GOOGLE_REFRESH_TOKEN, alongside
+(pluto-api Environment Variables) as GOOGLE_REFRESH_TOKEN, alongside
 GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
 
 The client ID/secret come from Google Cloud Console:

@@ -29,7 +29,6 @@ result.txt
 test_out.txt
 test_output.txt
 deep_chain_test.txt
-load_tests/
 .ruff_cache/
 .venv/
 
