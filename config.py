@@ -2,9 +2,10 @@
 
 Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
 same GEMINI_API_KEY) + 3.5 backup -> Groq 120B (strong fallback) ->
-Groq Fast 20B (fast/simple, cheap-only) -> Cohere -> OpenRouter Free
-Router -> Mistral (last resort). GitHub Models + NVIDIA removed (dead).
-Curated OpenRouter lanes removed; only openrouter/free kept.
+Groq Fast 20B (fast/simple, cheap-only) -> Cohere -> Nemotron 3 Ultra
+-> OpenRouter Free Router -> Mistral (last resort). GitHub Models +
+NVIDIA removed (dead). Other curated OpenRouter lanes removed; only
+Nemotron Ultra (user pick) + openrouter/free kept.
 
 OpenCode Zen free tier retired Sep 2026: provider returns
 MissingSessionID ("free tier can only be used in OpenCode") for
@@ -59,10 +60,12 @@ MISTRAL_MODEL: str = "open-mistral-nemo"
 COHERE_BASE_URL: str = "https://api.cohere.com/compatibility/v1"
 COHERE_MODEL: str = "command-a-03-2025"
 # OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
-# Emergency pool keeps only the Free Router (openrouter/free); curated
-# free-model lanes (Ultra/Gemma/Super/3.5/26B/Ling-Fin/Laguna) removed
-# per user preference — promos rotate, router auto-selects live free models.
+# Emergency pool: one curated strong lane (Nemotron 3 Ultra, user pick)
+# ahead of the Free Router fallback. Other curated free-model lanes
+# (Gemma/Super/3.5/26B/Ling-Fin/Laguna) stay removed — promos rotate,
+# router auto-selects live free models.
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 # OpenRouter Free Model Router (released Feb 2026): selects a free model
 # at random from the live catalog, smartly filtering for features the
 # request needs (tool calling, image understanding, structured output).
@@ -410,6 +413,11 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
         return None
 
 
+def get_tier_openrouter_ultra_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter fallback: Nemotron 3 Ultra 550B (free tier, user pick)."""
+    return _get_openrouter_llm("OpenRouter Nemotron Ultra", OPENROUTER_ULTRA_MODEL, temperature)
+
+
 def get_tier_openrouter_free_router_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """OpenRouter Free Model Router (released Feb 2026).
 
@@ -429,6 +437,7 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Groq Fast": get_tier_groq_fast_llm,
     "Cohere": get_tier_cohere_llm,
     "Mistral": get_tier_mistral_llm,
+    "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
     "OpenRouter Free Router": get_tier_openrouter_free_router_llm,
 }
 
@@ -457,6 +466,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Groq", get_tier_groq_llm),
     ("Groq Fast", get_tier_groq_fast_llm),
     ("Cohere", get_tier_cohere_llm),
+    ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
     ("Mistral", get_tier_mistral_llm),
 ]
@@ -468,9 +478,10 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
 # first so Gemini quota is reserved for main answers); the full cascade
 # remains the escape hatch when synthesis is down (answers then carry a
 # degraded marker). Tables hold (name, getter) pairs like TIER_GETTERS.
-# Gemini leads; Groq 120B is the strong fallback; Cohere -> Free Router ->
-# Mistral is the emergency pool. Groq's free pool absorbs cheap traffic;
-# Gemini's per-model pool is spent on quality final answers + vision.
+# Gemini leads; Groq 120B is the strong fallback; Cohere -> Nemotron
+# Ultra -> Free Router -> Mistral is the emergency pool. Groq's free pool
+# absorbs cheap traffic; Gemini's per-model pool is spent on quality final
+# answers + vision.
 SMALL_FINAL_TIERS = frozenset({"Groq Fast"})  # 20B-class: never final answers
 # Weak final-answer tiers: small or nondeterministic lanes that answer only
 # when quality tiers are down. Runtime marks their answers degraded so the
@@ -485,6 +496,7 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.5 Flash", get_tier3_llm),
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
+    ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
     ("Mistral", get_tier_mistral_llm),
 ]

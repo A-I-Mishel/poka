@@ -138,13 +138,14 @@ carry a degraded marker):
 4. Gemini 3.5 Flash (Google backup; override via `GEMINI_35_MODEL`)
 5. Groq 120B (strong fallback; model via `GROQ_MODEL`)
 6. Cohere Command (`COHERE_MODEL`; vision backup via `command-a-vision-07-2025`)
-7. OpenRouter Free Router (`openrouter/free`; smart auto-selection
+7. OpenRouter Nemotron 3 Ultra 550B (`nvidia/nemotron-3-ultra-550b-a55b:free`; reasoning lane)
+8. OpenRouter Free Router (`openrouter/free`; smart auto-selection
    of a free model filtered by request features)
-8. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL` — last resort)
+9. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL` — last resort)
 
 Cheap table (dumb calls): Groq Fast 20B (`GROQ_FAST_MODEL`) → Groq 120B → Mistral.
-GitHub Models + NVIDIA removed (dead); curated OpenRouter lanes removed
-(Ultra/Gemma/Super/3.5/26B/Ling-Fin/Laguna) — only Free Router kept.
+GitHub Models + NVIDIA removed (dead); other curated OpenRouter lanes
+removed (Gemma/Super/3.5/26B/Ling-Fin/Laguna) — only Nemotron Ultra + Free Router kept.
 
 OpenCode Zen free tier (Muse Spark 1.3 contributor-free, Nemotron
 3.5/Ultra, Big Pickle, MiMo, Ling) retired Sep 2026 — provider now

@@ -97,7 +97,7 @@ def test_cascade_position_gemini_led():
     assert names == [
         "Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash",
         "Gemini 3.5 Flash", "Groq", "Groq Fast", "Cohere",
-        "OpenRouter Free Router", "Mistral",
+        "OpenRouter Nemotron Ultra", "OpenRouter Free Router", "Mistral",
     ]
 
 
