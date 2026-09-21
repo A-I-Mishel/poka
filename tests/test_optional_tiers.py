@@ -1,11 +1,9 @@
-"""Optional free-tier lanes: GitHub Models, Mistral, NVIDIA (no network).
+"""Optional lanes: Mistral, Cohere, Groq Fast (no network).
 
 Each lane is env-gated: a missing or placeholder key means the tier is
 skipped (None), so unconfigured lanes never disturb the cascade.
-Position: GitHub Models + NVIDIA are direct providers after Gemini 3.5
-Flash, before the OpenRouter aggregator block (direct providers first,
-aggregator fallbacks last); Mistral is the last-resort tier at the very
-bottom of the cascade.
+Position: Gemini mains first, Groq strong fallback, Groq Fast cheap-only,
+then emergency pool Cohere -> Free Router -> Mistral (last resort).
 """
 
 import os
@@ -19,18 +17,15 @@ import config
 
 LANES = [
     # (tier name, key env, placeholder, model env, default model, base fragment)
-    ("GitHub Models", "GITHUB_MODELS_TOKEN", "your_github_models_token_here",
-     "GITHUB_MODELS_MODEL", config.GITHUB_MODELS_MODEL, "models.github.ai"),
     ("Mistral", "MISTRAL_API_KEY", "your_mistral_key_here",
      "MISTRAL_MODEL", config.MISTRAL_MODEL, "mistral.ai"),
-    ("NVIDIA", "NVIDIA_API_KEY", "your_nvidia_key_here",
-     "NVIDIA_MODEL", config.NVIDIA_MODEL, "nvidia.com"),
+    ("Cohere", "COHERE_API_KEY", "your_cohere_key_here",
+     "COHERE_MODEL", config.COHERE_MODEL, "cohere.com"),
 ]
 
 _GETTERS = {
-    "GitHub Models": config.get_tier_github_models_llm,
     "Mistral": config.get_tier_mistral_llm,
-    "NVIDIA": config.get_tier_nvidia_llm,
+    "Cohere": config.get_tier_cohere_llm,
 }
 
 
@@ -61,6 +56,8 @@ def test_placeholder_key_is_skipped(monkeypatch, lane):
 
 def test_clients_built_with_key(monkeypatch, lane):
     monkeypatch.setenv(lane["key_env"], "test-key")
+    # Hermetic against dev .env overrides.
+    monkeypatch.delenv(lane["model_env"], raising=False)
     client = _GETTERS[lane["name"]]()
     assert client is not None
     assert _model_of(client) == lane["default_model"]
@@ -85,19 +82,29 @@ def test_getter_by_name(monkeypatch, lane):
     assert config.get_tier_llm(lane["name"], temperature=0.5) is not None
 
 
-def test_cascade_position_after_gemini_before_openrouter():
+def test_groq_fast_shares_groq_key(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert config.get_tier_groq_fast_llm() is None
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.delenv("GROQ_FAST_MODEL", raising=False)
+    client = config.get_tier_groq_fast_llm()
+    assert client is not None
+    assert _model_of(client) == config.GROQ_FAST_MODEL
+
+
+def test_cascade_position_gemini_led():
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names.index("Gemini 3.5 Flash") < names.index("GitHub Models")
-    assert names.index("GitHub Models") < names.index("NVIDIA")
-    assert names.index("NVIDIA") < names.index("OpenRouter Nemotron Ultra")
-    # Mistral is last resort: after every OpenRouter fallback.
-    assert names.index("OpenRouter Free Router") < names.index("Mistral")
-    assert names[-1] == "Mistral"
+    assert names == [
+        "Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash",
+        "Gemini 3.5 Flash", "Groq", "Groq Fast", "Cohere",
+        "OpenRouter Free Router", "Mistral",
+    ]
 
 
 def test_registered_in_agent_table():
     from agent import providers
 
     names = [name for name, _ in providers.TIER_AGENT_GETTERS]
-    for lane in ("GitHub Models", "Mistral", "NVIDIA"):
+    for lane in ("Mistral", "Cohere", "Groq Fast", "Gemini 3.8 Flash",
+                 "Gemini 3.7 Flash"):
         assert lane in names

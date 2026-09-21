@@ -2,8 +2,8 @@
 
 Env-gated like the other optional lanes: a missing or placeholder key
 means the tier is skipped (None), so unconfigured deploys never notice
-it. Position: direct provider after GitHub Models (before the NVIDIA
-lane and the OpenRouter aggregator block); full synthesis member.
+it. Position: emergency pool after Groq Fast, before OpenRouter Free
+Router; full synthesis member, cheap-excluded.
 """
 
 import os
@@ -56,8 +56,9 @@ def test_getter_by_name(monkeypatch):
 
 def test_cascade_position():
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names.index("GitHub Models") < names.index("Cohere")
-    assert names.index("Cohere") < names.index("NVIDIA")
+    assert names.index("Groq Fast") < names.index("Cohere")
+    assert names.index("Cohere") < names.index("OpenRouter Free Router")
+    assert names.index("OpenRouter Free Router") < names.index("Mistral")
     assert names[-1] == "Mistral"
 
 

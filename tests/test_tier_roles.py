@@ -61,30 +61,32 @@ def test_role_tables_shape():
     from config import CHEAP_TIERS, SYNTHESIS_TIERS, TIER_GETTERS
 
     synth_names = [n for n, _ in SYNTHESIS_TIERS]
-    assert synth_names[:3] == ["Groq", "Gemini 3.6 Flash", "Gemini 3.5 Flash"]
-    assert "NVIDIA" not in synth_names
-    assert set(synth_names) | {"NVIDIA"} == {n for n, _ in TIER_GETTERS}
+    assert synth_names[:4] == ["Gemini 3.8 Flash", "Gemini 3.7 Flash",
+                               "Gemini 3.6 Flash", "Gemini 3.5 Flash"]
+    assert synth_names[4] == "Groq"
+    assert "Groq Fast" not in synth_names
+    assert set(synth_names) | {"Groq Fast"} == {n for n, _ in TIER_GETTERS}
     assert [n for n, _ in CHEAP_TIERS] == [
-        "Groq", "GitHub Models", "NVIDIA", "Mistral"]
+        "Groq Fast", "Groq", "Mistral"]
 
 
 def test_groq_first_gemini_escalates():
-    # Groq leads synthesis; a dead Groq fails over to Gemini 3.6
-    # (escalation), proving the reorder keeps Gemini reachable.
+    # Gemini leads synthesis; a dead 3.8 fails over to 3.7,
+    # proving the reorder keeps the chain reachable.
     from config import SYNTHESIS_TIERS
 
-    assert [n for n, _ in SYNTHESIS_TIERS][:2] == ["Groq", "Gemini 3.6 Flash"]
+    assert [n for n, _ in SYNTHESIS_TIERS][:2] == ["Gemini 3.8 Flash", "Gemini 3.7 Flash"]
 
-    def _dead_groq():
-        raise RuntimeError("Groq 429 rate limited")
+    def _dead_gemini():
+        raise RuntimeError("Gemini 429 rate limited")
 
     gemini = FakeLLM(["gemini answered"])
     out = agent.answer_with_fallback(
         "hello there friend",
-        tiers=[("Groq", _dead_groq), ("Gemini 3.6 Flash", lambda: gemini)],
+        tiers=[("Gemini 3.8 Flash", _dead_gemini), ("Gemini 3.7 Flash", lambda: gemini)],
         raw_messages=[])
     assert out["output"] == "gemini answered"
-    assert out["active_tier"] == "Gemini 3.6 Flash"
+    assert out["active_tier"] == "Gemini 3.7 Flash"
 
 
 def test_classify_uses_cheap_table(monkeypatch):

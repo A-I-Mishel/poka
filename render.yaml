@@ -24,11 +24,9 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
-      - key: GITHUB_MODELS_TOKEN
+      - key: COHERE_API_KEY
         sync: false
       - key: MISTRAL_API_KEY
-        sync: false
-      - key: NVIDIA_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false

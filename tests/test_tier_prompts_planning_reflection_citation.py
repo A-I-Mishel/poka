@@ -60,9 +60,9 @@ class FakeLLM:
 def test_strict_tier_set():
     from agent.prompts import STRICT_GROUNDING_PARAGRAPH, is_strict_tier
 
-    assert is_strict_tier("NVIDIA") is True
+    assert is_strict_tier("Groq Fast") is True
     assert is_strict_tier("Mistral") is True
-    assert is_strict_tier("Gemini 3.6 Flash") is False
+    assert is_strict_tier("Gemini 3.8 Flash") is False
     assert is_strict_tier(None) is False
     assert "ONLY from the tool results" in STRICT_GROUNDING_PARAGRAPH
 
@@ -70,13 +70,13 @@ def test_strict_tier_set():
 def test_simple_answer_grounded_for_all_tiers():
     weak = FakeLLM(["weak answer text here"])
     out = agent.answer_with_fallback(
-        "hello there friend", tiers=[("NVIDIA", lambda: weak)], raw_messages=[])
+        "hello there friend", tiers=[("Groq Fast", lambda: weak)], raw_messages=[])
     assert out["output"] == "weak answer text here"
     assert "ONLY from the tool results" in str(weak.calls[0][0].content)
 
     strong = FakeLLM(["strong answer"])
     agent.answer_with_fallback(
-        "hello there friend", tiers=[("Gemini 3.6 Flash", lambda: strong)],
+        "hello there friend", tiers=[("Gemini 3.8 Flash", lambda: strong)],
         raw_messages=[])
     assert "ONLY from the tool results" in str(strong.calls[0][0].content)
 

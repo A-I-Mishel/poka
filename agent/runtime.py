@@ -77,7 +77,7 @@ _HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
 # Vision-capable tier names (mirrors services.vision._VISION_TIERS).
 # Cohere trails the Gemini lanes: backup only, and only when its
 # configured model is vision-capable (COHERE_MODEL=command-a-vision-*).
-_VISION_TIER_NAMES = ("Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere")
+_VISION_TIER_NAMES = ("Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere")
 
 
 # Bridge transcript wrapper (routing-neutral by construction — see note
@@ -205,7 +205,8 @@ def _vision_unavailable_reason() -> str:
             if wait and "cool" not in reason:
                 return f"{reason}, cooling down {wait}"
             return f"cooling down {wait}" if wait else reason
-        hit = last_tier_error("Gemini 3.6 Flash") or last_tier_error("Gemini 3.5 Flash")
+        hit = (last_tier_error("Gemini 3.8 Flash") or last_tier_error("Gemini 3.7 Flash")
+               or last_tier_error("Gemini 3.6 Flash") or last_tier_error("Gemini 3.5 Flash"))
         if hit:
             return _friendly_reason(hit[0])
     except Exception:

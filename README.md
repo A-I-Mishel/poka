@@ -63,12 +63,10 @@ python -m pytest tests/ -q
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `GEMINI_API_KEY` | yes (or Groq/OpenRouter key) | Google Gemini models (free tier) |
-| `GROQ_API_KEY` | no | Groq fast-inference tier |
-| `OPENROUTER_API_KEY` | no | OpenRouter fallback tiers (free models) |
-| `GITHUB_MODELS_TOKEN` | no | GitHub Models free tier (PAT with `models:read`) |
-| `MISTRAL_API_KEY` | no | Mistral free evaluation tier (no card) |
-| `NVIDIA_API_KEY` | no | NVIDIA NIM free trial tier (NGC key, no card) |
+| `GEMINI_API_KEY` | yes (or Groq/OpenRouter key) | Google Gemini models (3.8/3.7/3.6 Flash main + 3.5 backup) |
+| `GROQ_API_KEY` | no | Groq 120B strong fallback + 20B fast/simple lane (`GROQ_MODEL` / `GROQ_FAST_MODEL`) |
+| `OPENROUTER_API_KEY` | no | OpenRouter Free Router emergency fallback (`openrouter/free`) |
+| `MISTRAL_API_KEY` | no | Mistral free evaluation tier (no card, last resort) |
 | `COHERE_API_KEY` | no | Cohere Command tier (direct key, OpenAI-compatible endpoint). Set `COHERE_MODEL=command-a-vision-07-2025` to also use it as backup vision lane behind Gemini |
 | `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
 | `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
@@ -129,21 +127,24 @@ Sessions work in both auth modes.
 ## Model configuration
 
 Role-based tier tables (first live tier wins, failed tiers cool down).
-Final answers use the synthesis table (Groq-led, no 8B-class tiers);
-dumb calls (classification, summaries, planning, reflection) use the
-cheap table; the full cascade below is the escape hatch when synthesis
-is down (answers then carry a degraded marker):
-1. Groq (fast inference; model via `GROQ_MODEL`)
-2. Gemini 3.6 Flash (Google, free tier ~20 req/day)
-3. Gemini 3.5 Flash (Google fallback)
-4. GitHub Models (free, no card; `openai/gpt-4o-mini` via `GITHUB_MODELS_MODEL`)
-5. NVIDIA NIM (free trial, no card; `meta/llama-3.1-8b-instruct` via `NVIDIA_MODEL`)
-6. OpenRouter Nemotron Ultra + Gemma + Nemotron Super + Nemotron 3.5
-   + Gemma 26B + Ling Fin + Laguna (free fallbacks; Inkling Small
-   and Cerebras retired Sep 2026 — 403/payment_required)
+Final answers use the synthesis table (Gemini-led; Groq Fast excluded as
+cheap-only); dumb calls (classification, summaries, planning, reflection)
+use the cheap table (Groq Fast first, saving Gemini quota); the full
+cascade below is the escape hatch when synthesis is down (answers then
+carry a degraded marker):
+1. Gemini 3.8 Flash (Google main; override via `GEMINI_38_MODEL`)
+2. Gemini 3.7 Flash (Google main; override via `GEMINI_37_MODEL`)
+3. Gemini 3.6 Flash (Google main; override via `GEMINI_36_MODEL`)
+4. Gemini 3.5 Flash (Google backup; override via `GEMINI_35_MODEL`)
+5. Groq 120B (strong fallback; model via `GROQ_MODEL`)
+6. Cohere Command (`COHERE_MODEL`; vision backup via `command-a-vision-07-2025`)
 7. OpenRouter Free Router (`openrouter/free`; smart auto-selection
    of a free model filtered by request features)
 8. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL` — last resort)
+
+Cheap table (dumb calls): Groq Fast 20B (`GROQ_FAST_MODEL`) → Groq 120B → Mistral.
+GitHub Models + NVIDIA removed (dead); curated OpenRouter lanes removed
+(Ultra/Gemma/Super/3.5/26B/Ling-Fin/Laguna) — only Free Router kept.
 
 OpenCode Zen free tier (Muse Spark 1.3 contributor-free, Nemotron
 3.5/Ultra, Big Pickle, MiMo, Ling) retired Sep 2026 — provider now
@@ -169,8 +170,8 @@ vocabulary with `python scripts/mine_fallthrough.py` or
 `GET /api/ops/router` (scrubbed, no PII) — grow the synonym table,
 never ad-hoc keyword branches.
 
-Answer quality: synthesis stays Groq-led and volume-first (weak
-lanes — Mistral, Gemma 26B, Ling Fin, Laguna, Free Router — answer
+Answer quality: synthesis stays Gemini-led and quality-first (weak
+lanes — Groq Fast, Mistral, Free Router — answer
 only when quality tiers are down, marked `fallback: degraded`);
 grounding applies to every tier and synthesis; research drafts earn
 one cheap-tier reflection pass (150+ chars).

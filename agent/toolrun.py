@@ -358,11 +358,11 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None,
                           task_type: Optional[str] = None) -> List[Any]:
     """Typo-tolerant tool binding on normalized text (single source).
 
-    Lazy-binds to keep small-context lanes (GitHub 8k) from 400s.
+    Lazy-binds to keep small-context lanes from 400s.
     Normalization (services.normalize) handles typos ("convrt",
     "craete", "pyton") + verb canonicalization ("turn"->"create"),
     so keyword lists stay canonical — no hard-coded typo variants.
-    tier_name optionally trims heavy lanes (MCP/code) on 8k tiers;
+    tier_name is accepted for compat (no tier trims remain);
     None keeps the default minimal set. task_type optionally applies
     trusted experience lessons (reorder only: proven tools first, never
     added or removed). Never raises; short tokens
@@ -452,15 +452,6 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None,
             out = [t for t in out if getattr(t, "name", "") != "web_search"]
     except Exception:
         logger.debug("no-search carve-out failed", exc_info=True)
-    # Tier-aware trim: 8k lanes (GitHub Models) skip MCP discovery tools
-    # to save context; they re-bind on explicit "mcp" asks via the gmail
-    # bucket above (no — MCP stays only when hint names it).
-    try:
-        if isinstance(tier_name, str) and tier_name.strip().lower() in ("github models",):
-            if not _norm_any_hit(norm, ("mcp", "workspace", "code", "python")):
-                out = [t for t in out if getattr(t, "name", "") not in ("list_mcp_tools", "call_mcp_tool")]
-    except Exception:
-        logger.debug("tier-aware trim failed", exc_info=True)
     try:
         out = _apply_lesson_order(out, task_type)
     except Exception:

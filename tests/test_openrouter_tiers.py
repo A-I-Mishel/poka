@@ -1,7 +1,8 @@
 """OpenRouter fallback tier tests (no network, no quota).
 
 Client construction is lazy (no calls on build); missing key means
-the tier is skipped (None). Position: end of cascade, purely additive.
+the tier is skipped (None). Position: emergency pool, just before
+Mistral (last resort). Only openrouter/free is kept.
 """
 
 import os
@@ -25,49 +26,34 @@ def _model_of(client):
 
 def test_no_key_means_skipped(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    assert config.get_tier_openrouter_ultra_llm() is None
-    assert config.get_tier_openrouter_gemma_llm() is None
     assert config.get_tier_openrouter_free_router_llm() is None
 
 
 def test_clients_built_with_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    ultra = config.get_tier_openrouter_ultra_llm()
-    gemma = config.get_tier_openrouter_gemma_llm()
     router = config.get_tier_openrouter_free_router_llm()
-    assert ultra is not None and gemma is not None and router is not None
-    assert _model_of(ultra) == config.OPENROUTER_ULTRA_MODEL
-    assert _model_of(gemma) == config.OPENROUTER_GEMMA_MODEL
+    assert router is not None
     assert _model_of(router) == config.OPENROUTER_FREE_ROUTER_MODEL
-    base = getattr(ultra, "openai_api_base", "")
+    base = getattr(router, "openai_api_base", "")
     assert "openrouter.ai" in str(base)
 
 
 def test_clients_cached(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    assert config.get_tier_openrouter_ultra_llm() is config.get_tier_openrouter_ultra_llm()
+    assert config.get_tier_openrouter_free_router_llm() is config.get_tier_openrouter_free_router_llm()
 
 
 def test_cascade_position_is_tail(monkeypatch):
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names[-9:-1] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
-                          "OpenRouter Nemotron Super", "OpenRouter Nemotron 3.5",
-                          "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
-                          "OpenRouter Laguna",
-                          "OpenRouter Free Router"]
-    # Mistral is the last-resort tier after the OpenRouter block.
+    assert names[-2:] == ["OpenRouter Free Router", "Mistral"]
     assert names[-1] == "Mistral"
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    assert config.get_tier_llm("OpenRouter Gemma", temperature=0.5) is None
+    assert config.get_tier_llm("OpenRouter Free Router", temperature=0.5) is None
 
 
 def test_provider_table_includes_openrouter():
     from agent import providers
 
     names = [name for name, _ in providers.TIER_AGENT_GETTERS]
-    assert names[-9:-1] == ["OpenRouter Nemotron Ultra", "OpenRouter Gemma",
-                          "OpenRouter Nemotron Super", "OpenRouter Nemotron 3.5",
-                          "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
-                          "OpenRouter Laguna",
-                          "OpenRouter Free Router"]
+    assert names[-2:] == ["OpenRouter Free Router", "Mistral"]
     assert names[-1] == "Mistral"

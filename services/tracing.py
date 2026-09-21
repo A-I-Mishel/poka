@@ -191,7 +191,7 @@ def start_llm_span(request_id: str, tier: str, task_type: str, prompt_tokens: in
 def _get_gen_ai_system(tier: str) -> str:
     """Determine gen_ai.system from tier name."""
     tier_lower = tier.lower()
-    if any(x in tier_lower for x in ["openai", "groq", "cerebras", "github", "mistral", "nvidia", "openrouter"]):
+    if any(x in tier_lower for x in ["openai", "groq", "cohere", "mistral", "openrouter"]):
         return "openai"
     return "gemini"
 

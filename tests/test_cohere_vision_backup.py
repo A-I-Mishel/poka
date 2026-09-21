@@ -16,10 +16,13 @@ from services.vision import vision_supported_tier
 
 def test_cohere_admitted_unknown_stays_text_only():
     assert vision_supported_tier("Cohere") is True
+    assert vision_supported_tier("Gemini 3.8 Flash") is True
+    assert vision_supported_tier("Gemini 3.7 Flash") is True
     assert vision_supported_tier("Gemini 3.6 Flash") is True
     assert vision_supported_tier("Gemini 3.5 Flash") is True
     assert vision_supported_tier("Groq") is False
-    assert vision_supported_tier("OpenRouter Gemma") is False
+    assert vision_supported_tier("Groq Fast") is False
+    assert vision_supported_tier("OpenRouter Free Router") is False
     assert vision_supported_tier("") is False
     assert vision_supported_tier(None) is False
 
@@ -28,6 +31,7 @@ def test_bridge_converter_backup_order():
     from services.image_bridge import _CONVERTER_TIERS
 
     assert list(_CONVERTER_TIERS) == [
+        "Gemini 3.8 Flash", "Gemini 3.7 Flash",
         "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere"]
 
 
@@ -57,6 +61,12 @@ def test_reason_all_unconfigured_neutral(monkeypatch):
     monkeypatch.setattr(
         "agent.cascade.tier_status_snapshot",
         lambda *a, **k: [
+            {"name": "Gemini 3.8 Flash", "configured": False,
+             "skipped": False, "cooldown_remaining_s": 0.0,
+             "last_error_kind": ""},
+            {"name": "Gemini 3.7 Flash", "configured": False,
+             "skipped": False, "cooldown_remaining_s": 0.0,
+             "last_error_kind": ""},
             {"name": "Gemini 3.6 Flash", "configured": False,
              "skipped": False, "cooldown_remaining_s": 0.0,
              "last_error_kind": ""},

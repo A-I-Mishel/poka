@@ -1,4 +1,10 @@
-"""Multi-tier LLM cascade: Groq -> Gemini -> OpenRouter free fallbacks.
+"""Multi-tier LLM cascade: Gemini (main) -> Groq -> emergency fallbacks.
+
+Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
+same GEMINI_API_KEY) + 3.5 backup -> Groq 120B (strong fallback) ->
+Groq Fast 20B (fast/simple, cheap-only) -> Cohere -> OpenRouter Free
+Router -> Mistral (last resort). GitHub Models + NVIDIA removed (dead).
+Curated OpenRouter lanes removed; only openrouter/free kept.
 
 OpenCode Zen free tier retired Sep 2026: provider returns
 MissingSessionID ("free tier can only be used in OpenCode") for
@@ -21,6 +27,8 @@ import os as _os
 if _os.getenv("PLUTO_DOTENV", "1").strip().lower() not in ("0", "false", "no", "off"):
     load_dotenv(override=False)
 
+GEMINI_38_MODEL: str = "gemini-3.8-flash"
+GEMINI_37_MODEL: str = "gemini-3.7-flash"
 GEMINI_36_MODEL: str = "gemini-3.6-flash"
 GEMINI_35_MODEL: str = "gemini-3.5-flash"
 # OpenCode Zen free tier retired Sep 2026 (MissingSessionID for API
@@ -29,55 +37,35 @@ GEMINI_35_MODEL: str = "gemini-3.5-flash"
 # mimo-v2.5-free, ling-3.0-flash-fin-free. Paid Zen models remain
 # usable via https://opencode.ai/zen/v1 if billing is added.
 # Groq via its OpenAI-compatible endpoint (no extra dependency needed).
-# Llama models were retired from Groq in Aug 2026; gpt-oss-120b is the
-# current production flagship. Override with GROQ_MODEL if needed.
+# Two lanes share one GROQ_API_KEY: Groq = 120B strong fallback,
+# Groq Fast = 20B fast/simple (cheap-only, never final answers).
+# Llama models were retired from Groq in Aug 2026. Override with
+# GROQ_MODEL (120B) / GROQ_FAST_MODEL (20B) if needed.
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 GROQ_MODEL: str = "openai/gpt-oss-120b"
+GROQ_FAST_MODEL: str = "openai/gpt-oss-20b"
 # Cerebras retired Sep 2026: free tier now returns payment_required
 # (quota/billing gate) for gpt-oss-120b — removed from cascade.
 # Re-add via https://api.cerebras.ai/v1 if billing is added.
-# GitHub Models via its OpenAI-compatible endpoint (same ChatOpenAI client).
-# Free for every GitHub account, no card: PAT with `models:read` scope.
-# Low-tier free allowance is ~150 small-model req/day at 8k in / 4k out
-# tokens per request; model IDs are `provider/model` (bare names 400).
-GITHUB_MODELS_BASE_URL: str = "https://models.github.ai/inference"
-GITHUB_MODELS_MODEL: str = "openai/gpt-4o-mini"
+# GitHub Models + NVIDIA removed (dead, not working anymore).
 # Mistral La Plateforme via its OpenAI-compatible endpoint.
 # No-card free evaluation tier (rate-limited, prototyping-grade);
 # open-weight default keeps the free lane usable.
 MISTRAL_BASE_URL: str = "https://api.mistral.ai/v1"
 MISTRAL_MODEL: str = "open-mistral-nemo"
-# NVIDIA NIM via its OpenAI-compatible endpoint (same ChatOpenAI client).
-# Free trial tier, no card, via an NGC API key from build.nvidia.com.
-NVIDIA_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
-NVIDIA_MODEL: str = "meta/llama-3.1-8b-instruct"
 # Cohere via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Direct API key from dashboard.cohere.com; Command A default is
 # synthesis-grade, so this lane is a full cascade member (not cheap-only).
 COHERE_BASE_URL: str = "https://api.cohere.com/compatibility/v1"
 COHERE_MODEL: str = "command-a-03-2025"
 # OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
-# Free models (Sept 2026; promos rotate — see
-# https://openrouter.ai/models for the current free list).
+# Emergency pool keeps only the Free Router (openrouter/free); curated
+# free-model lanes (Ultra/Gemma/Super/3.5/26B/Ling-Fin/Laguna) removed
+# per user preference — promos rotate, router auto-selects live free models.
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
-OPENROUTER_GEMMA_MODEL: str = "google/gemma-4-31b-it:free"
-# Curated OpenRouter free models (live Sep 13 2026 via /api/v1/models;
-# free = prompt+completion $0). Mirrors of OpenCode families on a
-# different provider add quota diversity: when OpenCode 429s, the same
-# family via OpenRouter may still answer.
-OPENROUTER_NEMOTRON_SUPER_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
-OPENROUTER_NEMOTRON35_MODEL: str = "nvidia/nemotron-3.5-lightning:free"
-OPENROUTER_GEMMA26_MODEL: str = "google/gemma-4-26b-a4b-it:free"
-OPENROUTER_LING_FIN_MODEL: str = "inclusionai/ling-3.0-flash-fin:free"
-# OPENROUTER_INKLING_MODEL retired Sep 2026: 403 Forbidden on free tier
-# (thinkingmachines/inkling-small:free) — removed from cascade.
-OPENROUTER_LAGUNA_MODEL: str = "poolside/laguna-s-2.1:free"
 # OpenRouter Free Model Router (released Feb 2026): selects a free model
 # at random from the live catalog, smartly filtering for features the
 # request needs (tool calling, image understanding, structured output).
-# It seeds quota diversity as hand-picked promos retire, so it stays a
-# healthy final fallback beyond the curated list below.
 OPENROUTER_FREE_ROUTER_MODEL: str = "openrouter/free"
 TEMPERATURE: float = 0.7
 
@@ -185,29 +173,57 @@ def _make_gemini(model: str, key: str, temperature: float):
             return ChatGoogleGenerativeAI(**base)  # type: ignore[arg-type]
 
 
+def get_tier_gemini38_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
+    """Main: Gemini 3.8 Flash -- newest, first try."""
+    key: Optional[str] = _get_secret("GEMINI_API_KEY")
+    if key is None:
+        return None
+    try:
+        return _cached_client(
+            "Gemini 3.8 Flash", temperature, key, GEMINI_38_MODEL,
+            lambda: _make_gemini(_model_override("GEMINI_38_MODEL", GEMINI_38_MODEL), key, temperature),
+        )
+    except Exception:
+        return None
+
+
+def get_tier_gemini37_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
+    """Main: Gemini 3.7 Flash -- second try."""
+    key: Optional[str] = _get_secret("GEMINI_API_KEY")
+    if key is None:
+        return None
+    try:
+        return _cached_client(
+            "Gemini 3.7 Flash", temperature, key, GEMINI_37_MODEL,
+            lambda: _make_gemini(_model_override("GEMINI_37_MODEL", GEMINI_37_MODEL), key, temperature),
+        )
+    except Exception:
+        return None
+
+
 def get_tier2_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
-    """TIER 2: Gemini 3.6 Flash -- latest stable free tier (Sept 2026)."""
+    """Main: Gemini 3.6 Flash -- third try (legacy name kept)."""
     key: Optional[str] = _get_secret("GEMINI_API_KEY")
     if key is None:
         return None
     try:
         return _cached_client(
             "Gemini 3.6 Flash", temperature, key, GEMINI_36_MODEL,
-            lambda: _make_gemini(GEMINI_36_MODEL, key, temperature),
+            lambda: _make_gemini(_model_override("GEMINI_36_MODEL", GEMINI_36_MODEL), key, temperature),
         )
     except Exception:
         return None
 
 
 def get_tier3_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
-    """TIER 3: Gemini 3.5 Flash -- older fallback, still free."""
+    """Backup: Gemini 3.5 Flash -- fourth Gemini (legacy name kept)."""
     key: Optional[str] = _get_secret("GEMINI_API_KEY")
     if key is None:
         return None
     try:
         return _cached_client(
             "Gemini 3.5 Flash", temperature, key, GEMINI_35_MODEL,
-            lambda: _make_gemini(GEMINI_35_MODEL, key, temperature),
+            lambda: _make_gemini(_model_override("GEMINI_35_MODEL", GEMINI_35_MODEL), key, temperature),
         )
     except Exception:
         return None
@@ -225,7 +241,7 @@ def _groq_model() -> str:
 
 
 def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Groq tier: fast LPU inference via the OpenAI-compatible endpoint."""
+    """Groq 120B: strong fallback via LPU inference (OpenAI-compatible)."""
     key: Optional[str] = _get_secret("GROQ_API_KEY")
     if key is None:
         return None
@@ -246,6 +262,43 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
                 max_tokens=MODEL_MAX_TOKENS,
                 # Fail fast into the cascade (see _make_gemini): SDK
                 # retries burn free-tier quota and delay tier fallback.
+                max_retries=0,
+            ),
+        )
+    except Exception:
+        return None
+
+
+def _groq_fast_model() -> str:
+    """Groq Fast model ID, overridable via GROQ_FAST_MODEL env/secret."""
+    try:
+        override = _get_secret("GROQ_FAST_MODEL")
+    except Exception:
+        override = None
+    if override and override.strip():
+        return override.strip()
+    return GROQ_FAST_MODEL
+
+
+def get_tier_groq_fast_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """Groq Fast 20B: fast/simple lane, cheap-only (never final answers)."""
+    key: Optional[str] = _get_secret("GROQ_API_KEY")
+    if key is None:
+        return None
+    try:
+        model = _groq_fast_model()
+        return _cached_client(
+            "Groq Fast",
+            temperature,
+            key,
+            model,
+            lambda: ChatOpenAI(
+                model=model,
+                api_key=key,
+                base_url=GROQ_BASE_URL,
+                temperature=temperature,
+                request_timeout=MODEL_TIMEOUT_SECONDS,
+                max_tokens=MODEL_MAX_TOKENS,
                 max_retries=0,
             ),
         )
@@ -275,12 +328,10 @@ def _get_generic_openai_tier(
     model: str,
     temperature: float,
 ) -> Optional[ChatOpenAI]:
-    """Build a client for any OpenAI-compatible free tier (shared factory).
+    """Build a client for any OpenAI-compatible tier (shared factory).
 
-    New lanes (GitHub Models, Mistral, NVIDIA) share this shape: missing
-    key -> None (tier skipped; placeholder filtering lives in
-    services.secrets.get_secret), cached client otherwise. Older tiers
-    keep their bespoke constructors untouched.
+    Missing key -> None (tier skipped; placeholder filtering lives in
+    services.secrets.get_secret), cached client otherwise.
     """
     key: Optional[str] = _get_secret(key_name)
     if key is None:
@@ -306,17 +357,6 @@ def _get_generic_openai_tier(
         return None
 
 
-def get_tier_github_models_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """GitHub Models tier: free prototyping inference (PAT, models:read)."""
-    return _get_generic_openai_tier(
-        "GitHub Models",
-        "GITHUB_MODELS_TOKEN",
-        GITHUB_MODELS_BASE_URL,
-        _model_override("GITHUB_MODELS_MODEL", GITHUB_MODELS_MODEL),
-        temperature,
-    )
-
-
 def get_tier_mistral_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """Mistral tier: no-card free evaluation lane (open-weight default)."""
     return _get_generic_openai_tier(
@@ -324,17 +364,6 @@ def get_tier_mistral_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenA
         "MISTRAL_API_KEY",
         MISTRAL_BASE_URL,
         _model_override("MISTRAL_MODEL", MISTRAL_MODEL),
-        temperature,
-    )
-
-
-def get_tier_nvidia_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """NVIDIA NIM tier: free-trial inference via NGC API key."""
-    return _get_generic_openai_tier(
-        "NVIDIA",
-        "NVIDIA_API_KEY",
-        NVIDIA_BASE_URL,
-        _model_override("NVIDIA_MODEL", NVIDIA_MODEL),
         temperature,
     )
 
@@ -381,67 +410,25 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
         return None
 
 
-def get_tier_openrouter_ultra_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Nemotron 3 Ultra 550B (free tier)."""
-    return _get_openrouter_llm("OpenRouter Nemotron Ultra", OPENROUTER_ULTRA_MODEL, temperature)
-
-
-def get_tier_openrouter_gemma_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Gemma 4 31B (free tier)."""
-    return _get_openrouter_llm("OpenRouter Gemma", OPENROUTER_GEMMA_MODEL, temperature)
-
-
-def get_tier_openrouter_nemotron_super_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Nemotron 3 Super 120B (free tier)."""
-    return _get_openrouter_llm("OpenRouter Nemotron Super", OPENROUTER_NEMOTRON_SUPER_MODEL, temperature)
-
-
-def get_tier_openrouter_nemotron35_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Nemotron 3.5 Lightning mirror (free tier)."""
-    return _get_openrouter_llm("OpenRouter Nemotron 3.5", OPENROUTER_NEMOTRON35_MODEL, temperature)
-
-
-def get_tier_openrouter_gemma26_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Gemma 4 26B (free tier)."""
-    return _get_openrouter_llm("OpenRouter Gemma 26B", OPENROUTER_GEMMA26_MODEL, temperature)
-
-
-def get_tier_openrouter_ling_fin_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Ling 3.0 Flash Fin mirror (free tier)."""
-    return _get_openrouter_llm("OpenRouter Ling Fin", OPENROUTER_LING_FIN_MODEL, temperature)
-
-
-def get_tier_openrouter_laguna_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter fallback: Laguna code model (free tier)."""
-    return _get_openrouter_llm("OpenRouter Laguna", OPENROUTER_LAGUNA_MODEL, temperature)
-
-
 def get_tier_openrouter_free_router_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """OpenRouter Free Model Router (released Feb 2026).
 
     ``openrouter/free`` selects a free model at random from the live
     catalog, filtering for the request's needs (tool calling, image
-    understanding, structured output). Survives promo rotation of the
-    hand-picked model list below.
+    understanding, structured output).
     """
     return _get_openrouter_llm("OpenRouter Free Router", OPENROUTER_FREE_ROUTER_MODEL, temperature)
 
 
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
-    "Groq": get_tier_groq_llm,
+    "Gemini 3.8 Flash": get_tier_gemini38_llm,
+    "Gemini 3.7 Flash": get_tier_gemini37_llm,
     "Gemini 3.6 Flash": get_tier2_llm,
     "Gemini 3.5 Flash": get_tier3_llm,
-    "GitHub Models": get_tier_github_models_llm,
+    "Groq": get_tier_groq_llm,
+    "Groq Fast": get_tier_groq_fast_llm,
     "Cohere": get_tier_cohere_llm,
     "Mistral": get_tier_mistral_llm,
-    "NVIDIA": get_tier_nvidia_llm,
-    "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
-    "OpenRouter Gemma": get_tier_openrouter_gemma_llm,
-    "OpenRouter Nemotron Super": get_tier_openrouter_nemotron_super_llm,
-    "OpenRouter Nemotron 3.5": get_tier_openrouter_nemotron35_llm,
-    "OpenRouter Gemma 26B": get_tier_openrouter_gemma26_llm,
-    "OpenRouter Ling Fin": get_tier_openrouter_ling_fin_llm,
-    "OpenRouter Laguna": get_tier_openrouter_laguna_llm,
     "OpenRouter Free Router": get_tier_openrouter_free_router_llm,
 }
 
@@ -463,71 +450,54 @@ def get_tier_llm(name: str, temperature: float = TEMPERATURE) -> Optional[Any]:
 
 
 TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogleGenerativeAI]]]]] = [
-    ("Groq", get_tier_groq_llm),
+    ("Gemini 3.8 Flash", get_tier_gemini38_llm),
+    ("Gemini 3.7 Flash", get_tier_gemini37_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
-    ("GitHub Models", get_tier_github_models_llm),
+    ("Groq", get_tier_groq_llm),
+    ("Groq Fast", get_tier_groq_fast_llm),
     ("Cohere", get_tier_cohere_llm),
-    ("NVIDIA", get_tier_nvidia_llm),
-    ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
-    ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),
-    ("OpenRouter Nemotron 3.5", get_tier_openrouter_nemotron35_llm),
-    ("OpenRouter Gemma 26B", get_tier_openrouter_gemma26_llm),
-    ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),
-    ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
     ("Mistral", get_tier_mistral_llm),
 ]
 
 
 # Role-based tier tables (quota architecture): synthesis for final answers
-# (volume-first, Groq-led, no 8B-class tiers); cheap for dumb calls
-# (classification, summaries, planning, reflection); the full cascade
+# (quality-first, Gemini-led; Groq Fast excluded as cheap-only); cheap for
+# dumb calls (classification, summaries, planning, reflection: Groq Fast
+# first so Gemini quota is reserved for main answers); the full cascade
 # remains the escape hatch when synthesis is down (answers then carry a
 # degraded marker). Tables hold (name, getter) pairs like TIER_GETTERS.
-# Gemini stays second/third as the quality/vision escalation lane: the
-# cascade reaches it automatically when Groq fails, and an explicit
-# user tier pick still jumps the queue. Groq's free pool (1K RPD / 200K
-# TPD) absorbs normal traffic; Gemini's 20 RPD/model pool is reserved
-# for vision conversion and genuine Groq failures.
-SMALL_FINAL_TIERS = frozenset({"NVIDIA"})  # 8B-class: never final answers
+# Gemini leads; Groq 120B is the strong fallback; Cohere -> Free Router ->
+# Mistral is the emergency pool. Groq's free pool absorbs cheap traffic;
+# Gemini's per-model pool is spent on quality final answers + vision.
+SMALL_FINAL_TIERS = frozenset({"Groq Fast"})  # 20B-class: never final answers
 # Weak final-answer tiers: small or nondeterministic lanes that answer only
 # when quality tiers are down. Runtime marks their answers degraded so the
-# UI can be honest ("quality models unavailable"). Shape of SYNTHESIS_TIERS
-# is unchanged (see test_role_tables_shape); order stays volume-first with
-# these lanes last.
+# UI can be honest ("quality models unavailable").
 WEAK_FINAL_TIERS = frozenset({
-    "NVIDIA", "Mistral", "OpenRouter Gemma 26B", "OpenRouter Ling Fin",
-    "OpenRouter Laguna", "OpenRouter Free Router",
+    "Groq Fast", "Mistral", "OpenRouter Free Router",
 })
 SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
-    ("Groq", get_tier_groq_llm),
+    ("Gemini 3.8 Flash", get_tier_gemini38_llm),
+    ("Gemini 3.7 Flash", get_tier_gemini37_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
-    ("GitHub Models", get_tier_github_models_llm),
+    ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
-    ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Nemotron Super", get_tier_openrouter_nemotron_super_llm),
-    ("OpenRouter Gemma", get_tier_openrouter_gemma_llm),
-    ("OpenRouter Nemotron 3.5", get_tier_openrouter_nemotron35_llm),
-    ("OpenRouter Gemma 26B", get_tier_openrouter_gemma26_llm),
-    ("OpenRouter Ling Fin", get_tier_openrouter_ling_fin_llm),
-    ("OpenRouter Laguna", get_tier_openrouter_laguna_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
     ("Mistral", get_tier_mistral_llm),
 ]
 CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
+    ("Groq Fast", get_tier_groq_fast_llm),
     ("Groq", get_tier_groq_llm),
-    ("GitHub Models", get_tier_github_models_llm),
-    ("NVIDIA", get_tier_nvidia_llm),
     ("Mistral", get_tier_mistral_llm),
 ]
 
 # Tiers that get the strict grounding paragraph (small or nondeterministic
 # models prone to inventing citations/IDs): answer ONLY from tool results.
 STRICT_GROUNDING_TIERS = frozenset({
-    "NVIDIA", "Mistral", "OpenRouter Gemma 26B", "OpenRouter Free Router",
+    "Groq Fast", "Mistral", "OpenRouter Free Router",
 })
 
 
