@@ -139,12 +139,14 @@ carry a degraded marker):
 2. Gemini 3.7 Flash (Google main; override via `GEMINI_37_MODEL`)
 3. Gemini 3.6 Flash (Google main; override via `GEMINI_36_MODEL`)
 4. Gemini 3.5 Flash (Google backup; override via `GEMINI_35_MODEL`)
-5. Groq 120B (strong fallback; model via `GROQ_MODEL`)
-6. Cohere Command (`COHERE_MODEL`; vision backup via `command-a-vision-07-2025`)
-7. OpenRouter Nemotron 3 Ultra 550B (`nvidia/nemotron-3-ultra-550b-a55b:free`; reasoning lane)
-8. OpenRouter Free Router (`openrouter/free`; smart auto-selection
-   of a free model filtered by request features)
-9. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL` — last resort)
+5. Gemini 3.5 Flash Lite (fresh quota pool; override via `GEMINI_35_LITE_MODEL`)
+6. Gemini 3.1 Flash Lite (older generation, last Gemini lane; override via `GEMINI_31_LITE_MODEL`)
+7. Groq 120B (strong fallback; model via `GROQ_MODEL`)
+8. Cohere Command (`COHERE_MODEL`; vision backup via `command-a-vision-07-2025`)
+9. OpenRouter Nemotron 3 Ultra 550B (`nvidia/nemotron-3-ultra-550b-a55b:free`; reasoning lane)
+10. OpenRouter Free Router (`openrouter/free`; smart auto-selection
+    of a free model filtered by request features)
+11. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL` — last resort)
 
 Cheap table (dumb calls): Groq Fast 20B (`GROQ_FAST_MODEL`) → Groq 120B → Mistral.
 GitHub Models + NVIDIA removed (dead); other curated OpenRouter lanes

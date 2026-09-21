@@ -1,7 +1,8 @@
 """Multi-tier LLM cascade: Gemini (main) -> Groq -> emergency fallbacks.
 
 Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
-same GEMINI_API_KEY) + 3.5 backup -> Groq 120B (strong fallback) ->
+same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
+(fresh per-model quota pools) -> Groq 120B (strong fallback) ->
 Groq Fast 20B (fast/simple, cheap-only) -> Cohere -> Nemotron 3 Ultra
 -> OpenRouter Free Router -> Mistral (last resort). GitHub Models +
 NVIDIA removed (dead). Other curated OpenRouter lanes removed; only
@@ -32,6 +33,13 @@ GEMINI_38_MODEL: str = "gemini-3.8-flash"
 GEMINI_37_MODEL: str = "gemini-3.7-flash"
 GEMINI_36_MODEL: str = "gemini-3.6-flash"
 GEMINI_35_MODEL: str = "gemini-3.5-flash"
+# Lite lanes: separate per-model free-quota pools behind the Flash
+# lanes (verified live in AI Studio: 15 req/day each while the Flash
+# lanes sit exhausted). Same key, same client, synthesis-only —
+# never cheap tiers (Groq-first cheap policy protects this quota for
+# final answers) and never vision lanes (unconfirmed capability).
+GEMINI_35_LITE_MODEL: str = "gemini-3.5-flash-lite"
+GEMINI_31_LITE_MODEL: str = "gemini-3.1-flash-lite"
 # OpenCode Zen free tier retired Sep 2026 (MissingSessionID for API
 # calls). 6 free lanes removed: muse-spark-1.3-contributor-free,
 # nemotron-3.5-lightning-free, nemotron-3-ultra-free, big-pickle,
@@ -227,6 +235,34 @@ def get_tier3_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenera
         return _cached_client(
             "Gemini 3.5 Flash", temperature, key, GEMINI_35_MODEL,
             lambda: _make_gemini(_model_override("GEMINI_35_MODEL", GEMINI_35_MODEL), key, temperature),
+        )
+    except Exception:
+        return None
+
+
+def get_tier_gemini35_lite_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
+    """Backup: Gemini 3.5 Flash Lite -- fresh quota pool behind 3.5 Flash."""
+    key: Optional[str] = _get_secret("GEMINI_API_KEY")
+    if key is None:
+        return None
+    try:
+        return _cached_client(
+            "Gemini 3.5 Flash Lite", temperature, key, GEMINI_35_LITE_MODEL,
+            lambda: _make_gemini(_model_override("GEMINI_35_LITE_MODEL", GEMINI_35_LITE_MODEL), key, temperature),
+        )
+    except Exception:
+        return None
+
+
+def get_tier_gemini31_lite_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenerativeAI]:
+    """Backup: Gemini 3.1 Flash Lite -- older generation, last Gemini lane."""
+    key: Optional[str] = _get_secret("GEMINI_API_KEY")
+    if key is None:
+        return None
+    try:
+        return _cached_client(
+            "Gemini 3.1 Flash Lite", temperature, key, GEMINI_31_LITE_MODEL,
+            lambda: _make_gemini(_model_override("GEMINI_31_LITE_MODEL", GEMINI_31_LITE_MODEL), key, temperature),
         )
     except Exception:
         return None
@@ -433,6 +469,8 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Gemini 3.7 Flash": get_tier_gemini37_llm,
     "Gemini 3.6 Flash": get_tier2_llm,
     "Gemini 3.5 Flash": get_tier3_llm,
+    "Gemini 3.5 Flash Lite": get_tier_gemini35_lite_llm,
+    "Gemini 3.1 Flash Lite": get_tier_gemini31_lite_llm,
     "Groq": get_tier_groq_llm,
     "Groq Fast": get_tier_groq_fast_llm,
     "Cohere": get_tier_cohere_llm,
@@ -463,6 +501,8 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Gemini 3.7 Flash", get_tier_gemini37_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
+    ("Gemini 3.5 Flash Lite", get_tier_gemini35_lite_llm),
+    ("Gemini 3.1 Flash Lite", get_tier_gemini31_lite_llm),
     ("Groq", get_tier_groq_llm),
     ("Groq Fast", get_tier_groq_fast_llm),
     ("Cohere", get_tier_cohere_llm),
@@ -494,6 +534,8 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.7 Flash", get_tier_gemini37_llm),
     ("Gemini 3.6 Flash", get_tier2_llm),
     ("Gemini 3.5 Flash", get_tier3_llm),
+    ("Gemini 3.5 Flash Lite", get_tier_gemini35_lite_llm),
+    ("Gemini 3.1 Flash Lite", get_tier_gemini31_lite_llm),
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
