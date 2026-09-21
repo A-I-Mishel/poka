@@ -570,6 +570,81 @@ def test_validator_matrix():
     assert any("admin-only" in r for r in _validate_teaching_draft(adminrecall, 1, 3))
 
 
+def test_paced_turn_with_continue_cue_passes():
+    """Word-budget pacing: a short turn ending in the continue cue is valid.
+
+    The `Reply **continue**` navigation line must not trip the banned
+    footer detector (only Say Next / Say Got it / Next Steps are banned),
+    and the paced shape (header + concept + one terminal Recall) passes.
+    """
+    from backend.chatflow import _validate_teaching_draft
+
+    paced = (_GOOD_DRAFT + "\nReply **continue** for the next concept.")
+    assert _validate_teaching_draft(paced, 4, 6) == []
+
+
+def test_pacing_rule_in_prompt_and_suffix():
+    """Word-budget rule + continue cue live in both teaching contracts."""
+    from agent.prompts import SYSTEM_PROMPT
+    from backend.chatflow import TEACHING_SUFFIX
+
+    for token in ("~300 words", "Reply **continue** for the next concept.",
+                  "Never re-teach"):
+        assert token in SYSTEM_PROMPT, token
+        assert token in TEACHING_SUFFIX, token
+
+
+def test_recall_without_answer_key_in_prompt_and_suffix():
+    """Recall asks only; logistics are never invented (both contracts)."""
+    from agent.prompts import SYSTEM_PROMPT
+    from backend.chatflow import TEACHING_SUFFIX
+
+    for token in ("never its answer or answer key",
+                  "Never invent test dates"):
+        assert token in SYSTEM_PROMPT, token
+        assert token in TEACHING_SUFFIX, token
+
+
+def test_duplicate_file_header_fails_validation():
+    """Two source headers trip validation so repair can fix them."""
+    from backend.chatflow import _validate_teaching_draft
+
+    doubled = _GOOD_DRAFT + "\n📘 FILE: Other.pptx\nSlides: 4-6"
+    assert any("duplicate FILE header" in r
+               for r in _validate_teaching_draft(doubled, 4, 6))
+    assert _validate_teaching_draft(_GOOD_DRAFT, 4, 6) == []
+
+
+def test_upload_id_redaction():
+    """Echoed upload IDs are withheld; download IDs keep working."""
+    from backend.teach import _redact_upload_ids
+
+    leaked = "Source of the file (upload ID: 12715c1de4374507)."
+    fixed = _redact_upload_ids(leaked)
+    assert "12715c1de4374507" not in fixed
+    assert "upload ID" in fixed
+    delivery = "Presentation saved as deck.pptx (file ID: a3b5ecfce1df4287)"
+    assert _redact_upload_ids(delivery) == delivery
+    # Longer hashes (sessions, SHAs) are not partial-matched.
+    long_hash = "upload ID: " + "ab12" * 16
+    assert _redact_upload_ids(long_hash) == long_hash
+    assert _redact_upload_ids(None) is None
+    assert _redact_upload_ids(123) == 123
+
+
+def test_repair_turn_redacts_upload_ids():
+    """The persisted teaching answer never carries an upload ID."""
+    from backend.teach import _maybe_repair_teaching_turn
+
+    send = "x teach ONLY slides 1-1 y"
+    content = ("📘 FILE: L.pptx\nSlides: 1-1\n## Concept: G\n"
+               "**Source**\n[slide 1] (upload ID: 12715c1de4374507)\n"
+               "**Recall**\nQ?")
+    fixed, _repaired, _left = _maybe_repair_teaching_turn(send, content, "Groq")
+    assert "12715c1de4374507" not in fixed
+    assert "[slide 1]" in fixed
+
+
 def _stub_repair(monkeypatch, text):
     import types
 

@@ -126,7 +126,10 @@ _TEACHING_DEEP_SIGNALS = ("in detail", "detailed", "deep dive", "thoroughly",
 
 TEACHING_SUFFIX = (
     "\n\n[Teaching mode: exam-focused, concept-first. Teach ONLY the verified "
-    "slides above from ONE file, in order. Pure-admin slides "
+    "slides above from ONE file, in order, keeping the turn under ~300 words: "
+    "teach concepts in order until the budget is spent, then finish the current "
+    "concept and STOP and wait for the learner's recall answer. Never re-teach "
+    "a concept already taught earlier in this session. Pure-admin slides "
     "(course code/instructor/schedule/grading/contacts) use the compact form: "
     "\"### Administrative Information\" + bullets + \"**Source:** [slide N]\" — "
     "never fake Definition/Example/Recall blocks for admin, never recall "
@@ -140,8 +143,14 @@ TEACHING_SUFFIX = (
     "Distinguish source from support: \"Your slide states X. Supporting "
     "explanation: ...\". Start with the source header \"📘 FILE: <name>\" "
     "newline \"Slides: X-Y\". End with EXACTLY ONE terminal \"**Recall**\" "
-    "section (one question) and STOP — never append Say Next, Say Got it, "
-    "Next Steps, another question, or further teaching. Never invent "
+    "section (one question — never its answer or answer key), then one "
+    "navigation line \"Reply **continue** for "
+    "the next concept.\", and STOP — never append Say Next, Say Got it, "
+    "Next Steps, another question, or further teaching. An explicit \"in "
+    "detail\" / \"teach everything\" request keeps the full long form. "
+    "Never invent test dates, deadlines, class schedules, or assignment "
+    "details; state only logistics the slides actually contain. "
+    "Never invent "
     "slides beyond verified content; if truncated or empty, say so and ask "
     "to re-upload. Vary depth by importance: MUST KNOW/HIGH get full "
     "treatment; MEDIUM gets compact treatment (merge How+Why into ≤3 lines "
@@ -780,6 +789,34 @@ _TEACHING_FABRICATION_RES = (
 )
 
 
+# Opaque upload IDs are tool-input internals (see backend/attachments):
+# the model sees "with upload ID: <hex>" in its hints and sometimes
+# parrots the value into user-visible answers. Download IDs render as
+# "(file ID: <hex>)" and must keep working, so only the upload-ID
+# phrasing is redacted. Hex guards on both sides keep longer hashes
+# (session tokens, content SHAs) untouched.
+_UPLOAD_ID_RE = re.compile(
+    r"(?<![0-9a-f])upload\s+ID\s*:?\s*\(?\s*[0-9a-f]{16}(?![0-9a-f])",
+    re.IGNORECASE,
+)
+
+
+def _redact_upload_ids(text: Any) -> Any:
+    """Replace echoed upload IDs with a neutral marker (never raises).
+
+    Non-string input passes through untouched. Only the `upload ID:
+    <hex>` phrasing is matched — `(file ID: ...)` download references
+    and bare hashes are preserved so file delivery keeps working.
+    """
+    try:
+        if not isinstance(text, str) or "upload" not in text.lower():
+            return text
+        return _UPLOAD_ID_RE.sub("upload ID [withheld]", text)
+    except Exception:
+        logger.debug("upload-ID redaction failed", exc_info=True)
+        return text
+
+
 TEACHING_REPAIR_TIMEOUT_SECONDS: float = 30.0
 
 
@@ -816,6 +853,13 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
             _h_name, h_start, h_end = parsed
             if not (start <= h_start <= end and start <= h_end <= end):
                 reasons.append(f"header slides {h_start}-{h_end} outside window {start}-{end}")
+        try:
+            _headers = (len(list(_TEACHING_FILE_RE_NEW.finditer(text)))
+                        + len(list(_TEACHING_FILE_RE.finditer(text))))
+        except Exception:
+            _headers = 0
+        if _headers > 1:
+            reasons.append("duplicate FILE header")
         cited: List[int] = []
         try:
             cited = [int(n) for n in _TEACHING_CITE_RE.findall(text)]
@@ -1028,14 +1072,14 @@ def _maybe_repair_teaching_turn(
                     backfilled = True
         reasons = _validate_teaching_draft(content, scope[0], scope[1])
         if not reasons:
-            return content, backfilled, []
+            return _redact_upload_ids(content), backfilled, []
         fixed, repaired = _repair_teaching_draft(
             send_text, content, reasons, tier, on_token, on_reset)
         if repaired:
             scope2 = _teaching_scope_from_send(send_text)
             left = _validate_teaching_draft(fixed, scope2[0], scope2[1]) if scope2 else reasons
-            return fixed, True, left
-        return content, backfilled, reasons
+            return _redact_upload_ids(fixed), True, left
+        return _redact_upload_ids(content), backfilled, reasons
     except Exception:
         return content, False, []
 
