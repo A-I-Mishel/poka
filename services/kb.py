@@ -511,8 +511,13 @@ def _rtf_text(blob: bytes) -> tuple:
         return "", "rtf-extract-failed"
 
 
-def _ole_strings_text(blob: bytes) -> tuple:
+def _ole_strings_text(blob: bytes, strict: bool = False) -> tuple:
     import re as _re
+
+    try:
+        from services.oletext import is_ole_garbage as _is_ole_garbage
+    except Exception:
+        _is_ole_garbage = None  # type: ignore[assignment]
 
     try:
         ascii_hits = _re.findall(rb"[\x20-\x7e]{5,}", blob)
@@ -530,6 +535,15 @@ def _ole_strings_text(blob: bytes) -> tuple:
                 continue
             if " " not in text and len(text) > 80:
                 continue
+            # Skip embedded-binary garbage (EXIF/XMP/JPEG entropy from
+            # pictures inside legacy files): it sorts before real text in
+            # byte order and would otherwise fill the cap alone, leaving
+            # teaching windows + KB chunks with pure metadata.
+            try:
+                if _is_ole_garbage is not None and _is_ole_garbage(text, strict=strict):
+                    continue
+            except Exception:
+                logger.debug("ole garbage check failed; keeping piece", exc_info=True)
             seen.add(text)
             kept.append(text)
             if sum(len(k) for k in kept) > KB_MAX_DOC_BYTES:
@@ -657,6 +671,13 @@ def extract_text(data: bytes, filename: str) -> tuple:
         # undecodable); capped separately by MAX_KB_IMAGE_BYTES.
         return _image_text(bytes(data or b"")[:MAX_KB_IMAGE_BYTES], name)
     blob = bytes(data or b"")[:KB_MAX_DOC_BYTES]
+    if ext in ("doc", "ppt", "xls"):
+        # Legacy OLE binaries hide real text unpredictably (a 5MB .ppt of
+        # photographed slides keeps its text stream near the END, after
+        # megabytes of embedded JPEGs). Head-truncating the input would
+        # amputate content before extraction; scan the full upload instead
+        # (bounded by MAX_UPLOAD_BYTES; output still capped downstream).
+        blob = bytes(data or b"")
     if ext == "pdf":
         return _pdf_text(blob)
     if ext == "docx":
@@ -672,7 +693,9 @@ def extract_text(data: bytes, filename: str) -> tuple:
     if ext == "rtf":
         return _rtf_text(blob)
     if ext in ("doc", "ppt"):
-        return _ole_strings_text(blob)
+        # Strict shape rules for image-heavy .ppt binaries (short entropy
+        # fragments would otherwise bury real text); lenient for .doc.
+        return _ole_strings_text(blob, strict=(ext == "ppt"))
     if ext == "xls":
         return _xls_text(blob)
     if ext in ("odt", "ods", "odp"):
