@@ -383,6 +383,43 @@ def test_files_validation_and_helpers(tmp_path):
     except FileValidationError as e:
         assert "many" in str(e).lower() or "files" in str(e).lower()
 
+
+def test_office_zip_entry_cap_split():
+    """Office docs get the structural entry cap; generic zips keep the strict one.
+
+    Regression: a lecture PPTX (~2 zip entries per slide + layouts/masters)
+    sails past 100 entries at a few hundred KB and must upload, while a
+    101-entry generic .zip is still rejected and byte caps still bound
+    real zip bombs for both.
+    """
+    from services.files import FileValidationError
+    from services.limits import MAX_OFFICE_ZIP_FILES, MAX_ZIP_FILES
+
+    def _archive_bytes(n, prefix="slide"):
+        b = io.BytesIO()
+        with zipfile.ZipFile(b, "w") as zf:
+            for i in range(n):
+                zf.writestr(f"ppt/slides/{prefix}{i}.xml", b"<a>text</a>")
+        return b.getvalue()
+
+    # Generic zip over the strict cap still fails, naming its cap.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i in range(MAX_ZIP_FILES + 1):
+            zf.writestr(f"f{i}.txt", b"a")
+    with pytest.raises(FileValidationError, match=f"max {MAX_ZIP_FILES}"):
+        FileStore("floor4-user").save_upload(buf.getvalue(), "many.zip")
+
+    # Same entry count as a .pptx passes (structural entries, tiny bytes).
+    meta = FileStore("floor4-user").save_upload(
+        _archive_bytes(MAX_ZIP_FILES + 50), "lecture_01.pptx")
+    assert meta is not None
+
+    # Even Office docs have a bound (byte caps still apply to both).
+    with pytest.raises(FileValidationError, match=f"max {MAX_OFFICE_ZIP_FILES}"):
+        FileStore("floor4-user").save_upload(
+            _archive_bytes(MAX_OFFICE_ZIP_FILES + 1), "huge.pptx")
+
     # oversized per FileValidationError via monkeypatch limit
     # ensure data_tool _load_csv_frame OSError branch via fake stat
     from tools.data_tool import _load_csv_frame

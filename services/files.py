@@ -436,23 +436,32 @@ class FileStore:
         if ext in ("zip", "odt", "ods", "odp", "docx", "pptx", "xlsx"):
             # Validity + bomb pre-check BEFORE storage: malformed
             # archives fail here, oversized ones also fail early.
-            # docx/pptx/xlsx are ZIP-based too — same guard applies.
+            # docx/pptx/xlsx are ZIP-based too — same byte guard applies,
+            # but their entry cap is structural (every slide/sheet costs
+            # ~2 entries plus layouts/masters/theme), so they get the
+            # higher Office listing cap while generic zips keep the
+            # strict one. Byte caps bound the real bomb risk for both.
             try:
                 import io
                 import zipfile
 
                 from services.limits import (
+                    MAX_OFFICE_ZIP_FILES,
                     MAX_ZIP_FILE_BYTES,
                     MAX_ZIP_FILES,
                     MAX_ZIP_UNCOMPRESSED_BYTES,
                 )
 
+                if ext == "zip":
+                    _max_entries = MAX_ZIP_FILES
+                else:
+                    _max_entries = MAX_OFFICE_ZIP_FILES
                 with zipfile.ZipFile(io.BytesIO(bytes(data))) as _z:
                     _infos = _z.infolist()
-                    if len(_infos) > MAX_ZIP_FILES:
+                    if len(_infos) > _max_entries:
                         raise FileValidationError(
                             "That archive lists too many files to read safely "
-                            f"(max {MAX_ZIP_FILES}).")
+                            f"(max {_max_entries}).")
                     total = 0
                     for _info in _infos:
                         try:

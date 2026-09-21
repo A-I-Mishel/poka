@@ -56,6 +56,14 @@ MAX_SEARCH_CHARS: int = 6000
 # uncompressed size, and per-file size. Inner files reuse the document
 # text caps above; only text-like members are extracted, never executed.
 MAX_ZIP_FILES: int = 100
+# Office documents (docx/pptx/xlsx/odt/ods/odp) are ZIP packages whose
+# entry count is structural, not suspicious: every slide/sheet costs
+# ~2 entries (part + rels) plus layouts/masters/theme, so a normal
+# lecture deck sails past the generic-zip cap at a few hundred KB.
+# This higher listing cap keeps large decks uploadable while the byte
+# caps above (per-file + total uncompressed) still hold the real
+# zip-bomb protection for every file type.
+MAX_OFFICE_ZIP_FILES: int = 2000
 MAX_ZIP_UNCOMPRESSED_BYTES: int = 50 * 1024 * 1024
 MAX_ZIP_FILE_BYTES: int = 5 * 1024 * 1024
 MAX_ZIP_LISTED: int = 200
