@@ -9,7 +9,7 @@ from backend.deps import UserContext
 
 from backend.attachments import (_escape_hint, attachment_hint, attachments_overview)
 from backend.flow.stages import _available_for_gate
-from backend.teach import (TEACHING_SUFFIX, _extract_teaching_blocks, _is_admin_block, _is_recall_answer, _is_teaching_request, _last_teaching_state, _pace_direction, _teaching_scope_line, _teaching_window_hint, _time_pressure)
+from backend.teach import (TEACHING_SUFFIX, TEACHING_WINDOW_SLIDES, _extract_teaching_blocks, _is_admin_block, _is_recall_answer, _is_teaching_request, _last_teaching_state, _pace_direction, _teaching_scope_line, _teaching_window_hint, _time_pressure)
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +180,38 @@ def _apply_teaching_session(
                         attach["kind"], attach["id"], attach["name"], position, len(candidates))
                 except Exception:
                     logger.debug("exam hint attach failed", exc_info=True)
+            # Grounding for citation demands: the exam packet must cite
+            # [slide N], but no fresh window exists past the end (single-
+            # block legacy dumps always land here on "next"). Re-attach a
+            # compact tail of the final file's source text so citations
+            # resolve to verified content instead of memory. Bounded,
+            # source-only, never model output. (Not a "Verified content"
+            # window: no new teaching happens on this turn.)
+            try:
+                _tail_blocks, _, _tail_status = _extract_teaching_blocks(
+                    ctx, active)
+            except Exception:
+                logger.debug("exam grounding extract failed", exc_info=True)
+                _tail_blocks, _tail_status = [], "FAILED"
+            if _tail_status == "OK" and _tail_blocks:
+                try:
+                    _tail = _tail_blocks[-TEACHING_WINDOW_SLIDES:]
+                    _ref_parts = []
+                    _ref_chars = 0
+                    for _num, _body in _tail:
+                        _piece = f"[slide {_num}]\n{str(_body or '').strip()}"
+                        if _ref_chars + len(_piece) > 2000 and _ref_parts:
+                            break
+                        _ref_parts.append(_piece)
+                        _ref_chars += len(_piece)
+                    if _ref_parts:
+                        send_text += (
+                            "\n\n[Reference for citation grounding (last taught "
+                            "content, source text — not new material):\n"
+                            + "\n".join(_ref_parts).strip() + "]"
+                        )
+                except Exception:
+                    logger.debug("exam grounding render failed", exc_info=True)
             send_text += (
                 "\n\n[EXAM MODE: all verified material is covered (" + "; ".join(_exam_counts) +
                 "). Do not reteach from the top. Give: 1) rapid recall questions on key "

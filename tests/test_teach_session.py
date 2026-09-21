@@ -380,6 +380,28 @@ def test_exhausted_all_files_exam_mode(tmp_path, monkeypatch):
     assert "Verified content" not in send
 
 
+def test_single_block_exam_mode_carries_reference_text(tmp_path, monkeypatch):
+    # Legacy single-block dumps (whole file == "slide 1"): cursor is past
+    # the end on "next", so EXAM MODE fires with no fresh window. Citations
+    # must still ground in the last taught source text, not memory.
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-examref")
+    b1 = _pptx_bytes([["Osmosis moves water across membranes"]])
+    m1 = ctx.file_store.save_upload(b1, "Solo_Lecture.pptx")
+    hist = [
+        {"role": "user", "content": "teach me", "attachments": [
+            {"id": m1.id, "kind": "document", "name": "Solo_Lecture.pptx"}]},
+        {"role": "assistant", "content": "📘 FILE: Solo_Lecture.pptx\nSlides: 1-1\n## Concept: G\n**Recall**\nQ?"},
+    ]
+    send, _, clarify = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
+    assert clarify is None
+    assert "EXAM MODE" in send
+    assert "Verified content" not in send
+    assert "Osmosis moves water across membranes" in send
+    assert "[slide 1]" in send
+
+
 def test_explicit_reteach_skips_exam_mode(tmp_path, monkeypatch):
     from backend.chatflow import _apply_teaching_session
 
