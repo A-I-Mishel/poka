@@ -49,7 +49,7 @@ from agent.cascade import (
 from agent.executor import TokenStream, _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.prompts import STRICT_GROUNDING_PARAGRAPH, _as_text, _build_system_prompt, strip_internal_reasoning
+from agent.prompts import STRICT_GROUNDING_PARAGRAPH, TEACHING_INPUT_MARKER, _as_text, _build_system_prompt, strip_internal_reasoning
 from services.normalize import any_hit as _norm_any_hit
 from services.normalize import normalize_text as _normalize_hint
 
@@ -696,7 +696,11 @@ def run_tool_loop(
         (memory_notes.strip() + "\n" + relevant_context.strip()).strip(),
         CTX_MEMORY_TOKENS,
     )
-    system_text: str = _build_system_prompt(mem_fit, "", project_context)
+    system_text: str = _build_system_prompt(
+        mem_fit, "", project_context,
+        teaching=(TEACHING_INPUT_MARKER in str(user_input or "")),
+        task_type=(task_type or ""),
+    )
     # Grounded for all tiers (weak-tier strict flag kept for compat: a
     # mid-loop failover to a stronger tier simply keeps it — harmless).
     system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH

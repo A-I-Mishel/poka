@@ -164,6 +164,88 @@ def is_strict_tier(name: object) -> bool:
         return False
 
 
+# Teaching-block gate (context saving): the teaching override lives in
+# SYSTEM_PROMPT (canonical full text — teaching tests assert on it) but is
+# stripped for non-teaching turns in _build_system_prompt. Anchors are the
+# exact first/last sentences of the block; removal is fail-closed.
+_TEACHING_BLOCK_START = "For teaching from uploaded slides/documents"
+_TEACHING_BLOCK_END = (
+    "canonical headings and Source attachment are always preserved."
+)
+# Stable marker the backend appends to user input (TEACHING_SUFFIX in
+# backend/teach.py) on every file-backed teaching turn.
+TEACHING_INPUT_MARKER = "[Teaching mode:"
+
+
+def _strip_teaching_block(prompt: str) -> str:
+    """Remove the teaching override for non-teaching turns (never raises).
+
+    Fail-closed: any failure returns the prompt unchanged, so a future
+    edit of the teaching wording can never silently break prompting.
+    """
+    try:
+        start = prompt.index(_TEACHING_BLOCK_START)
+        end = prompt.index(_TEACHING_BLOCK_END) + len(_TEACHING_BLOCK_END)
+        stripped = prompt[:start] + prompt[end:]
+        while "\n\n\n" in stripped:
+            stripped = stripped.replace("\n\n\n", "\n\n")
+        return stripped
+    except Exception:
+        logger.debug("teaching block strip failed; keeping full prompt",
+                     exc_info=True)
+        return prompt
+
+
+# Distilled specialist guidance (Agency-derived, behavior-per-token):
+# tiny per-task-type blocks appended only when the routed task_type matches.
+# Zero extra model/tool calls — guidance rides the existing system prompt.
+RESEARCH_GUIDANCE = (
+    "Research discipline: answer ONLY from tool-returned sources this turn. "
+    "Trace each factual claim to the source that states it; one origin echoed "
+    "across N hits is ONE datum, not N. Separate well-supported from "
+    "single-source from unconfirmed, and say which is which. When sources "
+    "disagree, report both sides briefly instead of picking one silently. "
+    "When nothing was found, say so — a gap is a finding, not a failure."
+)
+
+DATA_GUIDANCE = (
+    "Data/code discipline: state the question first, then inspect before you "
+    "act (schema/sample/columns for data; error text for code). Use the "
+    "smallest sufficient tool sequence — one inspect call beats three "
+    "guesses. Verify code by running it before claiming it works; on failure "
+    "read the error, fix, re-run. Never invent file contents, rows, or test "
+    "results."
+)
+
+CREATIVE_GUIDANCE = (
+    "Generation discipline: match the requested format exactly — never "
+    "substitute another tool or format. No placeholder text, links, or "
+    "filler; every element must be real content. When the deliverable is "
+    "complete, stop: no bonus sections or unprompted improvements."
+)
+
+MULTISTEP_GUIDANCE = (
+    "Multi-step discipline: the plan's Expected outputs are your "
+    "done-criteria — stop calling tools once each is collected. Order tools "
+    "by dependency (read before analyze, gather before generate). Never "
+    "re-run a tool that already succeeded. If a tool fails twice, work "
+    "around it or report the limit instead of retrying the same call."
+)
+
+# Specialist blocks ride matching task_type only (see _TASK_GUIDANCE).
+# NOTE: no generic tool-economy line: multi-round turns already stop in
+# one round in measured traces, and the multi_step block carries the
+# done-criteria where loops actually occur. A global "stop early" nudge
+# risks research completeness for unproven speed (see latency mission).
+
+_TASK_GUIDANCE = {
+    "research": RESEARCH_GUIDANCE,
+    "data": DATA_GUIDANCE,
+    "creative": CREATIVE_GUIDANCE,
+    "multi_step": MULTISTEP_GUIDANCE,
+}
+
+
 _BOUNDARY_TAGS = (
     "memory-data",
     "relevant-memory-data",
@@ -233,9 +315,23 @@ def _build_system_prompt(
     relevant_context: str = "",
     project_context: str = "",
     simple: bool = False,
+    teaching: bool = False,
+    task_type: str = "",
 ) -> str:
     """Build the system prompt while isolating retrieved data."""
     prompt = SYSTEM_PROMPT_SIMPLE if simple else SYSTEM_PROMPT
+    if not simple and not teaching:
+        # Non-teaching turns skip the 39-line teaching override (~3.3k
+        # chars saved per turn). Teaching turns keep the full text.
+        prompt = _strip_teaching_block(prompt)
+    if not simple:
+        task = str(task_type or "").strip().lower()
+        if task:
+            # Specialist guidance only for the routed task type.
+            # Zero extra calls either way.
+            specialist = _TASK_GUIDANCE.get(task, "")
+            if specialist:
+                prompt += "\n\n" + specialist
     # Identity hardening (every answer, both prompt sizes): the model must
     # never claim the provider's identity ("I am Gemini..."). The UI tier
     # suffix carries routing transparency instead.
