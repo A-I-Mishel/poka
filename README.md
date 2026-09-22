@@ -65,7 +65,7 @@ python -m pytest tests/ -q
 |---|---|---|
 | `GEMINI_API_KEY` | yes (or Groq/OpenRouter key) | Google Gemini models (3.8/3.7/3.6 Flash main + 3.5 backup) |
 | `GROQ_API_KEY` | no | Groq 120B strong fallback + cheap-backup (`GROQ_MODEL`) |
-| `OPENROUTER_API_KEY` | no | OpenRouter trial lanes (Nemotron Ultra, Qwen 27B, GLM 5.2, Ling VL) |
+| `OPENROUTER_API_KEY` | no | OpenRouter trial lanes (Nemotron Ultra, Qwen 27B, Ling VL) |
 | `COHERE_API_KEY` | no | Cohere Command tier (direct key, OpenAI-compatible endpoint). Set `COHERE_MODEL=command-a-vision-07-2025` to also use it as backup vision lane behind Gemini |
 | `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
 | `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
@@ -145,16 +145,16 @@ lanes remain to answer degraded):
 8. Cohere Command (`COHERE_MODEL`; vision backup via `command-a-vision-07-2025`)
 9. OpenRouter Nemotron 3 Ultra 550B (`nvidia/nemotron-3-ultra-550b-a55b:free`; reasoning lane)
 10. OpenRouter Qwen 3.8 27B (`qwen/qwen3.8-27b:free` via `OPENROUTER_QWEN_MODEL`; trial Sep 2026)
-11. OpenRouter GLM 5.2 (`z-ai/glm-5.2:free` via `OPENROUTER_GLM_MODEL`; reasoning trial Sep 2026)
-12. OpenRouter Ling 3.0 Flash VL (`inclusionai/ling-3.0-flash-vl:free` via `OPENROUTER_LING_VL_MODEL`;
+11. OpenRouter Ling 3.0 Flash VL (`inclusionai/ling-3.0-flash-vl:free` via `OPENROUTER_LING_VL_MODEL`;
     vision-capable trial Sep 2026 — free vision fallback behind Gemini/Cohere)
 
 Cheap table (dumb calls): Groq 120B (local cheap tier joins first when it lands).
 GitHub Models + NVIDIA removed (dead); Groq Fast 20B / Mistral /
 OpenRouter Free Router removed Sep 2026 (superseded by the local cheap
 tier); other curated OpenRouter lanes removed
-(Gemma/Super/3.5/26B/Ling-Fin/Laguna) — only Nemotron Ultra + Qwen/GLM/Ling
-trial lanes (Sep 2026, remove if flaky) kept.
+(Gemma/Super/3.5/26B/Ling-Fin/Laguna) — only Nemotron Ultra + Qwen/Ling
+trial lanes (Sep 2026, remove if flaky; GLM already removed after failing
+its trial) kept.
 
 OpenCode Zen free tier (Muse Spark 1.3 contributor-free, Nemotron
 3.5/Ultra, Big Pickle, MiMo, Ling) retired Sep 2026 — provider now

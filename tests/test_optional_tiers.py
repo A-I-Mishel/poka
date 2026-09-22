@@ -3,10 +3,10 @@
 Each lane is env-gated: a missing or placeholder key means the tier is
 skipped (None), so unconfigured lanes never disturb the cascade.
 Position: Gemini mains first, Groq strong fallback, then emergency pool
-Cohere -> Nemotron Ultra -> Qwen/GLM/Ling trial lanes (Ling VL last).
+Cohere -> Nemotron Ultra -> Qwen/Ling trial lanes (Ling VL last).
 Groq Fast / Mistral / Free Router were removed Sep 2026 (superseded by
-the local cheap tier); their getters are gone and unknown names
-resolve to None.
+the local cheap tier); GLM 5.2 was removed Sep 2026 (failed trial).
+Removed getters are gone and unknown names resolve to None.
 """
 
 import os
@@ -99,7 +99,7 @@ def test_cascade_position_gemini_led():
         "Gemini 3.5 Flash", "Gemini 3.5 Flash Lite",
         "Gemini 3.1 Flash Lite", "Groq", "Cohere",
         "OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
-        "OpenRouter GLM 5.2", "OpenRouter Ling VL",
+        "OpenRouter Ling VL",
     ]
 
 
@@ -110,5 +110,6 @@ def test_registered_in_agent_table():
     for lane in ("Cohere", "Gemini 3.8 Flash", "Gemini 3.7 Flash",
                  "OpenRouter Ling VL"):
         assert lane in names
-    for gone in ("Groq Fast", "Mistral", "OpenRouter Free Router"):
+    for gone in ("Groq Fast", "Mistral", "OpenRouter Free Router",
+                 "OpenRouter GLM 5.2"):
         assert gone not in names

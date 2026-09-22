@@ -9,7 +9,7 @@ exam-trap sentences legitimately mention the confusable term (e.g. the
 Hamilton/Euler trap names Euler wording), so forbidden-substring checks
 would fail correct answers. Revisit only with word-sense-aware grading.
 
-Future use: judge new lanes (local 3B, Qwen/GLM trial verdicts) via
+Future use: judge new lanes (local 3B, Qwen trial verdict) via
 evaluate_text() against the same key — same bar for every model.
 """
 
