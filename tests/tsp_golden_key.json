@@ -1,0 +1,31 @@
+{
+  "deck": "AI_Lect_7_search_TSP",
+  "verified": "Slide-7 photo plus lesson text checked by the owner, Sep 2026. ONLY photo-verified facts belong here — never add numbers from model output alone (see the $773/$722 unconfirmed figures, deliberately excluded).",
+  "entries": [
+    {
+      "id": "hamilton-path",
+      "question": "What is a Hamilton path?",
+      "required": ["vertex", "once"]
+    },
+    {
+      "id": "hamilton-circuit",
+      "question": "How does a Hamilton circuit differ from a Hamilton path?",
+      "required": ["return", "start"]
+    },
+    {
+      "id": "hamilton-vs-euler",
+      "question": "Contrast the Hamilton and Euler concepts.",
+      "required": ["vertex", "edge"]
+    },
+    {
+      "id": "weighted-graph",
+      "question": "What is a weighted graph?",
+      "required": ["numbers", "weights"]
+    },
+    {
+      "id": "slide-weights",
+      "question": "Which edge weights appear on the slide?",
+      "required": ["119", "121", "133"]
+    }
+  ]
+}
