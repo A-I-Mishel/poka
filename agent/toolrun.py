@@ -597,6 +597,42 @@ def build_continuity_handoff(ledger: Optional[Dict[str, Any]]) -> str:
         return ""
 
 
+def _fit_results_to_budget(results: List[str]) -> Tuple[List[str], bool]:
+    """Drop the overflow tail of one tool batch under the external budget.
+
+    Checked PER result as it arrives (not after the whole batch: 8 tools
+    x 3k tokens could otherwise land 24k against a 12k budget before the
+    stop). Returns (fitted, truncated): dropped content is replaced by
+    one fixed note; the first result is always kept (an answer from
+    something beats an answer from nothing). Provenance recording stays
+    with the caller — every tool still counts as executed. Never raises.
+    """
+    try:
+        kept: List[str] = []
+        used = 0
+        for text in results or []:
+            try:
+                cost = count_tokens(text)
+            except Exception:
+                cost = 0
+            if kept and used + cost > MAX_EXTERNAL_TOKENS:
+                return kept + [
+                    "[budget] External content budget exhausted; "
+                    "synthesize from results so far."
+                ], True
+            kept.append(text)
+            used += cost
+        if used > MAX_EXTERNAL_TOKENS:
+            return kept + [
+                "[budget] External content budget exhausted; "
+                "synthesize from results so far."
+            ], True
+        return kept, False
+    except Exception:
+        logger.debug("result budget fit failed; keeping all", exc_info=True)
+        return list(results or []), False
+
+
 def run_tool_loop(
     llm_instance: BaseLanguageModel,
     user_input: str,
@@ -984,13 +1020,15 @@ def run_tool_loop(
             )
             _ledger_write()
             break
+        # Feed results into context under the external budget, gated per
+        # result as it arrives (see _fit_results_to_budget): overflow
+        # content is dropped with a fixed note while provenance above
+        # stays truthful (the tools DID run). The budget counter itself
+        # keeps true spend and is untouched here.
         for result_text in last_results:
             _note_search(result_text)
-        if budget.external_tokens > MAX_EXTERNAL_TOKENS:
-            last_results.append(
-                "[budget] External content budget exhausted; "
-                "synthesize from results so far."
-            )
+        last_results, _truncated = _fit_results_to_budget(last_results)
+        if _truncated:
             _ledger_write()
             break
         _ledger_write()

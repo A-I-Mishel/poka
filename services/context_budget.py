@@ -13,15 +13,32 @@ from typing import Dict, List, Sequence, Tuple
 
 from langchain_core.messages import BaseMessage
 
+from services.limits import (
+    CONTEXT_MAX_TOKENS,
+    CTX_EXTERNAL_TOKENS,
+    CTX_HISTORY_TOKENS,
+    CTX_MEMORY_TOKENS,
+    CTX_SUMMARY_TOKENS,
+)
 from services.tokens import count_tokens, truncate_tokens
 
-CONTEXT_MAX_TOKENS: int = 24000
+# Re-exported for the services/__init__ facade and direct importers:
+# every shared budget number lives in services.limits (single source);
+# only genuinely context-shaping splits stay defined here.
+__all__ = [
+    "CONTEXT_MAX_TOKENS",
+    "CTX_SYSTEM_TOKENS",
+    "CTX_CURRENT_TOKENS",
+    "CTX_HISTORY_TOKENS",
+    "CTX_MEMORY_TOKENS",
+    "CTX_SUMMARY_TOKENS",
+    "CTX_EXTERNAL_TOKENS",
+    "fit_history",
+    "fit_text",
+]
+
 CTX_SYSTEM_TOKENS: int = 4000
 CTX_CURRENT_TOKENS: int = 6000
-CTX_HISTORY_TOKENS: int = 6000
-CTX_MEMORY_TOKENS: int = 2000
-CTX_SUMMARY_TOKENS: int = 2000
-CTX_EXTERNAL_TOKENS: int = 4000
 
 
 def _message_tokens(message: BaseMessage) -> int:
