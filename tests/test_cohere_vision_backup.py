@@ -25,7 +25,6 @@ def test_cohere_admitted_unknown_stays_text_only():
     assert vision_supported_tier("Groq Fast") is False
     assert vision_supported_tier("OpenRouter Qwen 27B") is False
     assert vision_supported_tier("OpenRouter GLM 5.2") is False
-    assert vision_supported_tier("OpenRouter Free Router") is False
     assert vision_supported_tier("") is False
     assert vision_supported_tier(None) is False
 

@@ -66,10 +66,8 @@ def test_role_tables_shape():
     assert synth_names[4:6] == ["Gemini 3.5 Flash Lite",
                                 "Gemini 3.1 Flash Lite"]
     assert synth_names[6] == "Groq"
-    assert "Groq Fast" not in synth_names
-    assert set(synth_names) | {"Groq Fast"} == {n for n, _ in TIER_GETTERS}
-    assert [n for n, _ in CHEAP_TIERS] == [
-        "Groq Fast", "Groq", "Mistral"]
+    assert set(synth_names) == {n for n, _ in TIER_GETTERS}
+    assert [n for n, _ in CHEAP_TIERS] == ["Groq"]
 
 
 def test_groq_first_gemini_escalates():

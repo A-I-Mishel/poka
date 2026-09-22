@@ -62,10 +62,11 @@ def validate_secrets() -> list[str]:
     mode = os.getenv("PLUTO_AUTH_MODE", "open") or "open"
     if mode.strip().lower() == "private" and not os.getenv("PLUTO_ACCESS_TOKENS"):
         warnings.append("PLUTO_AUTH_MODE=private but PLUTO_ACCESS_TOKENS is empty — no one can log in")
-    # warn if no LLM tier is configured at all
+    # warn if no LLM tier is configured at all (keys counted only when
+    # a live lane reads them — retired lanes don't count).
     has_any = False
     for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
-              "COHERE_API_KEY", "MISTRAL_API_KEY"):
+              "COHERE_API_KEY"):
         raw = os.getenv(k)
         if raw and not is_placeholder(raw):
             has_any = True

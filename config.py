@@ -2,13 +2,11 @@
 
 Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
 same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
-(fresh per-model quota pools) -> Groq 120B (strong fallback) ->
-Groq Fast 20B (fast/simple, cheap-only) -> Cohere -> Nemotron 3 Ultra
--> Qwen 3.8 27B -> GLM 5.2 -> Ling 3.0 Flash VL (vision-capable)
--> OpenRouter Free Router -> Mistral (last resort). GitHub Models +
-NVIDIA removed (dead). Other curated OpenRouter lanes removed; only
-Nemotron Ultra (user pick) + Qwen/GLM/Ling trial lanes (Sep 2026,
-remove if flaky — free promos rotate) + openrouter/free kept.
+(fresh per-model quota pools) -> Groq 120B (strong fallback, cheap-backup
+included) -> Cohere -> Nemotron 3 Ultra -> Qwen 3.8 27B -> GLM 5.2
+-> Ling 3.0 Flash VL (vision-capable). GitHub Models + NVIDIA removed
+(dead). Groq Fast 20B / Mistral / OpenRouter Free Router removed Sep 2026
+(superseded by the local cheap tier; see retired notes inline).
 
 OpenCode Zen free tier retired Sep 2026: provider returns
 MissingSessionID ("free tier can only be used in OpenCode") for
@@ -48,22 +46,19 @@ GEMINI_31_LITE_MODEL: str = "gemini-3.1-flash-lite"
 # mimo-v2.5-free, ling-3.0-flash-fin-free. Paid Zen models remain
 # usable via https://opencode.ai/zen/v1 if billing is added.
 # Groq via its OpenAI-compatible endpoint (no extra dependency needed).
-# Two lanes share one GROQ_API_KEY: Groq = 120B strong fallback,
-# Groq Fast = 20B fast/simple (cheap-only, never final answers).
+# Single lane: Groq = 120B strong fallback (cheap-backup included).
+# Groq Fast 20B removed Sep 2026 (superseded by the local cheap tier;
+# re-add a get_tier_groq_fast_llm here if a cloud cheap lane is needed).
 # Llama models were retired from Groq in Aug 2026. Override with
-# GROQ_MODEL (120B) / GROQ_FAST_MODEL (20B) if needed.
+# GROQ_MODEL (120B) if needed.
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 GROQ_MODEL: str = "openai/gpt-oss-120b"
-GROQ_FAST_MODEL: str = "openai/gpt-oss-20b"
 # Cerebras retired Sep 2026: free tier now returns payment_required
 # (quota/billing gate) for gpt-oss-120b — removed from cascade.
 # Re-add via https://api.cerebras.ai/v1 if billing is added.
 # GitHub Models + NVIDIA removed (dead, not working anymore).
-# Mistral La Plateforme via its OpenAI-compatible endpoint.
-# No-card free evaluation tier (rate-limited, prototyping-grade);
-# open-weight default keeps the free lane usable.
-MISTRAL_BASE_URL: str = "https://api.mistral.ai/v1"
-MISTRAL_MODEL: str = "open-mistral-nemo"
+# Mistral constants removed Sep 2026 with the lane (see retired note
+# above); re-add MISTRAL_BASE_URL/MISTRAL_MODEL to restore it.
 # Cohere via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Direct API key from dashboard.cohere.com; Command A default is
 # synthesis-grade, so this lane is a full cascade member (not cheap-only).
@@ -72,21 +67,17 @@ COHERE_MODEL: str = "command-a-03-2025"
 # OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Emergency pool: one curated strong lane (Nemotron 3 Ultra, user pick)
 # ahead of the trial lanes (Qwen 3.8 27B dense all-rounder, GLM 5.2
-# reasoning for multi-step, Ling 3.0 Flash VL vision-capable MoE) and
-# the Free Router fallback. Other curated free-model lanes
-# (Gemma/Super/3.5/26B/Ling-Fin/Laguna) stay removed — promos rotate,
-# router auto-selects live free models. Trial lanes (added Sep 2026):
-# keep while stable, delete on repeated bans/flakes — one constant +
-# its list entries each, no other code changes needed.
+# reasoning for multi-step, Ling 3.0 Flash VL vision-capable MoE) as the
+# emergency pool tail. Other curated free-model lanes
+# (Gemma/Super/3.5/26B/Ling-Fin/Laguna) stay removed — promos rotate.
+# Free Router removed Sep 2026 (local tier takes the fallback role).
+# Trial lanes (added Sep 2026): keep while stable, delete on repeated
+# bans/flakes — one constant + its list entries each.
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 OPENROUTER_QWEN_MODEL: str = "qwen/qwen3.8-27b:free"
 OPENROUTER_GLM_MODEL: str = "z-ai/glm-5.2:free"
 OPENROUTER_LING_VL_MODEL: str = "inclusionai/ling-3.0-flash-vl:free"
-# OpenRouter Free Model Router (released Feb 2026): selects a free model
-# at random from the live catalog, smartly filtering for features the
-# request needs (tool calling, image understanding, structured output).
-OPENROUTER_FREE_ROUTER_MODEL: str = "openrouter/free"
 TEMPERATURE: float = 0.7
 
 # Client cache: clients hold only model config + credentials (no user
@@ -317,41 +308,9 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
         return None
 
 
-def _groq_fast_model() -> str:
-    """Groq Fast model ID, overridable via GROQ_FAST_MODEL env/secret."""
-    try:
-        override = _get_secret("GROQ_FAST_MODEL")
-    except Exception:
-        override = None
-    if override and override.strip():
-        return override.strip()
-    return GROQ_FAST_MODEL
-
-
-def get_tier_groq_fast_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Groq Fast 20B: fast/simple lane, cheap-only (never final answers)."""
-    key: Optional[str] = _get_secret("GROQ_API_KEY")
-    if key is None:
-        return None
-    try:
-        model = _groq_fast_model()
-        return _cached_client(
-            "Groq Fast",
-            temperature,
-            key,
-            model,
-            lambda: ChatOpenAI(
-                model=model,
-                api_key=key,
-                base_url=GROQ_BASE_URL,
-                temperature=temperature,
-                request_timeout=MODEL_TIMEOUT_SECONDS,
-                max_tokens=MODEL_MAX_TOKENS,
-                max_retries=0,
-            ),
-        )
-    except Exception:
-        return None
+# Groq Fast helpers removed Sep 2026 — see retired note above.
+# Re-add _groq_fast_model/get_tier_groq_fast_llm if a cloud cheap lane
+# is ever needed again.
 
 
 # Cerebras helpers removed — see retired note above.
@@ -405,15 +364,10 @@ def _get_generic_openai_tier(
         return None
 
 
-def get_tier_mistral_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Mistral tier: no-card free evaluation lane (open-weight default)."""
-    return _get_generic_openai_tier(
-        "Mistral",
-        "MISTRAL_API_KEY",
-        MISTRAL_BASE_URL,
-        _model_override("MISTRAL_MODEL", MISTRAL_MODEL),
-        temperature,
-    )
+# Mistral tier removed Sep 2026 (superseded by the local cheap tier as
+# the always-available fallback; no-card evaluation lane no longer needed).
+# Re-add get_tier_mistral_llm via _get_generic_openai_tier + MISTRAL_BASE_URL
+# if a Mistral lane is ever needed again.
 
 
 def get_tier_cohere_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
@@ -490,14 +444,10 @@ def get_tier_openrouter_ling_vl_llm(temperature: float = TEMPERATURE) -> Optiona
     )
 
 
-def get_tier_openrouter_free_router_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter Free Model Router (released Feb 2026).
-
-    ``openrouter/free`` selects a free model at random from the live
-    catalog, filtering for the request's needs (tool calling, image
-    understanding, structured output).
-    """
-    return _get_openrouter_llm("OpenRouter Free Router", OPENROUTER_FREE_ROUTER_MODEL, temperature)
+# Free Router removed Sep 2026 (superseded by the local cheap tier as
+# the deterministic always-available fallback). Re-add
+# get_tier_openrouter_free_router_llm + OPENROUTER_FREE_ROUTER_MODEL
+# ("openrouter/free") if a random-free fallback is ever needed again.
 
 
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
@@ -508,14 +458,11 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Gemini 3.5 Flash Lite": get_tier_gemini35_lite_llm,
     "Gemini 3.1 Flash Lite": get_tier_gemini31_lite_llm,
     "Groq": get_tier_groq_llm,
-    "Groq Fast": get_tier_groq_fast_llm,
     "Cohere": get_tier_cohere_llm,
-    "Mistral": get_tier_mistral_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
     "OpenRouter Qwen 27B": get_tier_openrouter_qwen_llm,
     "OpenRouter GLM 5.2": get_tier_openrouter_glm_llm,
     "OpenRouter Ling VL": get_tier_openrouter_ling_vl_llm,
-    "OpenRouter Free Router": get_tier_openrouter_free_router_llm,
 }
 
 
@@ -543,34 +490,29 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Gemini 3.5 Flash Lite", get_tier_gemini35_lite_llm),
     ("Gemini 3.1 Flash Lite", get_tier_gemini31_lite_llm),
     ("Groq", get_tier_groq_llm),
-    ("Groq Fast", get_tier_groq_fast_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
     ("OpenRouter GLM 5.2", get_tier_openrouter_glm_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
-    ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
-    ("Mistral", get_tier_mistral_llm),
 ]
 
 
 # Role-based tier tables (quota architecture): synthesis for final answers
-# (quality-first, Gemini-led; Groq Fast excluded as cheap-only); cheap for
-# dumb calls (classification, summaries, planning, reflection: Groq Fast
-# first so Gemini quota is reserved for main answers); the full cascade
-# remains the escape hatch when synthesis is down (answers then carry a
-# degraded marker). Tables hold (name, getter) pairs like TIER_GETTERS.
+# (quality-first, Gemini-led — every member is quality-grade since the
+# Sep 2026 weak-lane removals); cheap for dumb calls (classification,
+# summaries, planning, reflection: Groq 120B until the local cheap tier
+# lands, so Gemini quota is reserved for main answers); the full cascade
+# remains the escape hatch when synthesis is down. Tables hold (name,
+# getter) pairs like TIER_GETTERS.
 # Gemini leads; Groq 120B is the strong fallback; Cohere -> Nemotron
-# Ultra -> Qwen 27B -> GLM 5.2 -> Ling VL -> Free Router -> Mistral is
-# the emergency pool. Groq's free pool absorbs cheap traffic; Gemini's
-# per-model pool is spent on quality final answers + vision.
-SMALL_FINAL_TIERS = frozenset({"Groq Fast"})  # 20B-class: never final answers
-# Weak final-answer tiers: small or nondeterministic lanes that answer only
-# when quality tiers are down. Runtime marks their answers degraded so the
-# UI can be honest ("quality models unavailable").
-WEAK_FINAL_TIERS = frozenset({
-    "Groq Fast", "Mistral", "OpenRouter Free Router",
-})
+# Ultra -> Qwen 27B -> GLM 5.2 -> Ling VL is the emergency pool. Groq's
+# free pool absorbs cheap traffic; Gemini's per-model pool is spent on
+# quality final answers + vision.
+# Weak/strict tier sets removed Sep 2026 with their only members (Groq
+# Fast, Mistral, Free Router): with no weak lanes, no answer is ever
+# degraded-marked — total outage surfaces the honest all-tiers error
+# instead. The local cheap tier will reintroduce the tail when it lands.
 SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.8 Flash", get_tier_gemini38_llm),
     ("Gemini 3.7 Flash", get_tier_gemini37_llm),
@@ -584,20 +526,10 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
     ("OpenRouter GLM 5.2", get_tier_openrouter_glm_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
-    ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
-    ("Mistral", get_tier_mistral_llm),
 ]
 CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
-    ("Groq Fast", get_tier_groq_fast_llm),
     ("Groq", get_tier_groq_llm),
-    ("Mistral", get_tier_mistral_llm),
 ]
-
-# Tiers that get the strict grounding paragraph (small or nondeterministic
-# models prone to inventing citations/IDs): answer ONLY from tool results.
-STRICT_GROUNDING_TIERS = frozenset({
-    "Groq Fast", "Mistral", "OpenRouter Free Router",
-})
 
 
 TASK_TEMPERATURES: Dict[str, float] = {

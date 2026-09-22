@@ -700,17 +700,9 @@ def answer_with_fallback(
             raise RuntimeError(f"All LLM tiers failed at runtime. (ref {request_id})")
         try:
             output_simple = strip_internal_reasoning(output_simple)
-            # Weak-lane honesty: quality tiers down + weak tier answered
-            # within synthesis -> mark degraded (UI can show honestly).
-            if degraded is None:
-                try:
-                    from config import WEAK_FINAL_TIERS
-
-                    if active_tier in WEAK_FINAL_TIERS:
-                        degraded = {"requested": "quality",
-                                    "reason": "quality tiers unavailable"}
-                except Exception:
-                    logger.debug("weak-tier marker failed", exc_info=True)
+            # No weak lanes remain (removed Sep 2026): every synthesis
+            # member is quality-grade, so only cascade-level fallback
+            # (degraded above) can mark the answer.
             latency_ms = int((time.time() - started_at) * 1000)
             logger.info(
                 "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d fallbacks=%d latency_ms=%d",
@@ -960,15 +952,8 @@ def answer_with_fallback(
         elif tooled_tiers:
             active_tier = tooled_tiers[-1]
         output = strip_internal_reasoning(output)
-        if degraded_tooled is None:
-            try:
-                from config import WEAK_FINAL_TIERS
-
-                if active_tier in WEAK_FINAL_TIERS:
-                    degraded_tooled = {"requested": "quality",
-                                       "reason": "quality tiers unavailable"}
-            except Exception:
-                logger.debug("weak-tier tooled marker failed", exc_info=True)
+        # No weak lanes remain (removed Sep 2026): only cascade-level
+        # fallback (degraded_tooled above) can mark the answer.
         latency_ms = int((time.time() - started_at) * 1000)
         logger.info(
             "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d search=%d "

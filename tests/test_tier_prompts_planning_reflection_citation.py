@@ -60,8 +60,11 @@ class FakeLLM:
 def test_strict_tier_set():
     from agent.prompts import STRICT_GROUNDING_PARAGRAPH, is_strict_tier
 
-    assert is_strict_tier("Groq Fast") is True
-    assert is_strict_tier("Mistral") is True
+    # No strict tiers remain (set removed Sep 2026 with its only members);
+    # the hook stays for the local-tier work. Grounding paragraph itself
+    # still rides every turn (see test_simple_answer_grounded_for_all_tiers).
+    assert is_strict_tier("Groq Fast") is False
+    assert is_strict_tier("Mistral") is False
     assert is_strict_tier("Gemini 3.8 Flash") is False
     assert is_strict_tier(None) is False
     assert "ONLY from the tool results" in STRICT_GROUNDING_PARAGRAPH

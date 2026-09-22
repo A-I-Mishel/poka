@@ -9,10 +9,9 @@ fails and the SLO gates go red — the workflow skips instead (not red):
 | Secret | Used for |
 |--------|----------|
 | `GEMINI_API_KEY` | Primary tier + KB embeddings (gates all three load jobs) |
-| `GROQ_API_KEY` | Fallback tier + fast/simple lane (optional) |
+| `GROQ_API_KEY` | Fallback tier + cheap-backup lane (optional) |
 | `OPENROUTER_API_KEY` | Fallback tier (optional) |
 | `COHERE_API_KEY` | Fallback tier (optional) |
-| `MISTRAL_API_KEY` | Fallback tier (optional) |
 | `PLUTO_LOAD_TEST_URL` | Remote target for smoke test (optional; default: local server) |
 | `K6_PROJECT_ID` | k6 Cloud reporting (optional) |
 

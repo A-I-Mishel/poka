@@ -34,12 +34,11 @@ def test_gemini_tiers_fail_fast(monkeypatch):
 def test_openai_compatible_tiers_fail_fast(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-key-failfast")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-failfast")
-    monkeypatch.setenv("MISTRAL_API_KEY", "test-key-failfast")
     try:
         assert _fresh_client(config_mod.get_tier_groq_llm, "x").max_retries == 0
-        assert _fresh_client(config_mod.get_tier_groq_fast_llm, "x").max_retries == 0
         assert _fresh_client(
-            config_mod.get_tier_openrouter_free_router_llm, "x").max_retries == 0
-        assert _fresh_client(config_mod.get_tier_mistral_llm, "x").max_retries == 0
+            config_mod.get_tier_openrouter_qwen_llm, "x").max_retries == 0
+        assert _fresh_client(
+            config_mod.get_tier_openrouter_ling_vl_llm, "x").max_retries == 0
     finally:
         config_mod._clear_client_cache()

@@ -65,7 +65,7 @@ def test_tool_binding_covers_typos():
     assert "run_code" in _names("fix my pyton")
     assert "read_document" in _names("summarise this documnet")
     # Generic hints don't bind MCP tools on any tier (8k-lane trim removed).
-    assert "list_mcp_tools" not in _names("hello", tier_name="Groq Fast")
+    assert "list_mcp_tools" not in _names("hello", tier_name="Groq")
     assert "list_mcp_tools" not in _names("hello")
     # Creation safety net: intent implies creation family.
     assert "create_pdf" in _names("create something")

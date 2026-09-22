@@ -2,8 +2,8 @@
 
 Env-gated like the other optional lanes: a missing or placeholder key
 means the tier is skipped (None), so unconfigured deploys never notice
-it. Position: emergency pool after Groq Fast, before OpenRouter Free
-Router; full synthesis member, cheap-excluded.
+it. Position: emergency pool after Groq, before Nemotron Ultra;
+full synthesis member, cheap-excluded.
 """
 
 import os
@@ -56,11 +56,11 @@ def test_getter_by_name(monkeypatch):
 
 def test_cascade_position():
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names.index("Groq Fast") < names.index("Cohere")
-    assert names.index("Cohere") < names.index("OpenRouter Qwen 27B")
-    assert names.index("OpenRouter Qwen 27B") < names.index("OpenRouter Free Router")
-    assert names.index("OpenRouter Free Router") < names.index("Mistral")
-    assert names[-1] == "Mistral"
+    assert names.index("Groq") < names.index("Cohere")
+    assert names.index("Cohere") < names.index("OpenRouter Nemotron Ultra")
+    assert names[-4:] == ["OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
+                          "OpenRouter GLM 5.2", "OpenRouter Ling VL"]
+    assert names[-1] == "OpenRouter Ling VL"
 
 
 def test_synthesis_member_cheap_excluded():

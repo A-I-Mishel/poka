@@ -672,9 +672,9 @@ def test_repair_fixes_and_reports(monkeypatch):
     send = "window\n" + "x teach ONLY slides 4-6 y"
     bad = "Concept: G\nSource: [slide 4]\nSource: [slide 9]"
     calls = _stub_repair(monkeypatch, _GOOD_DRAFT)
-    fixed, repaired, left = _maybe_repair_teaching_turn(send, bad, "Mistral")
+    fixed, repaired, left = _maybe_repair_teaching_turn(send, bad, "Cohere")
     assert repaired is True and fixed == _GOOD_DRAFT and left == []
-    # Cross-tier repair: weak-tier drafts are fixed on the strongest live
+    # Cross-tier repair: drafts are fixed on the strongest live
     # tier (Groq first), not the failed tier itself.
     assert calls["tier"] == "Groq"
 

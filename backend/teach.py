@@ -834,9 +834,9 @@ def _redact_upload_ids(text: Any) -> Any:
 TEACHING_REPAIR_TIMEOUT_SECONDS: float = 30.0
 
 
-# Cross-tier repair preference: a weak tier (Mistral, Free Router) rarely
-# fixes its own structure. Repair runs on the strongest live tier instead,
-# falling back to the original tier only when nothing stronger resolves.
+# Cross-tier repair preference: the failed tier rarely fixes its own
+# structure. Repair runs on the strongest live tier instead, falling
+# back to the original tier only when nothing stronger resolves.
 _REPAIR_TIER_PREFERENCE = (
     "Groq",
     "Gemini 3.8 Flash",

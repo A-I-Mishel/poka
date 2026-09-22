@@ -64,9 +64,8 @@ python -m pytest tests/ -q
 | Variable | Required | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | yes (or Groq/OpenRouter key) | Google Gemini models (3.8/3.7/3.6 Flash main + 3.5 backup) |
-| `GROQ_API_KEY` | no | Groq 120B strong fallback + 20B fast/simple lane (`GROQ_MODEL` / `GROQ_FAST_MODEL`) |
-| `OPENROUTER_API_KEY` | no | OpenRouter Free Router emergency fallback (`openrouter/free`) |
-| `MISTRAL_API_KEY` | no | Mistral free evaluation tier (no card, last resort) |
+| `GROQ_API_KEY` | no | Groq 120B strong fallback + cheap-backup (`GROQ_MODEL`) |
+| `OPENROUTER_API_KEY` | no | OpenRouter trial lanes (Nemotron Ultra, Qwen 27B, GLM 5.2, Ling VL) |
 | `COHERE_API_KEY` | no | Cohere Command tier (direct key, OpenAI-compatible endpoint). Set `COHERE_MODEL=command-a-vision-07-2025` to also use it as backup vision lane behind Gemini |
 | `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
 | `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
@@ -130,11 +129,12 @@ Sessions work in both auth modes.
 ## Model configuration
 
 Role-based tier tables (first live tier wins, failed tiers cool down).
-Final answers use the synthesis table (Gemini-led; Groq Fast excluded as
-cheap-only); dumb calls (classification, summaries, planning, reflection)
-use the cheap table (Groq Fast first, saving Gemini quota); the full
-cascade below is the escape hatch when synthesis is down (answers then
-carry a degraded marker):
+Final answers use the synthesis table (Gemini-led, every member
+quality-grade); dumb calls (classification, summaries, planning,
+reflection) use the cheap table (Groq 120B until the local cheap tier
+lands, saving Gemini quota); the full cascade below is the escape hatch
+when synthesis is down (total outage surfaces an honest error — no weak
+lanes remain to answer degraded):
 1. Gemini 3.8 Flash (Google main; override via `GEMINI_38_MODEL`)
 2. Gemini 3.7 Flash (Google main; override via `GEMINI_37_MODEL`)
 3. Gemini 3.6 Flash (Google main; override via `GEMINI_36_MODEL`)
@@ -148,14 +148,13 @@ carry a degraded marker):
 11. OpenRouter GLM 5.2 (`z-ai/glm-5.2:free` via `OPENROUTER_GLM_MODEL`; reasoning trial Sep 2026)
 12. OpenRouter Ling 3.0 Flash VL (`inclusionai/ling-3.0-flash-vl:free` via `OPENROUTER_LING_VL_MODEL`;
     vision-capable trial Sep 2026 — free vision fallback behind Gemini/Cohere)
-13. OpenRouter Free Router (`openrouter/free`; smart auto-selection
-    of a free model filtered by request features)
-14. Mistral (free evaluation tier; `open-mistral-nemo` via `MISTRAL_MODEL` — last resort)
 
-Cheap table (dumb calls): Groq Fast 20B (`GROQ_FAST_MODEL`) → Groq 120B → Mistral.
-GitHub Models + NVIDIA removed (dead); other curated OpenRouter lanes
-removed (Gemma/Super/3.5/26B/Ling-Fin/Laguna) — only Nemotron Ultra + Qwen/GLM/Ling
-trial lanes (Sep 2026, remove if flaky) + Free Router kept.
+Cheap table (dumb calls): Groq 120B (local cheap tier joins first when it lands).
+GitHub Models + NVIDIA removed (dead); Groq Fast 20B / Mistral /
+OpenRouter Free Router removed Sep 2026 (superseded by the local cheap
+tier); other curated OpenRouter lanes removed
+(Gemma/Super/3.5/26B/Ling-Fin/Laguna) — only Nemotron Ultra + Qwen/GLM/Ling
+trial lanes (Sep 2026, remove if flaky) kept.
 
 OpenCode Zen free tier (Muse Spark 1.3 contributor-free, Nemotron
 3.5/Ultra, Big Pickle, MiMo, Ling) retired Sep 2026 — provider now
@@ -181,9 +180,9 @@ vocabulary with `python scripts/mine_fallthrough.py` or
 `GET /api/ops/router` (scrubbed, no PII) — grow the synonym table,
 never ad-hoc keyword branches.
 
-Answer quality: synthesis stays Gemini-led and quality-first (weak
-lanes — Groq Fast, Mistral, Free Router — answer
-only when quality tiers are down, marked `fallback: degraded`);
+Answer quality: synthesis stays Gemini-led and quality-first (every
+member quality-grade since the Sep 2026 weak-lane removals — total
+outage surfaces an honest error instead of a degraded answer);
 grounding applies to every tier and synthesis; research drafts earn
 one cheap-tier reflection pass (150+ chars).
 

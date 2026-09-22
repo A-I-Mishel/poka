@@ -156,8 +156,10 @@ STRICT_GROUNDING_PARAGRAPH = (
 
 # Weak-tier teaching checklist: same canonical contract as the full
 # teaching override + TEACHING_SUFFIX, but as a short checklist small
-# models (Mistral Nemo, Free Router random lanes, Groq Fast) can
-# actually follow. Appended only when teaching AND strict tier.
+# models (e.g. the future local cheap tier) can actually follow.
+# Appended only when teaching AND strict tier. No strict tiers remain
+# (sets removed Sep 2026 with Groq Fast/Mistral/Free Router); the hook
+# stays for the local tier work.
 WEAK_TEACHING_CHECKLIST = (
     "Teaching checklist (follow exactly, in order):\n"
     "1. Start with \"📘 FILE: <name>\" newline \"Slides: X-Y\" matching the scope fence.\n"
@@ -172,13 +174,12 @@ WEAK_TEACHING_CHECKLIST = (
 
 
 def is_strict_tier(name: object) -> bool:
-    """True when a tier needs the strict grounding paragraph (never raises)."""
-    try:
-        from config import STRICT_GROUNDING_TIERS
+    """True when a tier needs the strict grounding paragraph (never raises).
 
-        return str(name or "") in STRICT_GROUNDING_TIERS
-    except Exception:
-        return False
+    No strict tiers remain (set removed Sep 2026 with its only members);
+    kept as the hook the local-tier work will reuse. Always False today.
+    """
+    return False
 
 
 # Teaching-block gate (context saving): the teaching override lives in
