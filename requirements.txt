@@ -5,6 +5,7 @@ langchain-openai>=1.1.14,<2
 python-pptx>=1.0,<2
 python-docx>=1.1,<2
 pillow>=12.3.0,<14
+pytesseract>=0.3.10,<1  # OCR wrapper (services/ocr.py); needs the tesseract system binary on PATH (soft dep: vision-OCR fallback covers its absence)
 pandas>=2.0,<3
 openpyxl>=3.1,<4
 # Pinned transitive deps: scipy>=1.14 needs numpy>=2.0,<2.8;
