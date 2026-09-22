@@ -12,6 +12,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 def _pluto_hermetic(tmp_path, monkeypatch):
     """Auto-reset global caches between tests (prevents cross-test bleed)."""
     monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    # Hermetic against ambient local .env (e.g. a developer's
+    # PLUTO_AUTH_MODE=private / PLUTO_USER_ID / SNAPSHOT_ENABLED=false):
+    # the suite assumes defaults unless a test sets its own values.
+    for _var in ("PLUTO_AUTH_MODE", "PLUTO_USER_ID",
+                 "PLUTO_FRONTEND_ORIGIN", "SNAPSHOT_ENABLED"):
+        monkeypatch.delenv(_var, raising=False)
     monkeypatch.chdir(tmp_path)
     yield
     try:

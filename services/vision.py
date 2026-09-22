@@ -30,7 +30,9 @@ VISION_EXTS = frozenset({"png", "jpg", "jpeg", "webp", "gif", "bmp"})
 # Cohere is backup-only: it trails the Gemini lanes in cascade order and
 # only sees images when its configured model is vision-capable
 # (COHERE_MODEL=command-a-vision-07-2025); the default Command A is text.
-_VISION_TIERS = ("gemini", "cohere")
+# Ling VL (OpenRouter trial, Sep 2026) trails Cohere: free vision MoE,
+# single provider — remove the key below with the lane if it flakes.
+_VISION_TIERS = ("gemini", "cohere", "ling")
 
 
 def vision_supported_tier(tier_name: str) -> bool:

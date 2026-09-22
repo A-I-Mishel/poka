@@ -49,7 +49,7 @@ from agent.cascade import (
 from agent.executor import TokenStream, _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.prompts import STRICT_GROUNDING_PARAGRAPH, TEACHING_INPUT_MARKER, _as_text, _build_system_prompt, strip_internal_reasoning
+from agent.prompts import STRICT_GROUNDING_PARAGRAPH, TEACHING_INPUT_MARKER, WEAK_TEACHING_CHECKLIST, _as_text, _build_system_prompt, strip_internal_reasoning
 from services.normalize import any_hit as _norm_any_hit
 from services.normalize import normalize_text as _normalize_hint
 
@@ -704,6 +704,10 @@ def run_tool_loop(
     # Grounded for all tiers (weak-tier strict flag kept for compat: a
     # mid-loop failover to a stronger tier simply keeps it — harmless).
     system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH
+    if strict and (TEACHING_INPUT_MARKER in str(user_input or "")):
+        # Small models hold a short checklist; the full teaching override
+        # already rides the system prompt for capable tiers.
+        system_text += "\n\n" + WEAK_TEACHING_CHECKLIST
     fitted_history, _hist_stats = fit_history(chat_history, CTX_HISTORY_TOKENS)
     messages: List[BaseMessage] = [
         SystemMessage(content=system_text),

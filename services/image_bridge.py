@@ -22,11 +22,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Converter tiers in order: Gemini lanes first, Cohere as backup.
-# Cohere only converts when its configured model is vision-capable
-# (COHERE_MODEL=command-a-vision-07-2025); otherwise its attempt fails
-# fast into the next tier like any other vision miss.
-_CONVERTER_TIERS = ("Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere")
+# Converter tiers in order: Gemini lanes first, Cohere as backup, Ling VL
+# as free backup-of-backup (OpenRouter trial, Sep 2026 — remove with the
+# lane if it flakes). Cohere only converts when its configured model is
+# vision-capable (COHERE_MODEL=command-a-vision-07-2025); otherwise its
+# attempt fails fast into the next tier like any other vision miss.
+_CONVERTER_TIERS = ("Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere", "OpenRouter Ling VL")
 
 # Surrogate cap: transcripts must fit the context budget next to real
 # tool output (CTX_EXTERNAL_TOKENS). Longer notes truncate with a mark.

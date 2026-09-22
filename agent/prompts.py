@@ -154,6 +154,22 @@ STRICT_GROUNDING_PARAGRAPH = (
     "contents, dates, or actions."
 )
 
+# Weak-tier teaching checklist: same canonical contract as the full
+# teaching override + TEACHING_SUFFIX, but as a short checklist small
+# models (Mistral Nemo, Free Router random lanes, Groq Fast) can
+# actually follow. Appended only when teaching AND strict tier.
+WEAK_TEACHING_CHECKLIST = (
+    "Teaching checklist (follow exactly, in order):\n"
+    "1. Start with \"📘 FILE: <name>\" newline \"Slides: X-Y\" matching the scope fence.\n"
+    "2. Teach ONLY slides in the fence; cite every concept as [slide N].\n"
+    "3. One \"## Concept: <name>\" block per concept with Definition, "
+    "intuition, How, Why, Example, Exam importance, Exam trap, Source.\n"
+    "4. End with EXACTLY ONE \"**Recall**\" section (one question, no answer), "
+    "then one line \"Reply **continue** for the next concept.\" and STOP.\n"
+    "5. Never add Say Next / Say Got it / Next Steps, never teach after Recall, "
+    "never invent slides or upload IDs."
+)
+
 
 def is_strict_tier(name: object) -> bool:
     """True when a tier needs the strict grounding paragraph (never raises)."""

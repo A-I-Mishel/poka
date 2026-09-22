@@ -190,12 +190,14 @@ MAX_QUERY_CHARS: int = 300
 
 # Rate limits: action -> (max calls, window seconds), scoped per limiting
 # identity (stable user ID, or client IP for ephemeral open-mode visitors).
+# Local single-user baseline (relaxed: no shared-host abuse risk; provider
+# quotas still cap LLM use via the cascade, not here).
 RATE_LIMITS: dict = {
-    "chat": (100, 3600.0),
-    "search": (60, 3600.0),
+    "chat": (300, 3600.0),
+    "search": (120, 3600.0),
     "upload": (30, 3600.0),
-    "generate": (20, 3600.0),
-    "deep": (20, 3600.0),
+    "generate": (60, 3600.0),
+    "deep": (60, 3600.0),
     "kb_search": (60, 3600.0),
     "gmail": (30, 3600.0),
     "calendar": (30, 3600.0),

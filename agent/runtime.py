@@ -60,7 +60,7 @@ from agent.cascade import ROUTER_STATS, _run_cascade_step, _usable_tiers
 from agent.executor import TokenStream
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.planning import plan_then_execute
-from agent.prompts import STRICT_GROUNDING_PARAGRAPH, _as_text, _build_system_prompt, _messages_to_langchain, is_strict_tier, strip_internal_reasoning
+from agent.prompts import STRICT_GROUNDING_PARAGRAPH, TEACHING_INPUT_MARKER, _as_text, _build_system_prompt, _messages_to_langchain, is_strict_tier, strip_internal_reasoning
 from agent.reflection import should_reflect
 from agent.router import classify_task, get_route_corrections, rule_route, rule_route_conf
 from agent.toolrun import MAX_TOOL_ROUNDS, is_degenerate_answer, run_tool_loop
@@ -77,7 +77,8 @@ _HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
 # Vision-capable tier names (mirrors services.vision._VISION_TIERS).
 # Cohere trails the Gemini lanes: backup only, and only when its
 # configured model is vision-capable (COHERE_MODEL=command-a-vision-*).
-_VISION_TIER_NAMES = ("Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere")
+# Ling VL trails Cohere: free OpenRouter trial lane (Sep 2026).
+_VISION_TIER_NAMES = ("Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere", "OpenRouter Ling VL")
 
 
 # Bridge transcript wrapper (routing-neutral by construction — see note
@@ -616,11 +617,20 @@ def answer_with_fallback(
         # owns its instances, so those are used exactly as given (with
         # the historical temperature hint) and never swapped for real
         # clients, even on a name collision.
+        # Teaching turns route as research but need their own temp (0.4:
+        # structure holds, examples less robotic). task_type stays
+        # research for telemetry; only sizing uses the override.
+        try:
+            _eff_task = task_type
+            if TEACHING_INPUT_MARKER in str(user_input or ""):
+                _eff_task = "teaching"
+        except Exception:
+            _eff_task = task_type
         if _is_managed_table(tiers):
             try:
                 from config import TEMPERATURE as _DEFAULT_TEMP2
 
-                sized = get_tier_llm(tier_name, temperature=TASK_TEMPERATURES.get(task_type, _DEFAULT_TEMP2))
+                sized = get_tier_llm(tier_name, temperature=TASK_TEMPERATURES.get(_eff_task, _DEFAULT_TEMP2))
             except Exception:
                 sized = None
             if sized is not None:
@@ -629,7 +639,7 @@ def answer_with_fallback(
         try:
             from config import TEMPERATURE as _DEFAULT_TEMP
 
-            llm.temperature = TASK_TEMPERATURES.get(task_type, _DEFAULT_TEMP)  # type: ignore[attr-defined]
+            llm.temperature = TASK_TEMPERATURES.get(_eff_task, _DEFAULT_TEMP)  # type: ignore[attr-defined]
         except Exception:
             logger.debug("req=%s task temperature hint failed", request_id, exc_info=True)
         return llm

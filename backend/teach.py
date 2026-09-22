@@ -820,6 +820,67 @@ def _redact_upload_ids(text: Any) -> Any:
 TEACHING_REPAIR_TIMEOUT_SECONDS: float = 30.0
 
 
+# Cross-tier repair preference: a weak tier (Mistral, Free Router) rarely
+# fixes its own structure. Repair runs on the strongest live tier instead,
+# falling back to the original tier only when nothing stronger resolves.
+_REPAIR_TIER_PREFERENCE = (
+    "Groq",
+    "Gemini 3.8 Flash",
+    "Gemini 3.7 Flash",
+    "Gemini 3.6 Flash",
+    "Gemini 3.5 Flash",
+    "Cohere",
+)
+
+
+def _strip_teaching_violations(text: str) -> str:
+    """Deterministically remove fixable teaching violations (never raises).
+
+    Strips banned footer lines (Say Next / Say Got it / Next Steps) and
+    duplicate FILE headers (keeps the first). Citations, Recall count,
+    and Concept presence still need a model repair — this only removes
+    what regex can prove is wrong, so a failed repair still delivers a
+    cleaner draft than the raw weak-tier output.
+    """
+    try:
+        cleaned = str(text or "")
+        if not cleaned.strip():
+            return text
+        lines = cleaned.splitlines()
+        kept: List[str] = []
+        for line in lines:
+            try:
+                if _TEACHING_BANNED_FOOTER_RE.match(line):
+                    continue
+            except Exception:
+                logger.debug("teaching footer scan failed", exc_info=True)
+            kept.append(line)
+        cleaned = "\n".join(kept)
+        # Dedupe FILE headers: keep first canonical/new or legacy header.
+        try:
+            seen_header = False
+            out_lines: List[str] = []
+            for line in cleaned.splitlines():
+                is_header = bool(
+                    _TEACHING_FILE_RE_NEW.search(line)
+                    or _TEACHING_FILE_RE.search(line)
+                )
+                if is_header:
+                    if seen_header:
+                        continue
+                    seen_header = True
+                out_lines.append(line)
+            # Two-line canonical header: the Slides: line immediately after
+            # a kept FILE line is part of the header; extra Slides: lines
+            # later in the body are dropped with their dup headers above.
+            cleaned = "\n".join(out_lines)
+        except Exception:
+            logger.debug("teaching header dedupe failed", exc_info=True)
+        return cleaned.strip() or text
+    except Exception:
+        return text
+
+
 def _teaching_scope_from_send(send_text: str) -> Optional[Tuple[int, int]]:
     """Parse the allowed (start, end) window from the scope fence (never raises)."""
     try:
@@ -911,22 +972,46 @@ def _repair_teaching_draft(
     on_token: Any = None,
     on_reset: Any = None,
 ) -> Tuple[str, bool]:
-    """One bounded same-tier repair of a violating teaching draft (never raises).
+    """One bounded cross-tier repair of a violating teaching draft (never raises).
 
     Returns (text_to_use, repaired). Keeps the original draft whenever repair
     is unavailable, fails, or does not strictly reduce violations. A streaming
     consumer is reset first so it never concatenates stale with fixed text.
+    Repair runs on the strongest live tier (Groq 120B first), not the failed
+    tier itself — weak lanes rarely fix their own structure.
     """
     try:
         if not reasons:
             return draft, False
-        from config import get_tier_llm
+        from config import _GETTERS_BY_NAME, get_tier_llm
 
         import agent as agent_mod
 
+        # Unknown tier (tests, misconfiguration): never burn quota on
+        # stronger tiers blindly — the caller has no live tier to bill.
+        try:
+            if str(tier or "") not in _GETTERS_BY_NAME:
+                return draft, False
+        except Exception:
+            return draft, False
+        repair_tier = str(tier or "")
         llm = None
         try:
-            llm = get_tier_llm(str(tier or ""), temperature=0.3)
+            candidates: List[str] = []
+            for name in _REPAIR_TIER_PREFERENCE:
+                if name and name not in candidates:
+                    candidates.append(name)
+            if repair_tier and repair_tier not in candidates:
+                candidates.append(repair_tier)
+            for name in candidates:
+                try:
+                    candidate = get_tier_llm(name, temperature=0.3)
+                except Exception:
+                    candidate = None
+                if candidate is not None:
+                    repair_tier = name
+                    llm = candidate
+                    break
         except Exception:
             llm = None
         if llm is None:
@@ -965,7 +1050,7 @@ def _repair_teaching_draft(
         try:
             response = agent_mod._invoke_bounded(
                 llm, lc_messages, timeout=TEACHING_REPAIR_TIMEOUT_SECONDS,
-                budget=repair_budget, on_token=on_token, tier_name=str(tier or ""))
+                budget=repair_budget, on_token=on_token, tier_name=repair_tier)
         except Exception:
             return draft, False
         try:
@@ -1052,7 +1137,9 @@ def _maybe_repair_teaching_turn(
     """Validate a teaching-turn answer, repairing once when needed (never raises).
 
     Returns (content_to_persist, repaired, remaining_reasons). Non-teaching
-    turns (no scope fence) pass through untouched.
+    turns (no scope fence) pass through untouched. When model repair is
+    unavailable or fails, deterministic cleanup (banned footers, duplicate
+    headers) still applies so weak-tier drafts never persist verbatim.
     """
     try:
         scope = _teaching_scope_from_send(send_text)
@@ -1073,12 +1160,27 @@ def _maybe_repair_teaching_turn(
         reasons = _validate_teaching_draft(content, scope[0], scope[1])
         if not reasons:
             return _redact_upload_ids(content), backfilled, []
+        # Refusals are complete answers, not violating drafts: repairing
+        # one into a lesson would fabricate slides. Persist as-is.
+        if _TEACHING_REFUSAL_RE.search(str(content or "")):
+            return _redact_upload_ids(content), backfilled, reasons
         fixed, repaired = _repair_teaching_draft(
             send_text, content, reasons, tier, on_token, on_reset)
         if repaired:
             scope2 = _teaching_scope_from_send(send_text)
             left = _validate_teaching_draft(fixed, scope2[0], scope2[1]) if scope2 else reasons
             return _redact_upload_ids(fixed), True, left
+        # Hard-gate fallback: model repair failed — strip what regex can
+        # prove wrong (footers, dup headers) and re-validate. Never raises;
+        # worst case the original draft persists with its reasons intact.
+        try:
+            stripped = _strip_teaching_violations(content)
+            if stripped != content:
+                new_reasons = _validate_teaching_draft(stripped, scope[0], scope[1])
+                if len(new_reasons) <= len(reasons):
+                    return _redact_upload_ids(stripped), backfilled, new_reasons
+        except Exception:
+            logger.debug("teaching deterministic strip failed", exc_info=True)
         return _redact_upload_ids(content), backfilled, reasons
     except Exception:
         return content, False, []

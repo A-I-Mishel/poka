@@ -674,7 +674,9 @@ def test_repair_fixes_and_reports(monkeypatch):
     calls = _stub_repair(monkeypatch, _GOOD_DRAFT)
     fixed, repaired, left = _maybe_repair_teaching_turn(send, bad, "Mistral")
     assert repaired is True and fixed == _GOOD_DRAFT and left == []
-    assert calls["tier"] == "Mistral"
+    # Cross-tier repair: weak-tier drafts are fixed on the strongest live
+    # tier (Groq first), not the failed tier itself.
+    assert calls["tier"] == "Groq"
 
 
 def test_repair_keeps_draft_when_unfixable(monkeypatch):

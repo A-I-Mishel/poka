@@ -57,7 +57,8 @@ def test_getter_by_name(monkeypatch):
 def test_cascade_position():
     names = [name for name, _ in config.TIER_GETTERS]
     assert names.index("Groq Fast") < names.index("Cohere")
-    assert names.index("Cohere") < names.index("OpenRouter Free Router")
+    assert names.index("Cohere") < names.index("OpenRouter Qwen 27B")
+    assert names.index("OpenRouter Qwen 27B") < names.index("OpenRouter Free Router")
     assert names.index("OpenRouter Free Router") < names.index("Mistral")
     assert names[-1] == "Mistral"
 

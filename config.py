@@ -4,9 +4,11 @@ Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
 same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
 (fresh per-model quota pools) -> Groq 120B (strong fallback) ->
 Groq Fast 20B (fast/simple, cheap-only) -> Cohere -> Nemotron 3 Ultra
+-> Qwen 3.8 27B -> GLM 5.2 -> Ling 3.0 Flash VL (vision-capable)
 -> OpenRouter Free Router -> Mistral (last resort). GitHub Models +
 NVIDIA removed (dead). Other curated OpenRouter lanes removed; only
-Nemotron Ultra (user pick) + openrouter/free kept.
+Nemotron Ultra (user pick) + Qwen/GLM/Ling trial lanes (Sep 2026,
+remove if flaky — free promos rotate) + openrouter/free kept.
 
 OpenCode Zen free tier retired Sep 2026: provider returns
 MissingSessionID ("free tier can only be used in OpenCode") for
@@ -69,11 +71,18 @@ COHERE_BASE_URL: str = "https://api.cohere.com/compatibility/v1"
 COHERE_MODEL: str = "command-a-03-2025"
 # OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Emergency pool: one curated strong lane (Nemotron 3 Ultra, user pick)
-# ahead of the Free Router fallback. Other curated free-model lanes
+# ahead of the trial lanes (Qwen 3.8 27B dense all-rounder, GLM 5.2
+# reasoning for multi-step, Ling 3.0 Flash VL vision-capable MoE) and
+# the Free Router fallback. Other curated free-model lanes
 # (Gemma/Super/3.5/26B/Ling-Fin/Laguna) stay removed — promos rotate,
-# router auto-selects live free models.
+# router auto-selects live free models. Trial lanes (added Sep 2026):
+# keep while stable, delete on repeated bans/flakes — one constant +
+# its list entries each, no other code changes needed.
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
+OPENROUTER_QWEN_MODEL: str = "qwen/qwen3.8-27b:free"
+OPENROUTER_GLM_MODEL: str = "z-ai/glm-5.2:free"
+OPENROUTER_LING_VL_MODEL: str = "inclusionai/ling-3.0-flash-vl:free"
 # OpenRouter Free Model Router (released Feb 2026): selects a free model
 # at random from the live catalog, smartly filtering for features the
 # request needs (tool calling, image understanding, structured output).
@@ -454,6 +463,33 @@ def get_tier_openrouter_ultra_llm(temperature: float = TEMPERATURE) -> Optional[
     return _get_openrouter_llm("OpenRouter Nemotron Ultra", OPENROUTER_ULTRA_MODEL, temperature)
 
 
+def get_tier_openrouter_qwen_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter trial (Sep 2026): Qwen 3.8 27B dense all-rounder (free tier)."""
+    return _get_openrouter_llm(
+        "OpenRouter Qwen 27B",
+        _model_override("OPENROUTER_QWEN_MODEL", OPENROUTER_QWEN_MODEL),
+        temperature,
+    )
+
+
+def get_tier_openrouter_glm_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter trial (Sep 2026): GLM 5.2 reasoning for multi-step (free tier)."""
+    return _get_openrouter_llm(
+        "OpenRouter GLM 5.2",
+        _model_override("OPENROUTER_GLM_MODEL", OPENROUTER_GLM_MODEL),
+        temperature,
+    )
+
+
+def get_tier_openrouter_ling_vl_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """OpenRouter trial (Sep 2026): Ling 3.0 Flash VL vision MoE (free tier)."""
+    return _get_openrouter_llm(
+        "OpenRouter Ling VL",
+        _model_override("OPENROUTER_LING_VL_MODEL", OPENROUTER_LING_VL_MODEL),
+        temperature,
+    )
+
+
 def get_tier_openrouter_free_router_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
     """OpenRouter Free Model Router (released Feb 2026).
 
@@ -476,6 +512,9 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Cohere": get_tier_cohere_llm,
     "Mistral": get_tier_mistral_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
+    "OpenRouter Qwen 27B": get_tier_openrouter_qwen_llm,
+    "OpenRouter GLM 5.2": get_tier_openrouter_glm_llm,
+    "OpenRouter Ling VL": get_tier_openrouter_ling_vl_llm,
     "OpenRouter Free Router": get_tier_openrouter_free_router_llm,
 }
 
@@ -507,6 +546,9 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Groq Fast", get_tier_groq_fast_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
+    ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
+    ("OpenRouter GLM 5.2", get_tier_openrouter_glm_llm),
+    ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
     ("Mistral", get_tier_mistral_llm),
 ]
@@ -519,9 +561,9 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
 # remains the escape hatch when synthesis is down (answers then carry a
 # degraded marker). Tables hold (name, getter) pairs like TIER_GETTERS.
 # Gemini leads; Groq 120B is the strong fallback; Cohere -> Nemotron
-# Ultra -> Free Router -> Mistral is the emergency pool. Groq's free pool
-# absorbs cheap traffic; Gemini's per-model pool is spent on quality final
-# answers + vision.
+# Ultra -> Qwen 27B -> GLM 5.2 -> Ling VL -> Free Router -> Mistral is
+# the emergency pool. Groq's free pool absorbs cheap traffic; Gemini's
+# per-model pool is spent on quality final answers + vision.
 SMALL_FINAL_TIERS = frozenset({"Groq Fast"})  # 20B-class: never final answers
 # Weak final-answer tiers: small or nondeterministic lanes that answer only
 # when quality tiers are down. Runtime marks their answers degraded so the
@@ -539,6 +581,9 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
+    ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
+    ("OpenRouter GLM 5.2", get_tier_openrouter_glm_llm),
+    ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
     ("OpenRouter Free Router", get_tier_openrouter_free_router_llm),
     ("Mistral", get_tier_mistral_llm),
 ]
@@ -558,6 +603,7 @@ STRICT_GROUNDING_TIERS = frozenset({
 TASK_TEMPERATURES: Dict[str, float] = {
     "simple": 0.5,
     "research": 0.3,
+    "teaching": 0.4,
     "creative": 0.85,
     "data": 0.2,
     "code": 0.2,
