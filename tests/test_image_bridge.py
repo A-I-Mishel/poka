@@ -1,7 +1,11 @@
-"""Image-to-text bridge (Phase 1): convert once, answer on any tier.
+"""Image-to-text bridge (Phase 1): convert once per question, answer on any tier.
 
-- Converter output is cached in RAM + vault sidecar: the second
-  question about an upload spends zero model calls.
+- Converter output is cached in RAM + vault sidecar, keyed per
+  question-hint: repeats of the same question spend zero model calls,
+  and a new question never inherits another question's focused
+  transcript (it converts once, then caches under its own key).
+- Unhinted conversions persist as the base sidecar; hinted notes get
+  capped per-hint sidecars (oldest evicted).
 - Surrogates are boundary-wrapped untrusted data (hostile transcripts
   stay inert structure).
 - Sidecars die with their upload.
@@ -61,16 +65,29 @@ def test_convert_caches_ram_and_sidecar(tmp_path, monkeypatch):
     assert "<untrusted-tool-output>" in first
     assert len(calls) == 1
 
-    # Second question: RAM hit, zero model calls.
-    second = br.describe_image_for_text(meta.id, question_hint="and the shape?")
-    assert second == first
+    # Same question repeats: RAM hit, zero model calls.
+    repeat = br.describe_image_for_text(meta.id, question_hint="what does it say?")
+    assert repeat == first
     assert len(calls) == 1
 
-    # Cold RAM, warm disk: sidecar serves without model calls.
+    # Different question: converts once under its own key (never inherits
+    # the first question's focused transcript).
+    second = br.describe_image_for_text(meta.id, question_hint="and the shape?")
+    assert "Hello world" in second
+    assert len(calls) == 2
+
+    # Cold RAM, warm disk: hinted sidecar serves without model calls.
     br._RAM.clear()
-    third = br.describe_image_for_text(meta.id)
-    assert third == first
-    assert len(calls) == 1
+    third = br.describe_image_for_text(meta.id, question_hint="and the shape?")
+    assert third == second
+    assert len(calls) == 2
+
+    # Cold RAM, warm disk, unhinted: base sidecar only serves unhinted
+    # lookups (no base was ever stored — both conversions were hinted).
+    br._RAM.clear()
+    fourth = br.describe_image_for_text(meta.id)
+    assert "Hello world" in fourth
+    assert len(calls) == 3
 
     from services.metrics import REGISTRY
 
@@ -79,6 +96,59 @@ def test_convert_caches_ram_and_sidecar(tmp_path, monkeypatch):
     assert REGISTRY.get_sample_value("pluto_image_bridge_events_total",
                                      {"event": "convert_ok"}) >= 1
     br._RAM.clear()
+    _bind(None)
+
+
+def test_hint_sidecars_capped_per_upload(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    uid = "bridge-user-cap"
+    _bind(uid)
+    meta = _save_png(uid)
+
+    import agent as agent_mod
+    from services import image_bridge as br
+
+    br._RAM.clear()
+
+    class _Resp:
+        content = "Transcript:\nHello world\nDescription:\nA white square."
+
+    def _invoke(llm, messages, budget=None, **kw):
+        return _Resp()
+
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", _invoke)
+    monkeypatch.setattr("config.get_tier_llm", lambda name, temperature=0.7: object())
+
+    for i in range(6):
+        out = br.describe_image_for_text(meta.id, question_hint=f"question number {i}?")
+        assert "Hello world" in out
+    from services.files import FileStore
+
+    store = FileStore(uid)
+    hinted = [p for p in store.uploads_dir.glob(f"{meta.id}.vision.*.txt") if p.is_file()]
+    assert len(hinted) <= br._MAX_HINT_SIDECARS_PER_UPLOAD
+    br._RAM.clear()
+    _bind(None)
+
+
+def test_hinted_sidecars_die_with_upload(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    uid = "bridge-user-die"
+    _bind(uid)
+    meta = _save_png(uid)
+
+    from services import image_bridge as br
+    from services.files import FileStore
+
+    br._write_sidecar(uid, meta.id, "wrapped-note", question_hint="what color?")
+    br._write_sidecar(uid, meta.id, "wrapped-base")
+    paths = [br._sidecar_path(uid, meta.id, "what color?"),
+             br._sidecar_path(uid, meta.id)]
+    assert all(p is not None and p.is_file() for p in paths)
+    assert FileStore(uid).delete_upload(meta.id) is True
+    assert not any(p.exists() for p in paths)
     _bind(None)
 
 

@@ -7,9 +7,9 @@ lives in services/vision.py — this module only bridges between them.
 
 Lazy + cached: the first question about an image converts it (verbatim
 transcript + concrete description) via a vision tier; the surrogate is
-cached in RAM and persisted as a vault sidecar
-(`<upload-id>.vision.txt`), so follow-up questions run on ANY text tier
-with zero vision calls. Tonight's pattern (one photo, N questions) goes
+cached in RAM and persisted as a vault sidecar (base `<upload-id>.vision.txt`,
+per-question `<upload-id>.vision.<hinthash>.txt`, capped per upload),
+so repeat questions run on ANY text tier with zero vision calls. Tonight's pattern (one photo, N questions) goes
 from N vision attempts to exactly one.
 
 Surrogates are untrusted DATA (boundary-wrapped, never instructions):
@@ -35,6 +35,16 @@ _CONVERTER_TIERS = VISION_TIER_ORDER
 # Surrogate cap: transcripts must fit the context budget next to real
 # tool output (CTX_EXTERNAL_TOKENS). Longer notes truncate with a mark.
 BRIDGE_MAX_CHARS: int = 4000
+
+# Hint hashing: cache entries are keyed per question-hint so follow-ups
+# are never answered from another question's focused transcript (the
+# Transcript section is always verbatim-complete, but Description focus
+# belongs to its own question). 12 hex chars are plenty for cache keys.
+_HINT_HASH_LEN: int = 12
+# Hinted sidecar cap per upload: distinct questions share one vault, so
+# per-hint sidecars stay bounded (oldest-mtime evicted). The unhinted
+# base note has no cap — there is exactly one per upload.
+_MAX_HINT_SIDECARS_PER_UPLOAD: int = 4
 
 _SIDECAR_SUFFIX = ".vision.txt"
 _UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{16}$")
@@ -88,18 +98,41 @@ def _converter_prompt(question_hint: str = "") -> str:
     )
 
 
-def _ram_key(user_id: str, upload_id: str) -> str:
-    """Cache key with file identity (never raises)."""
+def _hint_hash(question_hint: str) -> str:
+    """Short hash of a question hint for cache keys (never raises).
+
+    Returns "" for blank hints (the unhinted base note), else 12 hex
+    chars. Hash — never the hint text — so keys stay short and no user
+    wording lands in filenames or logs.
+    """
+    try:
+        hint = str(question_hint or "").strip()
+        if not hint:
+            return ""
+        import hashlib as _hl
+
+        return _hl.sha1(hint.encode("utf-8", errors="ignore"),
+                        usedforsecurity=False).hexdigest()[:_HINT_HASH_LEN]
+    except Exception:
+        return ""
+
+
+def _ram_key(user_id: str, upload_id: str, question_hint: str = "") -> str:
+    """Cache key with file identity + question focus (never raises).
+
+    Same upload under different questions keys separately: a focused
+    transcript must never serve a differently-focused question.
+    """
     try:
         from services.files import FileStore
 
         path = FileStore(str(user_id)).resolve_upload(str(upload_id))
         if path is not None:
             stat = path.stat()
-            return f"{user_id}:{upload_id}:{stat.st_mtime}:{stat.st_size}"
+            return f"{user_id}:{upload_id}:{stat.st_mtime}:{stat.st_size}:{_hint_hash(question_hint) or 'base'}"
     except Exception:
         logger.debug("bridge ram key stat failed", exc_info=True)
-    return f"{user_id}:{upload_id}"
+    return f"{user_id}:{upload_id}:{_hint_hash(question_hint) or 'base'}"
 
 
 def _ram_get(key: str) -> str:
@@ -136,8 +169,13 @@ def _ram_set(key: str, note: str) -> None:
         logger.debug("bridge ram set failed", exc_info=True)
 
 
-def _sidecar_path(user_id: str, upload_id: str) -> Optional[Path]:
-    """Vault sidecar path for a surrogate, or None (never raises)."""
+def _sidecar_path(user_id: str, upload_id: str,
+                  question_hint: str = "") -> Optional[Path]:
+    """Vault sidecar path for a surrogate, or None (never raises).
+
+    Unhinted notes keep the legacy `<uid>.vision.txt` path (existing
+    vaults keep working); hinted notes get `<uid>.vision.<12hex>.txt`.
+    """
     try:
         uid = str(upload_id or "").strip()
         if not _UPLOAD_ID_RE.match(uid):
@@ -145,7 +183,13 @@ def _sidecar_path(user_id: str, upload_id: str) -> Optional[Path]:
         from services.files import FileStore
 
         store = FileStore(str(user_id))
-        candidate = store.uploads_dir / f"{uid}{_SIDECAR_SUFFIX}"
+        suffix = _SIDECAR_SUFFIX
+        hashed = _hint_hash(question_hint)
+        if hashed:
+            if not re.fullmatch(r"[0-9a-f]{12}", hashed):
+                return None
+            suffix = f".vision.{hashed}.txt"
+        candidate = store.uploads_dir / f"{uid}{suffix}"
         # Containment first: never write outside the user's uploads dir.
         try:
             inside = store._inside(store.uploads_dir, candidate)
@@ -158,10 +202,10 @@ def _sidecar_path(user_id: str, upload_id: str) -> Optional[Path]:
         return None
 
 
-def _read_sidecar(user_id: str, upload_id: str) -> str:
+def _read_sidecar(user_id: str, upload_id: str, question_hint: str = "") -> str:
     """Persisted surrogate or "" (never raises)."""
     try:
-        path = _sidecar_path(user_id, upload_id)
+        path = _sidecar_path(user_id, upload_id, question_hint)
         if path is None or not path.is_file():
             return ""
         return path.read_text(encoding="utf-8").strip()[:BRIDGE_MAX_CHARS]
@@ -169,36 +213,84 @@ def _read_sidecar(user_id: str, upload_id: str) -> str:
         return ""
 
 
-def _write_sidecar(user_id: str, upload_id: str, note: str) -> None:
+def _prune_hint_sidecars(user_id: str, upload_id: str) -> None:
+    """Evict oldest per-hint sidecars beyond the per-upload cap (never raises).
+
+    The unhinted base note is never pruned here (at most one exists).
+    Orphan-sweeping still reaps strays on its normal cadence.
+    """
+    try:
+        from services.files import FileStore
+
+        store = FileStore(str(user_id))
+        uid = str(upload_id or "").strip()
+        if not _UPLOAD_ID_RE.match(uid):
+            return
+        try:
+            paths = [p for p in store.uploads_dir.glob(f"{uid}.vision.*.txt")
+                     if p.is_file() and store._inside(store.uploads_dir, p)]
+        except Exception:
+            return
+        # The base `<uid>.vision.txt` never matches the hinted glob
+        # (requires the extra dotted segment), but guard anyway.
+        hinted = [p for p in paths if re.fullmatch(
+            r"[0-9a-f]{16}\.vision\.[0-9a-f]{12}\.txt", p.name)]
+        if len(hinted) <= _MAX_HINT_SIDECARS_PER_UPLOAD:
+            return
+        try:
+            hinted.sort(key=lambda p: p.stat().st_mtime)
+        except OSError:
+            logger.debug("bridge sidecar prune stat failed", exc_info=True)
+            return
+        for stale in hinted[:len(hinted) - _MAX_HINT_SIDECARS_PER_UPLOAD]:
+            try:
+                stale.unlink()
+            except OSError:
+                logger.debug("bridge sidecar prune unlink failed", exc_info=True)
+                continue
+    except Exception:
+        logger.debug("bridge sidecar prune failed", exc_info=True)
+
+
+def _write_sidecar(user_id: str, upload_id: str, note: str,
+                   question_hint: str = "") -> None:
     """Persist a surrogate next to its upload (never raises)."""
     if not note:
         return
     try:
-        path = _sidecar_path(user_id, upload_id)
+        path = _sidecar_path(user_id, upload_id, question_hint)
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(note)[:BRIDGE_MAX_CHARS], encoding="utf-8")
     except Exception:
         logger.debug("bridge sidecar write failed", exc_info=True)
+        return
+    if _hint_hash(question_hint):
+        _prune_hint_sidecars(user_id, upload_id)
 
 
-def read_bridge_note(user_id: str, upload_id: str) -> str:
+def read_bridge_note(user_id: str, upload_id: str,
+                     question_hint: str = "") -> str:
     """Cached surrogate (RAM, then vault sidecar) or "" (never raises).
 
-    Records hit/miss telemetry (event labels only, never user data).
+    Strictly per-hint: a focused transcript never serves a differently
+    focused question. Unhinted lookups additionally consult the base
+    sidecar (transcript-complete for any question). Records hit/miss
+    telemetry (event labels only, never user data).
     """
     try:
         uid = str(upload_id or "").strip()
         user = str(user_id or "").strip()
         if not uid or not user:
             return ""
-        key = _ram_key(user, uid)
+        hint = str(question_hint or "")
+        key = _ram_key(user, uid, hint)
         note = _ram_get(key)
         if note:
             _emit("hit")
             return note
-        note = _read_sidecar(user, uid)
+        note = _read_sidecar(user, uid, hint)
         if note:
             _ram_set(key, note)
             _emit("hit")
@@ -269,8 +361,8 @@ def describe_image_for_text(upload_id: str, question_hint: str = "",
         uid = str(upload_id or "").strip()
         if not user_id or not uid:
             return ""
-        # Cache first: the whole point is one conversion per upload.
-        note = read_bridge_note(str(user_id), uid)
+        # Cache first: exact-hint notes serve repeats with zero calls.
+        note = read_bridge_note(str(user_id), uid, question_hint)
         if note:
             return note
         try:
@@ -315,8 +407,8 @@ def describe_image_for_text(upload_id: str, question_hint: str = "",
         if len(text) > BRIDGE_MAX_CHARS:
             text = text[:BRIDGE_MAX_CHARS] + "\n[Note: transcript truncated.]"
         wrapped = _wrap_surrogate(display_name, text)
-        _ram_set(_ram_key(str(user_id), uid), wrapped)
-        _write_sidecar(str(user_id), uid, wrapped)
+        _ram_set(_ram_key(str(user_id), uid, question_hint), wrapped)
+        _write_sidecar(str(user_id), uid, wrapped, question_hint)
         _emit("convert_ok")
         return wrapped
     except Exception:

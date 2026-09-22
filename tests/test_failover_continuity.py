@@ -237,7 +237,7 @@ def test_regenerate_replaces_failed_marker(tmp_path, monkeypatch):
 
     def _fresh(*args, **kwargs):
         return ({"role": "assistant", "content": "recovered answer",
-                 "time": "t2"}, "TierB", "simple", None)
+                 "time": "t2"}, "TierB", "simple", None, None)
 
     monkeypatch.setattr(turns_mod, "_complete_turn_guarded", _fresh)
     out = turns_mod.regenerate_chat(ctx, 1)

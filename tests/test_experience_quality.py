@@ -105,7 +105,7 @@ def test_regenerate_demotes_trusted_lesson(tmp_path, monkeypatch):
 
     def _fresh(*args, **kwargs):
         return ({"role": "assistant", "content": "new answer", "time": "t2"},
-                "TierB", "research", None)
+                "TierB", "research", None, None)
 
     monkeypatch.setattr(turns_mod, "_complete_turn_guarded", _fresh)
     for _ in range(3):
@@ -151,13 +151,13 @@ def test_repair_path_amends_runtime_episode(tmp_path, monkeypatch):
 
     def _complete(*args, **kwargs):
         return ({"role": "assistant", "content": "draft", "time": "t",
-                 "tools": ["read_pdf"]}, "T", "research", None)
+                 "tools": ["read_pdf"]}, "T", "research", None, None)
 
     monkeypatch.setattr(turns_mod, "_complete_turn_guarded", _complete)
     monkeypatch.setattr(
         turns_mod, "_maybe_repair_teaching_turn",
-        lambda send_text, content, tier, on_token=None, on_reset=None: (
-            content + " [fixed]", True, []))
+        lambda send_text, content, tier, on_token=None, on_reset=None,
+        budget=None: (content + " [fixed]", True, []))
     out = turns_mod.run_chat(ctx, "teach me the research slides")
     assert out["message"]["content"].endswith("[fixed]")
     rows = _rows()

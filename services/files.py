@@ -762,13 +762,18 @@ class FileStore:
                     candidate.unlink()
             except OSError:
                 return False
-        # Best-effort: drop the image-bridge surrogate sidecar with its
-        # upload (stale transcripts must never outlive their image).
-        # Never affects the return value — the upload itself is gone.
+        # Best-effort: drop the image-bridge surrogate sidecars with their
+        # upload (stale transcripts must never outlive their image):
+        # the base `<id>.vision.txt` plus any per-hint
+        # `<id>.vision.<hex>.txt` family members. Never affects the
+        # return value — the upload itself is gone.
         try:
-            sidecar = self.uploads_dir / f"{meta.id}.vision.txt"
-            if self._inside(self.uploads_dir, sidecar) and sidecar.is_file():
-                sidecar.unlink()
+            for sidecar in self.uploads_dir.glob(f"{meta.id}.vision*.txt"):
+                try:
+                    if sidecar.is_file() and self._inside(self.uploads_dir, sidecar):
+                        sidecar.unlink()
+                except OSError:
+                    continue
         except OSError:
             logger.debug("bridge sidecar cleanup failed", exc_info=True)
         try:

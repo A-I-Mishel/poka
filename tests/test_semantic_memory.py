@@ -333,11 +333,25 @@ def test_two_chat_shared_memory_through_cascade(tmp_path, monkeypatch):
         "verdict: equivalent\nkey: dislike: coffee\nconfidence: low\n",
     ]
     seen = {}
-    calls = {"n": 0}
+    calls = {"n": 0, "b": 0}
 
     def _invoke(llm, messages, budget=None, **kw):
+        import re as _re
+
         items = messages if isinstance(messages, list) else []
         contents = [str(getattr(m, "content", "")) for m in items]
+        joined = "\n".join(contents)
+        if "Decide how EACH newly extracted" in joined:
+            # Batched normalize: one cascade per turn; blocks numbered
+            # 1..N within the reply to align with the turn's candidates.
+            n = len(_re.findall(r"(?im)^Candidate \d+:", joined))
+            calls["n"] += 1
+            base = calls["b"]
+            blocks = []
+            for k in range(max(1, n)):
+                blocks.append("CANDIDATE %d\n%s" % (k + 1, scripts[base + k]))
+                calls["b"] += 1
+            return SimpleNamespace(content="\n".join(blocks))
         if any("Decide how a newly extracted" in c for c in contents):
             idx = calls["n"]
             calls["n"] += 1
@@ -378,3 +392,111 @@ def test_two_chat_shared_memory_through_cascade(tmp_path, monkeypatch):
                 coffee[0].get("history", [])] == ["negative"]
     finally:
         mem.set_memory_dir("")
+
+
+# --- batched normalization (one cascade per turn) ---------------------------
+
+
+def _batched_setup(tmp_path):
+    mem.set_memory_dir(str(tmp_path))
+
+
+def test_batch_normalizes_two_facts_in_one_call(tmp_path):
+    _batched_setup(tmp_path)
+    try:
+        calls = {"batch": 0, "single": 0}
+
+        def batch(items):
+            calls["batch"] += 1
+            assert len(items) == 2
+            return [{"verdict": "new", "key": "name: sam", "confidence": "high"},
+                    {"verdict": "new", "key": "like: coffee", "confidence": "low"}]
+
+        def single(cand, neigh):
+            calls["single"] += 1
+            return {"verdict": "new", "key": "like: x", "confidence": "low"}
+
+        out = mem.update_memory_incremental(
+            [{"role": "user", "content": "My name is Sam"},
+             {"role": "user", "content": "I like coffee"}],
+            normalize=single, normalize_batch=batch)
+        assert calls == {"batch": 1, "single": 0}
+        assert out["new_facts"] == 2
+        assert out["batched"] == 2
+    finally:
+        mem.set_memory_dir("")
+
+
+def test_batch_partial_falls_back_per_fact(tmp_path):
+    _batched_setup(tmp_path)
+    try:
+        calls = {"batch": 0, "single": []}
+
+        def batch(items):
+            calls["batch"] += 1
+            return [None,
+                    {"verdict": "new", "key": "like: coffee", "confidence": "low"}]
+
+        def single(cand, neigh):
+            calls["single"].append(cand.get("value"))
+            return {"verdict": "new", "key": "name: sam", "confidence": "high"}
+
+        out = mem.update_memory_incremental(
+            [{"role": "user", "content": "My name is Sam"},
+             {"role": "user", "content": "I like coffee"}],
+            normalize=single, normalize_batch=batch)
+        # Unparseable first block retried singly; floor preserved.
+        assert calls["batch"] == 1
+        assert calls["single"] == ["Sam"]
+        assert out["new_facts"] == 2
+    finally:
+        mem.set_memory_dir("")
+
+
+def test_batch_capped_single_covers_overflow(tmp_path):
+    _batched_setup(tmp_path)
+    try:
+        seen = {}
+
+        def batch(items):
+            seen["n"] = len(items)
+            return [{"verdict": "new", "key": f"like: item{i}",
+                     "confidence": "low"} for i in range(len(items))]
+
+        def single(cand, neigh):
+            seen["single"] = seen.get("single", 0) + 1
+            return {"verdict": "new", "key": "like: extra", "confidence": "low"}
+
+        words = ["coffee", "tea", "juice", "water", "milk", "cocoa"]
+        msgs = [{"role": "user", "content": f"I like {w}"} for w in words]
+        out = mem.update_memory_incremental(
+            msgs, normalize=single, normalize_batch=batch)
+        assert seen["n"] == mem.MEMORY_NORMALIZE_BATCH_MAX
+        assert seen.get("single") == 1
+        assert out["new_facts"] == 6
+    finally:
+        mem.set_memory_dir("")
+
+
+def test_batch_parser_aligns_and_skips_garbage(monkeypatch):
+    from agent import runtime as rt_mod
+    import agent as agent_mod
+    from types import SimpleNamespace
+
+    calls = []
+
+    def _invoke(llm, messages, budget=None, **kw):
+        calls.append(1)
+        return SimpleNamespace(
+            content=("CANDIDATE 1\nverdict: new\nkey: like: coffee\n"
+                     "confidence: low\nCANDIDATE 2\nnot a verdict block"))
+
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", _invoke)
+    items = [({"type": "preference", "value": "coffee", "polarity": "positive"}, []),
+             ({"type": "preference", "value": "tea", "polarity": "positive"}, [])]
+    out = rt_mod._normalize_memory_batch(
+        items, None, None, "test-req", [("Fake", lambda: object())])
+    assert len(calls) == 1
+    assert out[0] == {"verdict": "new", "key": "like: coffee",
+                      "confidence": "low", "aliases": []}
+    assert out[1] is None

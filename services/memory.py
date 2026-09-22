@@ -16,6 +16,7 @@ locks, corruption quarantine); see load/save functions below.
 """
 
 import hashlib
+import logging
 import os
 import re
 import threading
@@ -23,6 +24,8 @@ from pathlib import Path
 from services.storage import StorageError, _read_json, _write_json
 from services.timeutil import utcnow_iso
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 MEMORY_FILE: str = "structured_memory.json"
 MAX_FACTS: int = 50
@@ -454,8 +457,15 @@ def _merge_fact(mem: Dict[str, Any], fact: Dict[str, str],
     return changed
 
 
+# Batch cap: one normalize call judges at most this many candidates.
+# Bounds the prompt (each candidate carries up to 10 neighbor lines);
+# overflow falls back to single calls, so worst case costs today's rate.
+MEMORY_NORMALIZE_BATCH_MAX: int = 5
+
+
 def update_memory_incremental(messages: List[Dict[str, Any]],
-                                normalize: Optional[Callable[[Dict[str, Any], List[Dict[str, Any]]], Optional[Dict[str, Any]]]] = None) -> Dict[str, Any]:
+                                normalize: Optional[Callable[[Dict[str, Any], List[Dict[str, Any]]], Optional[Dict[str, Any]]]] = None,
+                                normalize_batch: Optional[Callable[[List[Any]], List[Optional[Dict[str, Any]]]]] = None) -> Dict[str, Any]:
     """Mine only newly added user messages; persist only when state changed.
 
     Tracks content digests in `_processed_hashes` (capped) so a 10-message
@@ -473,10 +483,19 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
             degrades to legacy merging; the callable must never mine the
             raw message itself (candidate-gating: extraction boundaries
             stay authoritative).
+        normalize_batch: Optional batched normalizer called ONCE with up
+            to MEMORY_NORMALIZE_BATCH_MAX (candidate, neighbors) pairs,
+            returning verdicts aligned with the input (None entries fall
+            back to `normalize` per candidate, or legacy merge when that
+            is absent). One model call instead of N. Neighbors are
+            computed against the pre-turn snapshot for every candidate
+            (sequential same-turn visibility is traded for batching);
+            merges still apply in encounter order.
 
     Returns:
         {"processed": n_new_messages, "new_facts": n, "saved": bool}.
     """
+    _BATCH_MAX = MEMORY_NORMALIZE_BATCH_MAX
     mem = load_structured_memory()
     if not isinstance(messages, list):
         return {"processed": 0, "new_facts": 0, "saved": False}
@@ -488,6 +507,9 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
     already = len(processed)
 
     new_facts = 0
+    # (fact, neighbors) in encounter order; norms resolved after
+    # collection so one batched call can cover the whole turn.
+    pending: List[Any] = []
     for idx, msg in enumerate(messages):
         if not isinstance(msg, dict) or msg.get("role") != "user":
             continue
@@ -518,29 +540,44 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
                 })
         for fact in msg_facts:
             fact["date"] = utcnow_iso()
-            norm = None
-            if callable(normalize):
-                try:
-                    neighbors = [
-                        {"type": f.get("type"), "value": f.get("value"),
-                         "polarity": f.get("polarity")}
-                        for f in mem["facts"]
-                        if isinstance(f, dict) and f.get("type") == fact.get("type")
-                    ][-10:]
-                    norm = normalize(dict(fact), neighbors)
-                except Exception:
-                    norm = None
-            if fact["type"] == "name":
-                mem["user_name"] = fact["value"]
-            if _merge_fact(mem, fact, norm):
-                new_facts += 1
+            if fact.get("type") == "name":
+                mem["user_name"] = fact.get("value")
+            neighbors = [
+                {"type": f.get("type"), "value": f.get("value"),
+                 "polarity": f.get("polarity")}
+                for f in mem["facts"]
+                if isinstance(f, dict) and f.get("type") == fact.get("type")
+            ][-10:]
+            pending.append((fact, neighbors))
+    # Resolve norms: one batched call first (capped), single-call
+    # fallback per missing block, legacy merge when no normalizer.
+    norms: List[Any] = [None] * len(pending)
+    batched = 0
+    if pending and callable(normalize_batch):
+        try:
+            head = [(dict(fact), neigh) for fact, neigh in pending[:_BATCH_MAX]]
+            results = normalize_batch(head) or []
+            for i in range(min(len(results), len(head))):
+                if isinstance(results[i], dict):
+                    norms[i] = results[i]
+                    batched += 1
+        except Exception:
+            logger.debug("batched normalize failed; falling back per fact", exc_info=True)
+    for i, (fact, neighbors) in enumerate(pending):
+        if norms[i] is None and callable(normalize):
+            try:
+                norms[i] = normalize(dict(fact), neighbors)
+            except Exception:
+                norms[i] = None
+        if _merge_fact(mem, fact, norms[i]):
+            new_facts += 1
 
     added = len(processed) - already
     mem["_processed_hashes"] = processed[-MAX_PROCESSED_HASHES:]
     if added == 0 and new_facts == 0:
         return {"processed": 0, "new_facts": 0, "saved": False}
     ok = save_structured_memory(mem)
-    return {"processed": added, "new_facts": new_facts, "saved": bool(ok)}
+    return {"processed": added, "new_facts": new_facts, "saved": bool(ok), "batched": batched}
 
 
 def update_memory_from_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -237,3 +237,11 @@ def test_reflection_legacy_path_unchanged():
         "research", "attempt", cheap_tiers=None)
     assert text.startswith("rewritten draft")
     assert writer == "attempt"
+
+
+def test_client_cache_covers_task_temps():
+    # Every (tier, temperature) combo must fit: eviction of a hot client
+    # costs a ~700ms Gemini rebuild mid-request.
+    from config import _MAX_CACHED_CLIENTS, TASK_TEMPERATURES, TIER_GETTERS
+
+    assert len(TIER_GETTERS) * len(TASK_TEMPERATURES) <= _MAX_CACHED_CLIENTS

@@ -752,3 +752,67 @@ def test_recall_answer_gets_evaluation_note(tmp_path, monkeypatch):
     send, _, _ = _apply_teaching_session(ctx, "A vertex is a node", hist, [], [], "A vertex is a node")
     assert "evaluate" in send.lower()
     assert "Recall checkpoint" in send
+
+
+def test_repair_bills_parent_budget(monkeypatch):
+    """Repair charges the passed request budget (no unbilled side budget)."""
+    import types
+
+    import agent as agent_mod
+    from agent.budget import RequestBudget
+    from backend.chatflow import _maybe_repair_teaching_turn
+
+    import config
+
+    seen = {}
+
+    def fake_llm(name, temperature=0.3):
+        return object()
+
+    def fake_invoke(llm, messages, budget=None, **kw):
+        seen["budget"] = budget
+        if budget is not None:
+            budget.count_llm()
+        return types.SimpleNamespace(content=_GOOD_DRAFT)
+
+    monkeypatch.setattr(config, "get_tier_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", fake_invoke)
+    parent = RequestBudget()
+    send = "window\n" + "x teach ONLY slides 4-6 y"
+    bad = "Concept: G\nSource: [slide 4]\nSource: [slide 9]"
+    fixed, repaired, left = _maybe_repair_teaching_turn(
+        send, bad, "Groq", budget=parent)
+    assert repaired is True and fixed == _GOOD_DRAFT and left == []
+    assert seen["budget"] is parent
+    assert parent.llm_calls == 1
+
+
+def test_repair_on_spent_budget_keeps_draft(monkeypatch):
+    """Exhausted parent budget fails fast into the untouched draft."""
+    import types
+
+    import agent as agent_mod
+    from agent.budget import RequestBudget
+    from backend.chatflow import _maybe_repair_teaching_turn
+
+    import config
+
+    calls = []
+
+    def fake_invoke(llm, messages, budget=None, **kw):
+        calls.append(1)
+        if budget is not None:
+            budget.count_llm()
+        return types.SimpleNamespace(content=_GOOD_DRAFT)
+
+    monkeypatch.setattr(config, "get_tier_llm", lambda name, temperature=0.3: object())
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", fake_invoke)
+    spent = RequestBudget(max_llm=0)
+    send = "window\n" + "x teach ONLY slides 4-6 y"
+    bad = "Concept: G\nSource: [slide 4]\nSource: [slide 9]"
+    fixed, repaired, left = _maybe_repair_teaching_turn(
+        send, bad, "Groq", budget=spent)
+    assert repaired is False and fixed == bad and left
+    # One attempt charged against the spent budget, then fail-fast into
+    # the untouched draft (no unbilled side budget, no partial repair).
+    assert calls == [1]

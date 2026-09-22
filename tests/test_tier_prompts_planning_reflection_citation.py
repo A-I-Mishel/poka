@@ -247,3 +247,26 @@ def test_episodic_failure_keeps_record(monkeypatch):
     monkeypatch.setattr(agent_mod, "_invoke_bounded", _boom)
     record = {"id": "c1", "messages": _long_history(16)}
     assert maybe_attach_episodic_summary(record) == record
+
+
+def test_episodic_uses_bounded_micro_budget(monkeypatch):
+    import types
+
+    import agent as agent_mod
+    from agent.budget import RequestBudget
+    from backend.chatflow import maybe_attach_episodic_summary
+
+    seen = {}
+
+    def _invoke(llm, messages, budget=None, **kw):
+        seen["budget"] = budget
+        return types.SimpleNamespace(content="archived topics")
+
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", _invoke)
+    record = {"id": "c1", "messages": _long_history(16)}
+    out = maybe_attach_episodic_summary(record)
+    assert out["summary"] == "archived topics"
+    # Dedicated micro-budget (never unbounded, never a caller budget):
+    # exactly one LLM call against a short wall.
+    assert isinstance(seen["budget"], RequestBudget)
+    assert seen["budget"].max_llm == 1

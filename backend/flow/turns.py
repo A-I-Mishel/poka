@@ -9,7 +9,7 @@ import logging
 from fastapi import HTTPException
 from langchain_core.messages import BaseMessage, HumanMessage
 import agent
-from agent.budget import BudgetExhausted, TurnCancelled
+from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled
 from agent.executor import ExecutorBusyError
 from services.limits import MAX_CHAT_TITLE_CHARS, MAX_DISPLAY_NAME_CHARS
 from services.storage import (is_valid_id, new_conversation_id)
@@ -127,8 +127,12 @@ def _complete_turn(ctx: UserContext, send_text: str,
                     on_token: Any = None,
                     on_reset: Any = None,
                     on_progress: Any = None,
-                    cancel: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
-    """Run the agent and build the assistant message (no persistence)."""
+                    cancel: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]], Any]:
+    """Run the agent and build the assistant message (no persistence).
+
+    The trailing element is the turn's live RequestBudget, so post-turn
+    refinement (teaching repair) bills the same request instead of an
+    unbilled side budget. Callers must tolerate None (older flows)."""
     from agent.prompts import strip_internal_reasoning
 
     # Re-bind the user on this thread: stream workers, cascade executors
@@ -193,7 +197,7 @@ def _complete_turn(ctx: UserContext, send_text: str,
         assistant_msg["corrections"] = corrections
     if new_artifacts:
         assistant_msg["artifacts"] = new_artifacts
-    return assistant_msg, tier, task_type, ui_fallback
+    return assistant_msg, tier, task_type, ui_fallback, result.get("budget")
 
 
 def _apply_attachment_gate(ctx: UserContext, gate_text: str,
@@ -431,7 +435,7 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         }
 
     try:
-        assistant_msg, tier, task_type, fallback = _complete_turn_guarded(
+        assistant_msg, tier, task_type, fallback, turn_budget = _complete_turn_guarded(
             ctx, send_text, prior_history, prior_raw, vision_ids,
             memory_notes, project_context, bool(deep_mode),
             bool(force_search), active_tier, on_token, on_reset,
@@ -455,7 +459,7 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
     try:
         fixed, repaired, left = _maybe_repair_teaching_turn(
             send_text, str(assistant_msg.get("content", "")), tier,
-            on_token, on_reset)
+            on_token, on_reset, budget=turn_budget)
         if repaired:
             assistant_msg = dict(assistant_msg)
             assistant_msg["content"] = fixed
@@ -604,8 +608,10 @@ def _complete_turn_guarded(ctx: UserContext, send_text: str,
                            on_token: Any = None,
                            on_reset: Any = None,
                            on_progress: Any = None,
-                           cancel: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]]]:
-    """_complete_turn with saturation mapped to HTTP 503 (fail fast)."""
+                           cancel: Any = None) -> Tuple[Dict[str, Any], str, str, Optional[Dict[str, str]], Any]:
+    """_complete_turn with saturation mapped to HTTP 503 (fail fast).
+
+    Passes through the trailing live-budget element untouched."""
     from fastapi import HTTPException
 
     try:
@@ -695,14 +701,15 @@ def regenerate_chat(ctx: UserContext, index: int,
             "corrections": [],
         }
 
-    fresh_msg, tier, task_type, fallback = _complete_turn_guarded(
+    fresh_msg, tier, task_type, fallback, regen_budget = _complete_turn_guarded(
         ctx, send_text, prior_history, prior_raw, vision_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier)
 
     try:
         fixed, repaired, left = _maybe_repair_teaching_turn(
-            send_text, str(fresh_msg.get("content", "")), tier)
+            send_text, str(fresh_msg.get("content", "")), tier,
+            budget=regen_budget)
         if repaired:
             fresh_msg = dict(fresh_msg)
             fresh_msg["content"] = fixed
@@ -786,9 +793,18 @@ def maybe_attach_episodic_summary(record: Dict[str, Any]) -> Dict[str, Any]:
         prompt = ("Summarize this conversation for future context in at most "
                   "5 lines: key topics, decisions, and user preferences.\n\n"
                   + "\n".join(lines))
+        # Dedicated micro-budget (never the caller's, never unbounded):
+        # archiving runs outside any request lifetime, so it bills one
+        # LLM call against its own 30s wall instead of burning quota and
+        # wall-clock invisibly. Exhaustion degrades to no summary.
+        epi_budget = RequestBudget(
+            max_llm=1, max_tools=0, max_search=0, max_reflect=0,
+            max_plan=0, max_rounds=0,
+            deadline=_time.monotonic() + 30.0)
         _, summary = _run_cascade_step(
             lambda _n, llm: _as_text(agent._invoke_bounded(
-                llm, [HumanMessage(content=prompt)], timeout=30.0).content),
+                llm, [HumanMessage(content=prompt)], timeout=30.0,
+                budget=epi_budget).content),
             None, CHEAP_TIERS)
         summary = str(summary or "").strip()[:EPISODIC_SUMMARY_CHARS]
         if summary:

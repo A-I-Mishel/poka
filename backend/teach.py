@@ -985,6 +985,7 @@ def _repair_teaching_draft(
     tier: str,
     on_token: Any = None,
     on_reset: Any = None,
+    budget: Any = None,
 ) -> Tuple[str, bool]:
     """One bounded cross-tier repair of a violating teaching draft (never raises).
 
@@ -992,7 +993,9 @@ def _repair_teaching_draft(
     is unavailable, fails, or does not strictly reduce violations. A streaming
     consumer is reset first so it never concatenates stale with fixed text.
     Repair runs on the strongest live tier (Groq 120B first), not the failed
-    tier itself — weak lanes rarely fix their own structure.
+    tier itself — weak lanes rarely fix their own structure. The repair call
+    bills the given request budget when one is passed (None keeps the legacy
+    standalone budget); exhaustion degrades to the untouched draft.
     """
     try:
         if not reasons:
@@ -1037,7 +1040,7 @@ def _repair_teaching_draft(
                 logger.debug("teach repair stream reset failed", exc_info=True)
         from agent.budget import RequestBudget
 
-        repair_budget = RequestBudget()
+        repair_budget = budget if budget is not None else RequestBudget()
         messages = [
             {"role": "system", "content": (
                 "You repair a lesson's formatting. Change ONLY structure to "
@@ -1147,6 +1150,7 @@ def _maybe_repair_teaching_turn(
     tier: str,
     on_token: Any = None,
     on_reset: Any = None,
+    budget: Any = None,
 ) -> Tuple[str, bool, List[str]]:
     """Validate a teaching-turn answer, repairing once when needed (never raises).
 
@@ -1154,6 +1158,8 @@ def _maybe_repair_teaching_turn(
     turns (no scope fence) pass through untouched. When model repair is
     unavailable or fails, deterministic cleanup (banned footers, duplicate
     headers) still applies so weak-tier drafts never persist verbatim.
+    A request budget bills the repair call when passed (None preserves
+    the legacy standalone budget).
     """
     try:
         scope = _teaching_scope_from_send(send_text)
@@ -1179,7 +1185,8 @@ def _maybe_repair_teaching_turn(
         if _TEACHING_REFUSAL_RE.search(str(content or "")):
             return _redact_upload_ids(content), backfilled, reasons
         fixed, repaired = _repair_teaching_draft(
-            send_text, content, reasons, tier, on_token, on_reset)
+            send_text, content, reasons, tier, on_token, on_reset,
+            budget=budget)
         if repaired:
             scope2 = _teaching_scope_from_send(send_text)
             left = _validate_teaching_draft(fixed, scope2[0], scope2[1]) if scope2 else reasons

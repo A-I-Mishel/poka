@@ -89,9 +89,12 @@ TEMPERATURE: float = 0.7
 # client object requires. Bounded keyspace (tiers x task temperatures)
 # plus a hard cap; instances are never mutated after caching (callers
 # needing another temperature fetch their own entry via get_tier_llm).
+# Cap sized above the full tiers x temperatures cross-product so hot
+# clients never evict each other under mixed task types (entries are
+# tiny config wrappers — KBs, never user data).
 _CLIENT_CACHE: Dict[Tuple[str, float, str], Tuple[str, Any]] = {}
 _CLIENT_CACHE_LOCK = threading.Lock()
-_MAX_CACHED_CLIENTS: int = 32
+_MAX_CACHED_CLIENTS: int = 96
 
 
 def _key_fingerprint(key: str) -> str:

@@ -102,3 +102,18 @@ def test_cache_bounded(monkeypatch):
         fake = FakeLLM(["sum", "answer one"])
         _answer(history, fake)
     assert len(runtime._SUMMARY_CACHE) <= 3
+
+
+def test_attachments_change_history_key():
+    # Identical text with different files must never share a shaped
+    # history (wrong-file context is worse than one extra summary call).
+    from agent.answer import _history_key
+
+    base = [{"role": "user", "content": "same"}]
+    with_file = [{"role": "user", "content": "same",
+                  "attachments": [{"id": "a" * 16, "kind": "document"}]}]
+    with_other_file = [{"role": "user", "content": "same",
+                        "attachments": [{"id": "b" * 16, "kind": "document"}]}]
+    assert _history_key("u", base) != _history_key("u", with_file)
+    assert _history_key("u", with_file) != _history_key("u", with_other_file)
+    assert _history_key("u", base) == _history_key("u", base)

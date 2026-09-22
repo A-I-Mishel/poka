@@ -39,6 +39,8 @@ _SUMMARY_CACHE_LOCK = __import__("threading").Lock()
 def _history_key(user_id: Any, messages: List[Dict[str, Any]]) -> str:
     # sha1 as a non-security cache key (usedforsecurity=False documents
     # the exemption); keyed dict only, never a credential or signature.
+    # Attachment/image IDs join the hash: identical text with different
+    # files must never reuse a shaped history (wrong-file context).
     digest = hashlib.sha1(usedforsecurity=False)
     for msg in messages:
         if not isinstance(msg, dict):
@@ -47,6 +49,19 @@ def _history_key(user_id: Any, messages: List[Dict[str, Any]]) -> str:
         digest.update(b"\0")
         digest.update(str(msg.get("content", "")).encode("utf-8", errors="replace"))
         digest.update(b"\0")
+        try:
+            atts = msg.get("attachments")
+            if isinstance(atts, list):
+                for attach in atts:
+                    if not isinstance(attach, dict):
+                        continue
+                    digest.update(str(attach.get("id", "")).encode("utf-8", errors="replace"))
+                    digest.update(b"\0")
+                    digest.update(str(attach.get("kind", "")).encode("utf-8", errors="replace"))
+                    digest.update(b"\0")
+        except Exception:
+            logger.debug("history key attachment hash failed; using text only", exc_info=True)
+            continue
     return "%s\0%s" % (str(user_id or ""), digest.hexdigest())
 
 
