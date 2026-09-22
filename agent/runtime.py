@@ -649,8 +649,9 @@ def answer_with_fallback(
             llm = _size_llm_for_task(_name, llm)
             system_text = _build_system_prompt(
                 combined_notes, relevant_context, project_context, simple=True)
-            # Grounded for all tiers (weak tiers need it most, strong tiers
-            # benefit too). is_strict_tier() still marks the weakest lanes.
+            # Grounded for all tiers unconditionally (no strict tiers
+            # remain; the is_strict_tier hook is reserved for the local
+            # tier). The grounding paragraph never weakens answers.
             system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH
             with trace_llm_call(request_id, "simple", "simple") as _:
                 response = agent._invoke_bounded(

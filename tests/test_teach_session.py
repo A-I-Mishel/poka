@@ -447,10 +447,10 @@ def test_format_logging_metadata_only(tmp_path, monkeypatch):
     cf._log_teaching_format(
         "hi [Teaching mode: x]",
         "📘 FILE: L\nSlides: 1-2\n## Concept: G\n**Source**\n[slide 1]\n**Recall**\nQ?",
-        "Mistral")
+        "Cohere")
     assert seen["name"] == "teaching.format"
     assert seen["has_concept"] is True and seen["has_recall"] is True
-    assert seen["tier"] == "Mistral"
+    assert seen["tier"] == "Cohere"
     # Non-teaching turns log nothing.
     seen.clear()
     cf._log_teaching_format("hello", "hi there", "Groq")

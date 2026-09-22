@@ -701,8 +701,9 @@ def run_tool_loop(
         teaching=(TEACHING_INPUT_MARKER in str(user_input or "")),
         task_type=(task_type or ""),
     )
-    # Grounded for all tiers (weak-tier strict flag kept for compat: a
-    # mid-loop failover to a stronger tier simply keeps it — harmless).
+    # Grounded for all tiers (the strict-tier hook is reserved for the
+    # local tier; a mid-loop failover to a stronger tier simply keeps
+    # the paragraph — harmless).
     system_text += "\n\n" + STRICT_GROUNDING_PARAGRAPH
     if strict and (TEACHING_INPUT_MARKER in str(user_input or "")):
         # Small models hold a short checklist; the full teaching override

@@ -22,7 +22,7 @@ def test_cohere_admitted_unknown_stays_text_only():
     assert vision_supported_tier("Gemini 3.6 Flash") is True
     assert vision_supported_tier("Gemini 3.5 Flash") is True
     assert vision_supported_tier("Groq") is False
-    assert vision_supported_tier("Groq Fast") is False
+    assert vision_supported_tier("Defunct Lane") is False
     assert vision_supported_tier("OpenRouter Qwen 27B") is False
     assert vision_supported_tier("OpenRouter GLM 5.2") is False
     assert vision_supported_tier("") is False
