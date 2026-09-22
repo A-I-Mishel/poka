@@ -480,6 +480,11 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             memory_notes, project_context, bool(deep_mode),
             bool(force_search), active_tier, on_token, on_reset,
             on_progress, cancel)
+        assistant_msg, tier, task_type = _sanitize_identity_hallucination(
+            ctx, text, assistant_msg, tier, task_type,
+            bool(deep_mode), bool(force_search))
+        if tier == "identity":
+            fallback = None
     except TurnCancelled:
         # Client went away: nobody left to read a marker. Re-raise
         # untouched (never persisted, never cooled, never salvaged).
@@ -534,6 +539,51 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         "pending_approvals": live,
         "corrections": list(assistant_msg.get("corrections", []) or []),
     }
+
+
+def _sanitize_identity_hallucination(ctx: UserContext, text: str,
+                                         assistant_msg: Dict[str, Any],
+                                         tier: str, task_type: str,
+                                         deep_mode: bool,
+                                         force_search: bool) -> Tuple[Dict[str, Any], str, str]:
+    """Replace invented names with canned answer when vault is nameless.
+
+    Defense-in-depth behind the deterministic pre-model guard: weak tiers
+    still invent names ("You're Currently!") when the detector misses or
+    attachments bypass it. If the input IS an identity question, no name
+    is stored, and the model output claims one, swap to the canned reply.
+    Never raises; returns (msg, tier, task_type) unchanged on any doubt.
+    """
+    try:
+        from backend.flow.stages import (
+            _is_user_identity_question as _is_idq,
+            _stored_user_name_or_none as _stored_name,
+        )
+        from services.memory import _assistant_claimed_name as _claimed
+        if not _is_idq(text):
+            return assistant_msg, tier, task_type
+        try:
+            if _stored_name(ctx):
+                return assistant_msg, tier, task_type
+        except Exception:
+            return assistant_msg, tier, task_type
+        try:
+            if not _claimed(str(assistant_msg.get("content", ""))):
+                return assistant_msg, tier, task_type
+        except Exception:
+            return assistant_msg, tier, task_type
+        clean: Dict[str, Any] = {
+            "role": "assistant",
+            "content": ("I don't know your name yet — "
+                        "what should I call you?"),
+            "time": utcnow_iso(),
+            **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                               "identity", None),
+        }
+        return clean, "identity", "simple"
+    except Exception:
+        logger.debug("identity sanitize failed", exc_info=True)
+        return assistant_msg, tier, task_type
 
 
 def _failed_turn_reason(error: Any) -> str:
@@ -745,6 +795,15 @@ def regenerate_chat(ctx: UserContext, index: int,
         ctx, send_text, prior_history, prior_raw, vision_ids,
         memory_notes, project_context, bool(deep_mode),
         bool(force_search), active_tier)
+    try:
+        orig_text = str(user_msg.get("content", "") or "")
+    except Exception:
+        orig_text = ""
+    fresh_msg, tier, task_type = _sanitize_identity_hallucination(
+        ctx, orig_text, fresh_msg, tier, task_type,
+        bool(deep_mode), bool(force_search))
+    if tier == "identity":
+        fallback = None
 
     try:
         fixed, repaired, left = _maybe_repair_teaching_turn(

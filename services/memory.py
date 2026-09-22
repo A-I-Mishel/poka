@@ -99,6 +99,22 @@ def _blank_memory() -> Dict[str, Any]:
     return {"preferences": {}, "facts": [], "past_tasks": [], "user_name": None}
 
 
+def _is_poisoned_name_value(value: Any) -> bool:
+    """True when a stored name is a guard-list word, never a real name.
+
+    Self-heal predicate for pre-fix vaults (e.g. "Currently" stored from
+    "i am currently studying" before adverbs joined _NON_NAME_WORDS).
+    Single source with the extractor guard: exact lower match only, so
+    real names ("Mary Jane") never match.
+    """
+    try:
+        if not isinstance(value, str) or not value.strip():
+            return False
+        return value.strip().lower() in _NON_NAME_WORDS
+    except Exception:
+        return False
+
+
 def load_structured_memory() -> Dict[str, Any]:
     """Load memory from disk, or an empty structure when missing/corrupt.
 
@@ -107,6 +123,11 @@ def load_structured_memory() -> Dict[str, Any]:
     degrade to empty memory here by contract -- chat must never break on
     memory trouble, and every agent call site already degrades gracefully;
     genuine corruption is still quarantined centrally by _read_json.
+
+    Self-heals pre-fix poison: name facts / user_name matching
+    _NON_NAME_WORDS ("Currently") are dropped on load and the fix is
+    persisted best-effort, so old vaults stop hallucinating without
+    manual clears.
     """
     try:
         data, _corrupt = _read_json(Path(_memory_path()))
@@ -119,6 +140,34 @@ def load_structured_memory() -> Dict[str, Any]:
         data.setdefault(key, default)
     if not isinstance(data.get("facts"), list):
         data["facts"] = []
+    try:
+        facts = data.get("facts", [])
+        cleaned = [
+            f for f in facts
+            if not (isinstance(f, dict) and f.get("type") == "name"
+                    and _is_poisoned_name_value(f.get("value")))
+        ]
+        dirty = len(cleaned) != len(facts)
+        if dirty:
+            data["facts"] = cleaned
+        uname = data.get("user_name")
+        if _is_poisoned_name_value(uname):
+            valid = [
+                str(f.get("value", "")).strip() for f in cleaned
+                if isinstance(f, dict) and f.get("type") == "name"
+                and isinstance(f.get("value"), str)
+                and str(f.get("value", "")).strip()
+                and not _is_poisoned_name_value(f.get("value"))
+            ]
+            data["user_name"] = valid[-1] if valid else None
+            dirty = True
+        if dirty:
+            try:
+                _write_json(Path(_memory_path()), data)
+            except Exception:
+                logger.debug("poison self-heal persist failed", exc_info=True)
+    except Exception:
+        logger.debug("poison self-heal failed", exc_info=True)
     return data
 
 
@@ -326,9 +375,12 @@ def _bare_name_reply(text: Any) -> Optional[str]:
 _CORRECTION_LEADS = ("nope", "no", "wrong", "actually")
 
 # Name-claim shapes in assistant text ("Your name is Currently!",
-# "You're Sam"). A correction reply is only meaningful next to one.
+# "You're Sam", 'listed as "Currently"'). A correction reply is only
+# meaningful next to one. Includes "listed/known/saved as" for the
+# reported Groq phrasing ("I have you listed as Currently").
 _NAME_CLAIM_RE = re.compile(
-    r"(?:your name is|you're|you are|call you)\s+([A-Za-z]{2,20})",
+    r"(?:your name is|you're|you are|call you|listed as|known as|saved as)"
+    r"\s+[\"“'‘]*([A-Za-z]{2,20})",
     re.IGNORECASE)
 
 

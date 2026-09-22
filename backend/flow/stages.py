@@ -28,7 +28,11 @@ def _identity_patterns():
                 _re.compile(p) for p in (
                     r"who am i",
                     r"what(?:'s| is|s| s) my name",
-                    r"do (?:you|u) know my name",
+                    # Reported gap: "do you know what is my name?" never
+                    # matched "do you know my name". Optional what-is
+                    # prefix + who-am-i / me variants, fullmatch only so
+                    # "who am i in this essay" still misses.
+                    r"do (?:you|u) know (?:what(?:'s| is|s| s) )?(?:my name|who am i|who i am|me)",
                     r"what do you call me",
                     r"tell me my name",
                 ))
