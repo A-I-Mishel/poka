@@ -428,6 +428,20 @@ def _extract_teaching_blocks(ctx: UserContext, attach: Dict[str, str]) -> Tuple[
                 "({} bytes). Use read_document/read_pdf tools for this file.".format(size)
             )
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        # Legacy Office backstop: new uploads are hard-refused in
+        # services.files.validate_upload, but vaults may still hold
+        # .doc/.ppt/.xls files from before the gate. Teaching from their
+        # blobs fabricates slide structure, so refuse with conversion
+        # instructions and NO model call (same fail-closed shape below).
+        if ext in ("doc", "ppt", "xls"):
+            _modern = {"doc": ".docx", "ppt": ".pptx", "xls": ".xlsx"}.get(ext, ".pptx")
+            _app = {"doc": "Word", "ppt": "PowerPoint", "xls": "Excel"}.get(ext, "Office")
+            return [], 0, (
+                f"STATUS=DENIED teaching: legacy .{ext} files can't be taught "
+                f"slide-by-slide. Open '{name}' in {_app} -> File -> Save As -> "
+                f"choose {_modern} (or PDF export), re-upload, then say Next "
+                "to continue. I stopped rather than guess its slides."
+            )
         # PPTX/PPT/ODP: slide-aware extraction with numbers + tables.
         if ext in ("pptx", "ppt", "odp") or kind == "document":
             blocks = _extract_pptx_blocks(path, ext)

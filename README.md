@@ -191,7 +191,10 @@ one cheap-tier reflection pass (150+ chars).
 
 File tools accept opaque upload IDs only — never filesystem paths.
 Results carry `STATUS=` markers (`OK/EMPTY/FAILED/INVALID/DENIED/
-DEGRADED`) so failures can't be mistaken for data. PDF reads are
+DEGRADED`) so failures can't be mistaken for data. Upload `.pptx` /
+`.docx` / PDF (legacy `.ppt`/`.doc`/`.xls` binaries are refused at
+upload with Save-As instructions — they carry no slide/sheet structure
+to teach from). PDF reads are
 page-marked and bounded (upload cap re-checked at read time, malformed
 input yields structured failures); CSV reads are byte-, column-, and
 row-capped before pandas runs, with a controlled `csv_inspect` op set

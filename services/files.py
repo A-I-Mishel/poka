@@ -200,6 +200,47 @@ def _sniff_zip_kind(data: bytes) -> str:
 
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
+# Legacy Office binaries: pre-2007 OLE-compound formats with no slide /
+# sheet boundaries. Teaching from them yields whole-deck blobs with fake
+# [slide 1] citations, and structured reads lose fidelity — so new
+# uploads are hard-refused with conversion instructions (see
+# validate_upload). Pre-existing vault files keep best-effort reads via
+# the document tools; only NEW uploads are refused.
+_LEGACY_OFFICE_EXTS = frozenset({"doc", "ppt", "xls"})
+_LEGACY_MODERN = {"doc": ".docx", "ppt": ".pptx", "xls": ".xlsx"}
+_LEGACY_APP = {"doc": "Word", "ppt": "PowerPoint", "xls": "Excel"}
+_LEGACY_WHY = {
+    "doc": "can't be read with structure intact",
+    "ppt": "can't be read slide-by-slide",
+    "xls": "can't be read sheet-by-sheet",
+}
+_LEGACY_ALT = {
+    "doc": "A PDF export works too.",
+    "ppt": "A PDF export works too.",
+    "xls": "A PDF export or CSV works too.",
+}
+
+
+def _legacy_reject_message(filename_ext: str) -> str:
+    """Instructions-first refusal for a legacy Office binary (never raises)."""
+    try:
+        if filename_ext in _LEGACY_MODERN:
+            modern = _LEGACY_MODERN[filename_ext]
+            app = _LEGACY_APP[filename_ext]
+            why = _LEGACY_WHY[filename_ext]
+            alt = _LEGACY_ALT[filename_ext]
+            return (
+                f"This is a legacy .{filename_ext} file, which Pluto {why}. "
+                f"Quick fix (10 seconds): open it in {app} -> File -> Save As -> "
+                f"choose {modern}, then upload the new file. {alt}"
+            )
+        return (
+            "This file is actually a legacy Office file despite its name: "
+            "please Save As .pptx/.docx/.xlsx (or PDF) and re-upload."
+        )
+    except Exception:
+        return "Legacy Office file: please Save As .pptx/.docx/.xlsx (or PDF) and re-upload."
+
 _ZIP_BASED_EXTS = frozenset({
     "docx", "pptx", "xlsx", "odt", "ods", "odp", "zip",
 })
@@ -381,6 +422,7 @@ class FileStore:
             raise FileValidationError(f"File too large. Maximum is {limit_mb} MB.")
         safe = sanitize_filename(filename)
         ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
+        filename_ext = ext
         _sniffed = _sniff_ext(bytes(data[:16]))
         if ext not in ALLOWED_UPLOAD_EXTS:
             # Missing or wrong extension (e.g. extensionless downloads):
@@ -397,6 +439,13 @@ class FileStore:
         if ext not in ALLOWED_UPLOAD_EXTS:
             allowed = ", ".join(sorted(ALLOWED_UPLOAD_EXTS))
             raise FileValidationError(f"Unsupported file type. Allowed: {allowed}.")
+        # Legacy Office hard-reject: any OLE-compound content is a
+        # .doc/.ppt/.xls binary no matter what the filename claims (the
+        # sniff above maps OLE->"doc" for every naming direction), and
+        # teaching from such blobs fabricates slide structure. Refuse
+        # with conversion instructions instead of silently misteaching.
+        if ext in _LEGACY_OFFICE_EXTS and bytes(data[:16]).startswith(_OLE_MAGIC):
+            raise FileValidationError(_legacy_reject_message(filename_ext))
         head = bytes(data[:16])
         if ext == "pdf" and not head.lstrip().startswith(b"%PDF"):
             raise FileValidationError("That file is not a valid PDF.")

@@ -334,10 +334,25 @@ def test_ole_strings_long_camel_filtered_and_empty_raises():
         _ole_strings_text(long_camel + b"\x00", ".doc")
 
 
-def test_doc_ppt_via_upload_use_ole_fallback():
+def test_doc_ppt_uploads_rejected_with_conversion_note():
+    from services.files import FileValidationError
+
+    # Legacy binaries are hard-refused at upload (conversion instructions,
+    # not silent blob teaching) — see tests/test_legacy_office_gate.py.
+    ole_magic = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+    payload = ole_magic + b"Prefix\x00\x00 MyDocContent Hello World testing OLE fallback more text here \x00\x00"
+    for ext in ("doc", "ppt"):
+        with pytest.raises(FileValidationError, match="Save As"):
+            FileStore("floor2-user").save_upload(payload, f"file.{ext}")
+
+
+def test_doc_ppt_preexisting_vault_files_still_readable(monkeypatch):
     from tools.document_tool import read_document
 
-    # OLE magic required by FileStore validation
+    # Pre-gate vault content (validation bypassed like history): the OLE
+    # strings fallback keeps working for reads with its fidelity note.
+    monkeypatch.setattr(FileStore, "validate_upload",
+                        lambda self, data, filename: filename.rsplit(".", 1)[-1].lower())
     ole_magic = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
     payload = ole_magic + b"Prefix\x00\x00 MyDocContent Hello World testing OLE fallback more text here \x00\x00"
     for ext in ("doc", "ppt"):
@@ -351,6 +366,9 @@ def test_doc_ppt_via_upload_use_ole_fallback():
 def test_xls_fallback_when_xlrd_missing(monkeypatch):
     from tools.document_tool import _read_xls_file
 
+    # Pre-gate vault content (new .xls uploads are refused at validation).
+    monkeypatch.setattr(FileStore, "validate_upload",
+                        lambda self, data, filename: filename.rsplit(".", 1)[-1].lower())
     # Force pandas path to fail -> fallback to OLE strings (needs OLE magic)
     ole_magic = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
     payload = ole_magic + b"XLS fallback content with enough chars to keep HelloWorldXls\x00\x00"
