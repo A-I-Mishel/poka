@@ -9,7 +9,20 @@ import io
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+@pytest.fixture(autouse=True)
+def _clear_vision_cache():
+    # The vision-text cache is module-global: isolate every test so
+    # stubbed transcripts never leak across cases.
+    from services import pptx_images as pi
+
+    pi._clear_vision_text_cache()
+    yield
+    pi._clear_vision_text_cache()
 
 
 def _png_bytes(color=(255, 255, 255)):
@@ -178,6 +191,73 @@ def test_batch_partial_hit_skips_solo_for_hits(monkeypatch):
     assert lines[0] == "[image 1 (vision-OCR):\nHIT ONE]"
     assert lines[1] == "[image 2 (vision-OCR):\nSOLO]"
     assert solo_calls == [b"b2"]
+
+
+def test_repeat_extraction_uses_vision_cache(monkeypatch):
+    from services import pptx_images as pi
+
+    pi._clear_vision_text_cache()
+    monkeypatch.setattr(pi, "ocr_picture_on_device", lambda blob: "")
+    calls = []
+
+    def _solo(blob):
+        calls.append(blob)
+        return "CACHED WORDS"
+
+    pics = [("", b"cache-blob-1")]
+    lines1, _ = pi.picture_lines_for_slide(pics, 1, _solo)
+    lines2, _ = pi.picture_lines_for_slide(pics, 1, _solo)
+    assert lines1 == lines2 == ["[image 1 (vision-OCR):\nCACHED WORDS]"]
+    assert calls == [b"cache-blob-1"]
+    pi._clear_vision_text_cache()
+
+
+def test_batch_results_cached_across_calls(monkeypatch):
+    from services import pptx_images as pi
+
+    pi._clear_vision_text_cache()
+    monkeypatch.setattr(pi, "ocr_picture_on_device", lambda blob: "")
+    batch_calls = []
+
+    def _many(blobs):
+        batch_calls.append(list(blobs))
+        return ["BATCH WORDS"]
+
+    pics = [("", b"cache-blob-2")]
+    first, _ = pi.picture_lines_for_slide(pics, 3, None, _many)
+    second, _ = pi.picture_lines_for_slide(pics, 3, None, _many)
+    assert first == second == ["[image 3 (vision-OCR):\nBATCH WORDS]"]
+    assert batch_calls == [[b"cache-blob-2"]]
+    pi._clear_vision_text_cache()
+
+
+def test_vision_misses_never_cached(monkeypatch):
+    from services import pptx_images as pi
+
+    pi._clear_vision_text_cache()
+    monkeypatch.setattr(pi, "ocr_picture_on_device", lambda blob: "")
+    calls = []
+
+    def _solo(blob):
+        calls.append(blob)
+        return ""
+
+    pics = [("", b"miss-blob")]
+    assert pi.picture_lines_for_slide(pics, 1, _solo) == ([], 1)
+    assert pi.picture_lines_for_slide(pics, 1, _solo) == ([], 1)
+    assert calls == [b"miss-blob", b"miss-blob"]
+    pi._clear_vision_text_cache()
+
+
+def test_vision_text_cache_bounded():
+    from services import pptx_images as pi
+
+    pi._clear_vision_text_cache()
+    for i in range(pi._VISION_TEXT_CACHE_MAX + 10):
+        out = pi._vision_text_cached(f"blob-{i}".encode(), lambda: "T")
+        assert out == "T"
+    assert len(pi._VISION_TEXT_CACHE) <= pi._VISION_TEXT_CACHE_MAX
+    pi._clear_vision_text_cache()
 
 
 def test_bounds_deck_and_slide(monkeypatch):

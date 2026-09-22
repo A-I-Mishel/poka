@@ -18,6 +18,7 @@ only (services/ never touches tools/ or agent/).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -27,6 +28,80 @@ logger = logging.getLogger(__name__)
 MAX_PPTX_IMAGES_PER_DECK: int = 6
 MAX_PPTX_IMAGES_PER_SLIDE: int = 2
 MAX_PPTX_IMAGE_CHARS: int = 2000
+
+# Vision-transcription cache: sha1(image bytes) -> verbatim text.
+# Repeat extractions of the same picture (regenerates, re-reads, one
+# image reused across slides/decks) must not re-fire vision cascades.
+# Only non-empty transcriptions are stored — misses always recompute
+# (another tier may succeed later), and on-device OCR stays live every
+# call (free, deterministic). Engine labels are applied at format time,
+# never cached. Bounded FIFO; never raises into callers.
+_VISION_TEXT_CACHE: Dict[str, str] = {}
+_VISION_TEXT_CACHE_MAX: int = 128
+
+
+def _blob_key(blob: Any) -> str:
+    """Cache key for image bytes, or "" when unhashable (never raises)."""
+    try:
+        if not isinstance(blob, (bytes, bytearray)) or not blob:
+            return ""
+        return hashlib.sha1(bytes(blob), usedforsecurity=False).hexdigest()
+    except Exception:
+        return ""
+
+
+def _store_vision_text(blob: Any, text: str) -> None:
+    """Cache one non-empty transcription, bounded (never raises)."""
+    try:
+        if not text:
+            return
+        key = _blob_key(blob)
+        if not key:
+            return
+        if len(_VISION_TEXT_CACHE) >= _VISION_TEXT_CACHE_MAX:
+            try:
+                _VISION_TEXT_CACHE.pop(next(iter(_VISION_TEXT_CACHE)))
+            except (StopIteration, KeyError):
+                pass
+        _VISION_TEXT_CACHE[key] = text
+    except Exception:
+        logger.debug("vision text cache store failed", exc_info=True)
+
+
+def _vision_text_cached(blob: Any, call: Any) -> str:
+    """Run a vision transcription with result caching (never raises).
+
+    Cache hit returns the stored verbatim text without calling; misses
+    run call() once and store non-empty results. Empty results are never
+    stored, so a later tier always gets its chance.
+    """
+    try:
+        key = _blob_key(blob)
+        if key:
+            try:
+                hit = _VISION_TEXT_CACHE.get(key)
+            except Exception:
+                hit = None
+            if hit:
+                return hit
+        try:
+            text = str(call() or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
+        except Exception:
+            return ""
+        if text:
+            _store_vision_text(blob, text)
+        return text
+    except Exception:
+        logger.debug("cached vision transcription failed", exc_info=True)
+        return ""
+
+
+def _clear_vision_text_cache() -> None:
+    """Drop cached transcriptions (tests)."""
+    try:
+        _VISION_TEXT_CACHE.clear()
+    except Exception:
+        logger.debug("vision text cache clear failed", exc_info=True)
 
 # MSO_SHAPE_TYPE.PICTURE. Compared by value (not enum import) so odd
 # duck-typed shapes still work and a pptx upgrade cannot break matching.
@@ -286,39 +361,49 @@ def picture_lines_for_slide(
         pending = [(pos, idx, blob) for pos, (kind, payload) in enumerate(slots)
                    if kind == "vision" for idx, blob in [payload]]
         if pending and callable(vision_ocr_many):
-            try:
-                texts = vision_ocr_many([blob for _, _, blob in pending])
-            except Exception:
-                logger.debug("batched vision OCR failed; falling back per picture",
-                             exc_info=True)
-                texts = []
-            if not isinstance(texts, list):
-                texts = []
-            for (pos, idx, blob), text in zip(pending, list(texts) + [""] * len(pending), strict=False):
-                text = str(text or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
-                if text:
-                    slots[pos] = ("line", format_picture_line(
-                        idx, "", text, "vision-OCR"))
-                elif callable(vision_ocr):
-                    try:
-                        solo = str(vision_ocr(blob) or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
-                    except Exception:
-                        solo = ""
-                    if solo:
-                        slots[pos] = ("line", format_picture_line(
-                            idx, "", solo, "vision-OCR"))
-                    else:
-                        slots[pos] = ("skip", "")
-                else:
-                    slots[pos] = ("skip", "")
-            pending = [(pos, idx, blob) for pos, (kind, payload) in enumerate(slots)
-                       if kind == "vision" for idx, blob in [payload]]
-        if pending and callable(vision_ocr):
+            # Serve repeat pictures from cache; batch only the uncached.
+            live: List[Tuple[int, int, Any]] = []
             for pos, idx, blob in pending:
                 try:
-                    ocr_text = str(vision_ocr(blob) or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
+                    hit = _VISION_TEXT_CACHE.get(_blob_key(blob)) if _blob_key(blob) else None
                 except Exception:
-                    ocr_text = ""
+                    hit = None
+                if hit:
+                    slots[pos] = ("line", format_picture_line(
+                        idx, "", hit, "vision-OCR"))
+                else:
+                    live.append((pos, idx, blob))
+            pending = live
+            if pending:
+                try:
+                    texts = vision_ocr_many([blob for _, _, blob in pending])
+                except Exception:
+                    logger.debug("batched vision OCR failed; falling back per picture",
+                                 exc_info=True)
+                    texts = []
+                if not isinstance(texts, list):
+                    texts = []
+                for (pos, idx, blob), text in zip(pending, list(texts) + [""] * len(pending), strict=False):
+                    text = str(text or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
+                    if text:
+                        _store_vision_text(blob, text)
+                        slots[pos] = ("line", format_picture_line(
+                            idx, "", text, "vision-OCR"))
+                    elif callable(vision_ocr):
+                        solo = _vision_text_cached(
+                            blob, lambda _b=blob: vision_ocr(_b))
+                        if solo:
+                            slots[pos] = ("line", format_picture_line(
+                                idx, "", solo, "vision-OCR"))
+                        else:
+                            slots[pos] = ("skip", "")
+                    else:
+                        slots[pos] = ("skip", "")
+                pending = [(pos, idx, blob) for pos, (kind, payload) in enumerate(slots)
+                           if kind == "vision" for idx, blob in [payload]]
+        if pending and callable(vision_ocr):
+            for pos, idx, blob in pending:
+                ocr_text = _vision_text_cached(blob, lambda _b=blob: vision_ocr(_b))
                 if ocr_text:
                     slots[pos] = ("line", format_picture_line(
                         idx, "", ocr_text, "vision-OCR"))
