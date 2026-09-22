@@ -1,11 +1,10 @@
-"""Image understanding support (vision).
+"""Image understanding support (vision): image DATA preparation only.
 
-Uploads stay behind the existing ownership model: callers pass upload IDs
-or user-owned paths, never arbitrary filesystem locations. Only image
-types accepted by the uploader (png/jpg/jpeg) are processed, downscaled
-with Pillow to bound token cost, and sent to providers that advertise
-vision support. Anything else yields an explicit structured failure —
-never a claim that an image was analyzed when it was not.
+Single job: validate uploads, bound their size, encode them, and build
+multimodal message payloads — plus the tier allowlists that decide which
+lanes may receive image content. Model invocation lives elsewhere:
+live cascade answering in agent/vision.py, cached image-to-text
+conversion in services/image_bridge.py. This module never calls a model.
 """
 
 import base64
@@ -25,13 +24,28 @@ VISION_MAX_DIM: int = 1568
 VISION_MAX_PIXELS: int = 25_000_000
 VISION_EXTS = frozenset({"png", "jpg", "jpeg", "webp", "gif", "bmp"})
 
+# Canonical vision-tier order: the single source of truth for which
+# lanes receive image content, and in what sequence. Consumers alias
+# this tuple (services.image_bridge._CONVERTER_TIERS,
+# agent.runtime._VISION_TIER_NAMES) instead of maintaining their own
+# copies — the three lists drifted before, and drift here means one
+# path sees a lane the others don't. Trial lanes join/leave HERE only.
+# Ling VL (OpenRouter trial, Sep 2026) trails Cohere: free vision MoE,
+# single provider — remove the name here to drop it from every vision
+# path at once.
+VISION_TIER_ORDER = ("Gemini 3.8 Flash", "Gemini 3.7 Flash",
+                     "Gemini 3.6 Flash", "Gemini 3.5 Flash",
+                     "Cohere", "OpenRouter Ling VL")
+
 # Tier names known to accept image content blocks. Unknown tiers are
 # treated as text-only so we never send images into the void.
 # Cohere is backup-only: it trails the Gemini lanes in cascade order and
 # only sees images when its configured model is vision-capable
 # (COHERE_MODEL=command-a-vision-07-2025); the default Command A is text.
-# Ling VL (OpenRouter trial, Sep 2026) trails Cohere: free vision MoE,
-# single provider — remove the key below with the lane if it flakes.
+# NOTE: this predicate intentionally admits any "gemini"-named lane
+# (including Lite lanes) in cascade-filter loops, while VISION_TIER_ORDER
+# above lists only trial-verified lanes for converter/runtime paths.
+# Do NOT "fix" the asymmetry without a vision trial on the added lanes.
 _VISION_TIERS = ("gemini", "cohere", "ling")
 
 

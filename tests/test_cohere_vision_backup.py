@@ -30,8 +30,11 @@ def test_cohere_admitted_unknown_stays_text_only():
 
 
 def test_bridge_converter_backup_order():
+    # Single source: the bridge alias IS the canonical vision order.
     from services.image_bridge import _CONVERTER_TIERS
+    from services.vision import VISION_TIER_ORDER
 
+    assert _CONVERTER_TIERS is VISION_TIER_ORDER
     assert list(_CONVERTER_TIERS) == [
         "Gemini 3.8 Flash", "Gemini 3.7 Flash",
         "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere",
@@ -39,8 +42,11 @@ def test_bridge_converter_backup_order():
 
 
 def test_runtime_vision_tier_names_mirror():
+    # Single source: the runtime alias IS the canonical vision order.
     from agent import runtime as rt
+    from services.vision import VISION_TIER_ORDER
 
+    assert rt._VISION_TIER_NAMES is VISION_TIER_ORDER
     assert "Cohere" in rt._VISION_TIER_NAMES
     assert "OpenRouter Ling VL" in rt._VISION_TIER_NAMES
     assert rt._VISION_TIER_NAMES.index("Gemini 3.5 Flash") < \

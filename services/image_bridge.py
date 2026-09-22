@@ -1,5 +1,10 @@
 """Image-to-text bridge: one vision call per upload, then any tier answers.
 
+Single job: convert an image upload into a cached text surrogate so
+text-only tiers can answer visual questions. Live vision answering lives
+in agent/vision.py; image DATA prep (validate/encode/message blocks)
+lives in services/vision.py — this module only bridges between them.
+
 Lazy + cached: the first question about an image converts it (verbatim
 transcript + concrete description) via a vision tier; the surrogate is
 cached in RAM and persisted as a vault sidecar
@@ -16,18 +21,16 @@ cache keys never go stale. Every helper never raises into callers —
 import logging
 import re
 import threading
+from services.vision import VISION_TIER_ORDER
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Converter tiers in order: Gemini lanes first, Cohere as backup, Ling VL
-# as free backup-of-backup (OpenRouter trial, Sep 2026 — remove with the
-# lane if it flakes). Cohere only converts when its configured model is
-# vision-capable (COHERE_MODEL=command-a-vision-07-2025); otherwise its
-# attempt fails fast into the next tier like any other vision miss.
-_CONVERTER_TIERS = ("Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere", "OpenRouter Ling VL")
+# Converter tiers in order: alias of the canonical vision order in
+# services.vision (single source — do NOT maintain a separate list).
+_CONVERTER_TIERS = VISION_TIER_ORDER
 
 # Surrogate cap: transcripts must fit the context budget next to real
 # tool output (CTX_EXTERNAL_TOKENS). Longer notes truncate with a mark.

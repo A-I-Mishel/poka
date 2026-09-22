@@ -24,6 +24,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from config import CHEAP_TIERS, SYNTHESIS_TIERS, TASK_TEMPERATURES, get_tier_llm
 from services.context import get_current_user_id
+from services.vision import VISION_TIER_ORDER
 
 
 def _hash_user(user_id: Any) -> str:
@@ -74,11 +75,10 @@ SHORT_DIRECT_CHARS: int = 60
 _HINT_MARKERS = ("[Attached", "[Content of", "upload ID", "read_document",
                  "read_pdf", "analyze_csv")
 
-# Vision-capable tier names (mirrors services.vision._VISION_TIERS).
-# Cohere trails the Gemini lanes: backup only, and only when its
-# configured model is vision-capable (COHERE_MODEL=command-a-vision-*).
-# Ling VL trails Cohere: free OpenRouter trial lane (Sep 2026).
-_VISION_TIER_NAMES = ("Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere", "OpenRouter Ling VL")
+# Vision-capable tier names: alias of the canonical vision order in
+# services.vision (single source — do NOT maintain a separate list).
+# Safe import direction (services never imports agent).
+_VISION_TIER_NAMES = VISION_TIER_ORDER
 
 
 # Bridge transcript wrapper (routing-neutral by construction — see note

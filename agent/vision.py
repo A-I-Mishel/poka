@@ -1,9 +1,10 @@
-"""Vision fast-path: image attachments answered with real image content.
+"""Vision fast-path: live cascade answering on vision-capable tiers.
 
-Tries each vision-capable tier in cascade order; on total failure returns
-None so the caller falls back to the normal text cascade (never claims
-analysis that did not happen). Vision failures never cool tiers for text
-use. Image trust rules (untrusted data) come from services.vision.
+Single job: ask a vision tier about image content and return the answer
+(or None so the caller falls back to the text cascade — never claims
+analysis that did not happen). Image DATA prep lives in
+services/vision.py; cached image-to-text conversion lives in
+services/image_bridge.py. Vision failures never cool tiers for text use.
 """
 
 import logging
