@@ -121,6 +121,65 @@ def test_ocr_ladder_on_device_then_vision(monkeypatch):
     assert lines == [] and used == 1  # skipped silently, counter moves
 
 
+def test_batch_vision_called_once_for_slide(monkeypatch):
+    from services import pptx_images as pi
+
+    monkeypatch.setattr(pi, "ocr_picture_on_device", lambda blob: "")
+    batch_calls = []
+
+    def _many(blobs):
+        batch_calls.append(list(blobs))
+        return ["AAA", "BBB"]
+
+    def _boom(blob):
+        raise AssertionError("per-picture vision must not run when batch succeeds")
+
+    lines, used = pi.picture_lines_for_slide(
+        [("", b"b1"), ("", b"b2")], 1, _boom, _many)
+    assert used == 2
+    assert lines == ["[image 1 (vision-OCR):\nAAA]", "[image 2 (vision-OCR):\nBBB]"]
+    assert batch_calls == [[b"b1", b"b2"]]
+
+
+def test_batch_miss_falls_back_per_picture(monkeypatch):
+    from services import pptx_images as pi
+
+    monkeypatch.setattr(pi, "ocr_picture_on_device", lambda blob: "")
+    solo_calls = []
+
+    def _solo(blob):
+        solo_calls.append(blob)
+        return "SOLO WORDS"
+
+    # Batch returned "" for both (misses) -> solo fallback for each.
+    lines, used = pi.picture_lines_for_slide(
+        [("", b"b1"), ("", b"b2")], 5, _solo, lambda blobs: ["", ""])
+    assert used == 2
+    assert lines == ["[image 5 (vision-OCR):\nSOLO WORDS]",
+                     "[image 6 (vision-OCR):\nSOLO WORDS]"]
+    assert solo_calls == [b"b1", b"b2"]
+
+
+def test_batch_partial_hit_skips_solo_for_hits(monkeypatch):
+    from services import pptx_images as pi
+
+    monkeypatch.setattr(pi, "ocr_picture_on_device", lambda blob: "")
+    solo_calls = []
+
+    def _solo(blob):
+        solo_calls.append(blob)
+        return "SOLO"
+
+    def _many(blobs):
+        return ["HIT ONE", ""]
+
+    lines, _ = pi.picture_lines_for_slide(
+        [("", b"b1"), ("", b"b2")], 1, _solo, _many)
+    assert lines[0] == "[image 1 (vision-OCR):\nHIT ONE]"
+    assert lines[1] == "[image 2 (vision-OCR):\nSOLO]"
+    assert solo_calls == [b"b2"]
+
+
 def test_bounds_deck_and_slide(monkeypatch):
     from services import pptx_images as pi
 

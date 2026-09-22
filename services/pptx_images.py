@@ -241,6 +241,7 @@ def picture_lines_for_slide(
     pictures: List[Tuple[str, Optional[bytes]]],
     start_index: int,
     vision_ocr: Any = None,
+    vision_ocr_many: Any = None,
 ) -> Tuple[List[str], int]:
     """Text lines for one slide's pictures + count consumed (never raises).
 
@@ -251,6 +252,11 @@ def picture_lines_for_slide(
         vision_ocr: Optional callable(blob) -> str for the vision-model
             rung of the ladder (callers lazy-import agent.vision like
             tools/pdf_tool.py); None skips vision entirely.
+        vision_ocr_many: Optional callable([blob]) -> [str] batching the
+            vision rung into ONE model call for the whole slide (aligned
+            per-blob texts, "" for misses). Misses fall back to
+            per-picture vision_ocr when given, else skipped. None keeps
+            the legacy per-picture path exactly.
 
     Ladder per picture: alt text (free) -> on-device OCR -> vision OCR.
     Pictures yielding nothing are skipped silently (decorative images
@@ -258,12 +264,14 @@ def picture_lines_for_slide(
     """
     lines: List[str] = []
     used = 0
+    # Per-picture slots: ("line", text) done, ("vision", blob) pending.
+    slots: List[Tuple[str, Any]] = []
     try:
         for alt, blob in pictures or []:
             idx = int(start_index) + used
             used += 1
             if alt:
-                lines.append(format_picture_line(idx, alt))
+                slots.append(("line", format_picture_line(idx, alt)))
                 continue
             ocr_text, engine = "", ""
             try:
@@ -271,15 +279,57 @@ def picture_lines_for_slide(
                 engine = "OCR" if ocr_text else ""
             except Exception:
                 ocr_text, engine = "", ""
-            if not ocr_text and callable(vision_ocr):
+            if ocr_text:
+                slots.append(("line", format_picture_line(idx, "", ocr_text, engine)))
+                continue
+            slots.append(("vision", (idx, blob)))
+        pending = [(pos, idx, blob) for pos, (kind, payload) in enumerate(slots)
+                   if kind == "vision" for idx, blob in [payload]]
+        if pending and callable(vision_ocr_many):
+            try:
+                texts = vision_ocr_many([blob for _, _, blob in pending])
+            except Exception:
+                logger.debug("batched vision OCR failed; falling back per picture",
+                             exc_info=True)
+                texts = []
+            if not isinstance(texts, list):
+                texts = []
+            for (pos, idx, blob), text in zip(pending, list(texts) + [""] * len(pending), strict=False):
+                text = str(text or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
+                if text:
+                    slots[pos] = ("line", format_picture_line(
+                        idx, "", text, "vision-OCR"))
+                elif callable(vision_ocr):
+                    try:
+                        solo = str(vision_ocr(blob) or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
+                    except Exception:
+                        solo = ""
+                    if solo:
+                        slots[pos] = ("line", format_picture_line(
+                            idx, "", solo, "vision-OCR"))
+                    else:
+                        slots[pos] = ("skip", "")
+                else:
+                    slots[pos] = ("skip", "")
+            pending = [(pos, idx, blob) for pos, (kind, payload) in enumerate(slots)
+                       if kind == "vision" for idx, blob in [payload]]
+        if pending and callable(vision_ocr):
+            for pos, idx, blob in pending:
                 try:
                     ocr_text = str(vision_ocr(blob) or "").strip()[:MAX_PPTX_IMAGE_CHARS].strip()
-                    engine = "vision-OCR" if ocr_text else ""
                 except Exception:
-                    ocr_text, engine = "", ""
-            line = format_picture_line(idx, "", ocr_text, engine)
-            if line:
-                lines.append(line)
+                    ocr_text = ""
+                if ocr_text:
+                    slots[pos] = ("line", format_picture_line(
+                        idx, "", ocr_text, "vision-OCR"))
+                else:
+                    slots[pos] = ("skip", "")
+        elif pending:
+            for pos, _, _ in pending:
+                slots[pos] = ("skip", "")
+        for kind, payload in slots:
+            if kind == "line" and payload:
+                lines.append(payload)
     except Exception:
         logger.debug("picture lines build failed", exc_info=True)
     return lines, used

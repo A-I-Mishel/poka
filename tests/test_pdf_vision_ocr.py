@@ -109,6 +109,57 @@ def test_vision_ocr_never_raises(monkeypatch):
     assert vision_mod.vision_ocr_bytes(b"\x00\x01") == ""
 
 
+def test_batch_vision_aligns_sections_one_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        vision_mod, "_usable_tiers",
+        lambda first, tiers: [("Gemini 3.6 Flash", lambda: object())])
+
+    def _invoke(llm, msgs, **kw):
+        calls.append(1)
+        assert len(msgs) == 1
+        return types.SimpleNamespace(
+            content="IMAGE 1\nAAA\nIMAGE 2\nBBB")
+
+    monkeypatch.setattr(agent, "_invoke_bounded", _invoke)
+    out = vision_mod.vision_ocr_many([_png_bytes(), _png_bytes()])
+    assert out == ["AAA", "BBB"]
+    assert len(calls) == 1
+
+
+def test_batch_vision_missing_sections_align_empty(monkeypatch):
+    monkeypatch.setattr(
+        vision_mod, "_usable_tiers",
+        lambda first, tiers: [("Gemini 3.6 Flash", lambda: object())])
+    monkeypatch.setattr(
+        agent, "_invoke_bounded",
+        lambda llm, msgs, **kw: types.SimpleNamespace(content="IMAGE 2\nBBB"))
+    # IMAGE 1 has no section -> "" (caller falls back per picture).
+    assert vision_mod.vision_ocr_many([_png_bytes(), _png_bytes()]) == ["", "BBB"]
+
+
+def test_batch_vision_skips_unencodable_without_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        vision_mod, "_usable_tiers",
+        lambda first, tiers: [("Gemini 3.6 Flash", lambda: object())])
+    monkeypatch.setattr(
+        agent, "_invoke_bounded",
+        lambda llm, msgs, **kw: (calls.append(1),
+                                 types.SimpleNamespace(content="IMAGE 1\nAAA"))[1])
+    out = vision_mod.vision_ocr_many([b"\x00\x01", _png_bytes()])
+    # Garbage blob encodes to nothing (stays ""); the reply's IMAGE 1
+    # addresses the first *sent* image, i.e. original index 1.
+    assert out == ["", "AAA"]
+    assert len(calls) == 1
+
+
+def test_batch_vision_empty_and_tierless(monkeypatch):
+    assert vision_mod.vision_ocr_many([]) == []
+    monkeypatch.setattr(vision_mod, "_usable_tiers", lambda first, tiers: [])
+    assert vision_mod.vision_ocr_many([_png_bytes()]) == [""]
+
+
 def test_scanned_pages_use_vision_when_no_tesseract(monkeypatch):
     monkeypatch.setattr(pdf_tool, "_ocr_available", lambda: False)
     monkeypatch.setattr(

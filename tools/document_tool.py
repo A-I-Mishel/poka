@@ -677,6 +677,14 @@ def _read_pptx_file(path) -> str:
                 return str(vision_ocr_bytes(_blob) or "")
             except Exception:
                 return ""
+
+        def _vision_ocr_many(_blobs):
+            try:
+                from agent.vision import vision_ocr_many
+
+                return vision_ocr_many(list(_blobs or []))
+            except Exception:
+                return [""] * len(list(_blobs or []))
     except Exception:
         logger.debug("pptx picture setup failed", exc_info=True)
         _pics_by_slide, _pic_lines = {}, None
@@ -686,6 +694,9 @@ def _read_pptx_file(path) -> str:
 
         def _vision_ocr(_blob):
             return ""
+
+        def _vision_ocr_many(_blobs):
+            return [""] * len(list(_blobs or []))
     parts = []
     _img_counter = 0
     for i, slide in enumerate(prs.slides, start=1):
@@ -710,7 +721,8 @@ def _read_pptx_file(path) -> str:
                 _slide_pics = _pics_by_slide.get(i, [])
                 if _slide_pics:
                     _pic_out, _pic_used = _pic_lines(
-                        _slide_pics, _img_counter + 1, _vision_ocr)
+                        _slide_pics, _img_counter + 1, _vision_ocr,
+                        _vision_ocr_many)
                     _img_counter += _pic_used
                     lines.extend(_pic_out)
         except Exception:

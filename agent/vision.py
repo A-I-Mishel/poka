@@ -78,6 +78,84 @@ def vision_ocr_bytes(blob: bytes, budget: Optional[RequestBudget] = None) -> str
     return ""
 
 
+def vision_ocr_many(blobs: Sequence[bytes], budget: Optional[RequestBudget] = None) -> List[str]:
+    """Transcribe several image blobs in ONE vision-tier cascade call.
+
+    Batch counterpart of vision_ocr_bytes for slide-grouped pictures: one
+    model call carries every image instead of one cascade per picture.
+    Returns per-blob texts aligned with the input ("" for blobs that
+    fail encoding or come back empty — callers fall back to per-picture
+    vision_ocr_bytes for those). Same conventions: tier iteration in
+    cascade order, no cooling for text use, never raises (all-"" on
+    failure), budgeting delegated to _invoke_bounded.
+    """
+    try:
+        items = list(blobs or [])
+        if not items:
+            return []
+        urls: List[Optional[str]] = []
+        for blob in items:
+            try:
+                url, _err = encode_image_bytes(blob)
+                urls.append(url)
+            except Exception:
+                urls.append(None)
+        live = [i for i, url in enumerate(urls) if url]
+        if not live:
+            return [""] * len(items)
+        prompt = (
+            vision_trust_preamble()
+            + f"\n\nYou are given {len(live)} images. For EACH image i "
+            "(1-based, in order), output a section starting with exactly "
+            "'IMAGE i' on its own line, then transcribe ALL visible text "
+            "in that image verbatim below it. Return only the sections, "
+            "no commentary."
+        )
+        parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for i in live:
+            parts.append({"type": "image_url", "image_url": {"url": urls[i]}})
+        payload = parts  # type: ignore[assignment]
+        for name, getter in _usable_tiers(None, None):
+            if not vision_supported_tier(name):
+                continue
+            try:
+                llm_instance = getter()
+            except Exception:
+                logger.debug("tier=%s batch vision getter failed; trying next",
+                             name, exc_info=True)
+                continue
+            if llm_instance is None:
+                continue
+            try:
+                response = agent._invoke_bounded(
+                    llm_instance, [HumanMessage(content=payload)], budget=budget)
+                text = strip_internal_reasoning(_as_text(response.content).strip())
+                if not text:
+                    continue
+                import re as _re
+
+                sections = _re.split(r"(?im)^image\s*(\d+)\s*$", text)
+                blocks: Dict[int, str] = {}
+                try:
+                    for j in range(1, len(sections) - 1, 2):
+                        blocks[int(sections[j])] = sections[j + 1]
+                except (TypeError, ValueError):
+                    logger.debug("tier=%s batch section split failed", name,
+                                 exc_info=True)
+                out = [""] * len(items)
+                for k, i in enumerate(live):
+                    out[i] = str(blocks.get(k + 1, "") or "").strip()
+                logger.info("tier=%s batch vision-ocr ok (%d/%d images)",
+                            name, sum(1 for t in out if t), len(items))
+                return out
+            except Exception as e:
+                logger.info("tier=%s batch vision failed: %s", name, e)
+                continue
+    except Exception:
+        return [""] * len(list(blobs or []))
+    return [""] * len(list(blobs or []))
+
+
 def _try_vision_answer(
     request_id: str,
     user_input: str,

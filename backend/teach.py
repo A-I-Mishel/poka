@@ -533,11 +533,22 @@ def _extract_pptx_blocks(path: Any, ext: str) -> List[Tuple[int, str]]:
                     return str(vision_ocr_bytes(_blob) or "")
                 except Exception:
                     return ""
+
+            def _vision_ocr_many(_blobs: Any) -> Any:
+                try:
+                    from agent.vision import vision_ocr_many
+
+                    return vision_ocr_many(list(_blobs or []))
+                except Exception:
+                    return [""] * len(list(_blobs or []))
         except Exception:
             _pic_lines = None  # type: ignore[assignment]
 
             def _vision_ocr(_blob: Any) -> str:
                 return ""
+
+            def _vision_ocr_many(_blobs: Any) -> Any:
+                return [""] * len(list(_blobs or []))
         _img_counter = [0]
         for i, slide in enumerate(getattr(prs, "slides", []) or [], start=1):
             lines: List[str] = []
@@ -583,14 +594,16 @@ def _extract_pptx_blocks(path: Any, ext: str) -> List[Tuple[int, str]]:
                 shapes = []
             _walk_shapes(shapes, lines)
             # Embedded pictures for this slide (bounded deck-wide above):
-            # alt text first, OCR ladder when absent. Lines join the slide
-            # block so windows, numbering, and citations keep working.
+            # alt text first, OCR ladder when absent (batched vision rung
+            # with per-picture fallback). Lines join the slide block so
+            # windows, numbering, and citations keep working.
             try:
                 if _pic_lines is not None:
                     _slide_pics = pics_by_slide.get(i, [])
                     if _slide_pics:
                         _pic_out, _pic_used = _pic_lines(
-                            _slide_pics, _img_counter[0] + 1, _vision_ocr)
+                            _slide_pics, _img_counter[0] + 1, _vision_ocr,
+                            _vision_ocr_many)
                         _img_counter[0] += _pic_used
                         lines.extend(_pic_out)
             except Exception:
