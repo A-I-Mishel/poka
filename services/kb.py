@@ -242,6 +242,7 @@ def _pptx_text(blob: bytes) -> tuple:
 
         prs = Presentation(_io.BytesIO(blob))
         try:
+            from services.pptx_images import count_skipped_pictures as _kb_count_skipped
             from services.pptx_images import iter_deck_pictures
             from services.pptx_images import picture_lines_for_slide as _pic_lines
 
@@ -276,6 +277,15 @@ def _pptx_text(blob: bytes) -> tuple:
                         parts.extend(_pic_out)
             except Exception:
                 logger.debug("kb pptx picture lines failed; skipping", exc_info=True)
+        try:
+            _kb_skipped = int(_kb_count_skipped(prs) or 0)
+        except Exception:
+            _kb_skipped = 0
+        if _kb_skipped > 0:
+            parts.append(
+                f"[Note: {_kb_skipped} more image(s) in this file were skipped "
+                "(image cap).]"
+            )
         text = "\n".join(parts).strip()
         return (text, "") if text else ("", "empty")
     except Exception:

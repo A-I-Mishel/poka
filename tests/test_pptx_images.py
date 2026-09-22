@@ -152,6 +152,40 @@ def test_iter_deck_pictures_bounds_and_order():
     assert all(g[2] for g in got)  # blobs present
 
 
+def test_count_skipped_pictures_mirrors_caps():
+    from pptx import Presentation
+
+    from services.pptx_images import count_skipped_pictures, iter_deck_pictures
+    data = _deck([
+        (["S1"], ["A1", "A2", "A3"]),
+        (["S2"], ["B1", "B2"]),
+        (["S3"], ["C1", "C2"]),
+        (["S4"], ["D1", "D2"]),
+    ])
+    prs = Presentation(io.BytesIO(data))
+    # 9 pictures total, 6 kept -> 3 skipped (A3 + both of slide 4).
+    assert count_skipped_pictures(prs) == 3
+    assert len(list(iter_deck_pictures(prs))) == 6
+
+
+def test_count_skipped_zero_when_within_caps():
+    from pptx import Presentation
+
+    from services.pptx_images import count_skipped_pictures
+    data = _deck([
+        (["S1"], ["A1"]),
+        (["S2"], [None]),
+    ])
+    assert count_skipped_pictures(Presentation(io.BytesIO(data))) == 0
+
+
+def test_count_skipped_never_raises():
+    from services.pptx_images import count_skipped_pictures
+
+    assert count_skipped_pictures(None) == 0
+    assert count_skipped_pictures(object()) == 0
+
+
 def test_teaching_blocks_include_pictures():
     from backend.teach import _extract_pptx_blocks
     import tempfile
@@ -187,6 +221,50 @@ def test_kb_reader_includes_pictures_no_vision():
     text, reason = kb_mod._pptx_text(_make_deck_file())
     assert reason == ""
     assert "[image 1: Osmosis process diagram]" in text
+
+
+def test_overflow_deck_announces_skipped_pictures():
+    from tools.document_tool import _read_pptx_file
+    from services import kb as kb_mod
+    import tempfile
+
+    data = _deck([
+        (["S1"], ["A1", "A2", "A3"]),
+        (["S2"], ["B1", "B2"]),
+        (["S3"], ["C1", "C2"]),
+        (["S4"], ["D1", "D2"]),
+    ])
+    with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as fh:
+        fh.write(data)
+        path = fh.name
+    try:
+        out = _read_pptx_file(path)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    assert "3 more image(s)" in out and "image cap" in out
+    text, reason = kb_mod._pptx_text(data)
+    assert reason == ""
+    assert "3 more image(s)" in text and "image cap" in text
+
+
+def test_within_cap_decks_carry_no_note():
+    from tools.document_tool import _read_pptx_file
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as fh:
+        fh.write(_make_deck_file())
+        path = fh.name
+    try:
+        out = _read_pptx_file(path)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    assert "more image(s)" not in out
 
 
 def _make_deck_file():

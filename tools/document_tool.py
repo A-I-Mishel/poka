@@ -661,6 +661,7 @@ def _read_pptx_file(path) -> str:
 
     prs = Presentation(str(path))
     try:
+        from services.pptx_images import count_skipped_pictures as _count_skipped
         from services.pptx_images import iter_deck_pictures
         from services.pptx_images import picture_lines_for_slide as _pic_lines
 
@@ -679,6 +680,9 @@ def _read_pptx_file(path) -> str:
     except Exception:
         logger.debug("pptx picture setup failed", exc_info=True)
         _pics_by_slide, _pic_lines = {}, None
+
+        def _count_skipped(prs):
+            return 0
 
         def _vision_ocr(_blob):
             return ""
@@ -713,6 +717,15 @@ def _read_pptx_file(path) -> str:
             logger.debug("pptx picture lines failed; skipping", exc_info=True)
         if lines:
             parts.append(f"[slide {i}]\n" + "\n".join(lines))
+    try:
+        _skipped = int(_count_skipped(prs) or 0)
+    except Exception:
+        _skipped = 0
+    if _skipped > 0:
+        parts.append(
+            f"[Note: {_skipped} more image(s) in this file were skipped "
+            "(image cap); content above covers what was read.]"
+        )
     return "\n".join(parts)
 
 

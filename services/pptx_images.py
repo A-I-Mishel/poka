@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -104,14 +104,13 @@ def picture_blob(shape: Any) -> Optional[bytes]:
         return None
 
 
-def iter_deck_pictures(prs: Any) -> Iterator[Tuple[int, str, Optional[bytes]]]:
-    """Yield (slide_num, alt_text, blob) in slide order, bounded (never raises).
+def _iter_picture_shapes(prs: Any) -> Iterator[Tuple[int, Any]]:
+    """Yield (slide_num, shape) for every shape in slide order (never raises).
 
-    At most MAX_PPTX_IMAGES_PER_SLIDE pictures per slide and
-    MAX_PPTX_IMAGES_PER_DECK per deck. Alt text may be "" (caller runs
-    the OCR ladder); blob may be None (alt-text-only picture entry).
+    Unbounded shape walk (groups recursed); callers apply picture-type
+    filtering and caps. Blob bytes are never touched here, so counting
+    passes stay cheap.
     """
-    taken = 0
     try:
         slides = list(getattr(prs, "slides", []) or [])
     except Exception:
@@ -137,17 +136,30 @@ def iter_deck_pictures(prs: Any) -> Iterator[Tuple[int, str, Optional[bytes]]]:
                     continue
 
     for num, slide in enumerate(slides, start=1):
-        if taken >= MAX_PPTX_IMAGES_PER_DECK:
-            return
         try:
             shapes = _walk(getattr(slide, "shapes", None))
         except Exception:
             logger.debug("slide shapes walk failed", exc_info=True)
             continue
-        per_slide = 0
         for shape in shapes:
-            if taken >= MAX_PPTX_IMAGES_PER_DECK or per_slide >= MAX_PPTX_IMAGES_PER_SLIDE:
-                break
+            yield num, shape
+
+
+def iter_deck_pictures(prs: Any) -> Iterator[Tuple[int, str, Optional[bytes]]]:
+    """Yield (slide_num, alt_text, blob) in slide order, bounded (never raises).
+
+    At most MAX_PPTX_IMAGES_PER_SLIDE pictures per slide and
+    MAX_PPTX_IMAGES_PER_DECK per deck. Alt text may be "" (caller runs
+    the OCR ladder); blob may be None (alt-text-only picture entry).
+    """
+    taken = 0
+    per_slide: Dict[int, int] = {}
+    try:
+        for num, shape in _iter_picture_shapes(prs):
+            if taken >= MAX_PPTX_IMAGES_PER_DECK:
+                return
+            if per_slide.get(num, 0) >= MAX_PPTX_IMAGES_PER_SLIDE:
+                continue
             try:
                 if not is_picture_shape(shape):
                     continue
@@ -160,7 +172,41 @@ def iter_deck_pictures(prs: Any) -> Iterator[Tuple[int, str, Optional[bytes]]]:
                 logger.debug("deck picture yield failed", exc_info=True)
                 continue
             taken += 1
-            per_slide += 1
+            per_slide[num] = per_slide.get(num, 0) + 1
+    except Exception:
+        logger.debug("deck picture iteration failed", exc_info=True)
+        return
+
+
+def count_skipped_pictures(prs: Any) -> int:
+    """Pictures dropped by the deck/slide caps (never raises).
+
+    Same walk and cap order as iter_deck_pictures, without touching blob
+    bytes — callers report the count so capped diagrams are announced,
+    never silently missing. 0 when nothing was cut (or on any failure).
+    """
+    try:
+        total = 0
+        kept = 0
+        per_slide: Dict[int, int] = {}
+        for num, shape in _iter_picture_shapes(prs):
+            try:
+                if not is_picture_shape(shape):
+                    continue
+            except Exception:
+                logger.debug("skipped-picture shape check failed", exc_info=True)
+                continue
+            total += 1
+            if kept >= MAX_PPTX_IMAGES_PER_DECK:
+                continue
+            if per_slide.get(num, 0) >= MAX_PPTX_IMAGES_PER_SLIDE:
+                continue
+            kept += 1
+            per_slide[num] = per_slide.get(num, 0) + 1
+        return max(0, total - kept)
+    except Exception:
+        logger.debug("skipped picture count failed", exc_info=True)
+        return 0
 
 
 def ocr_picture_on_device(blob: Optional[bytes]) -> str:

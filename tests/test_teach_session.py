@@ -730,6 +730,43 @@ def test_scope_fence_in_session_output(tmp_path, monkeypatch):
     assert "Scope fence" in send and "ONLY slides 1-3" in send
 
 
+def _picture_deck_bytes():
+    """9-picture deck (over the 6/deck cap) for skipped-image notes."""
+    import io as _io
+
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    for s in range(4):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        tx = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(5), Inches(1))
+        tx.text_frame.text = f"Slide {s + 1} text"
+        # Alt text on every picture: the ladder stops at the free rung,
+        # so this test never spends vision quota (stubbed suite rule).
+        for p in range(3 if s == 0 else 2):
+            buf = _io.BytesIO()
+            Image.new("RGB", (16, 16), "white").save(buf, format="PNG")
+            buf.seek(0)
+            pic = slide.shapes.add_picture(buf, Inches(0.5), Inches(3), Inches(1), Inches(1))
+            pic._element.nvPicPr.cNvPr.set("descr", f"Diagram S{s + 1}P{p + 1}")
+    out = _io.BytesIO()
+    prs.save(out)
+    return out.getvalue()
+
+
+def test_window_hint_announces_skipped_pictures(tmp_path, monkeypatch):
+    from backend.chatflow import _teaching_window_hint
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-skip")
+    m1 = ctx.file_store.save_upload(_picture_deck_bytes(), "Crowded.pptx")
+    hint, start, end, total, status = _teaching_window_hint(
+        ctx, {"id": m1.id, "kind": "document", "name": "Crowded.pptx"}, 0)
+    assert status == "OK"
+    assert "more image(s)" in hint and "image cap" in hint
+
+
 def test_subject_templates_in_prompt():
     from agent.prompts import SYSTEM_PROMPT
 
