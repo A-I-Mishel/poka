@@ -245,14 +245,60 @@ def _is_admin_block(text: str) -> bool:
         return False
 
 
+def _teaching_flag_in_recent(history: List[Dict[str, Any]], window: int = 3) -> Optional[Dict[str, Any]]:
+    """Explicit teaching cursor from assistant metadata (never raises).
+
+    Returns the most recent {"active": True, "file": str, "cursor": int}
+    within the last `window` messages, else None. Old chats without the
+    flag fall back to header scan in callers below.
+    """
+    try:
+        recent = (history or [])[-max(1, int(window)):]
+        for msg in reversed(recent):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            _t = msg.get("teaching")
+            if isinstance(_t, dict) and _t.get("active") is True:
+                try:
+                    _cursor = max(0, int(_t.get("cursor", 0)))
+                except Exception:
+                    _cursor = 0
+                return {
+                    "file": str(_t.get("file", "") or "")[:120],
+                    "cursor": _cursor,
+                }
+        return None
+    except Exception:
+        return None
+
+
+def _has_teaching_header_in_recent(history: List[Dict[str, Any]], window: int = 10) -> bool:
+    """Case-normalized 📘 FILE: header scan (never raises)."""
+    try:
+        return any(
+            isinstance(m, dict) and "📘 file:" in str(m.get("content", "") or "").lower()
+            for m in (history or [])[-max(1, int(window)):]
+        )
+    except Exception:
+        return False
+
+
 def _last_teaching_state(history: List[Dict[str, Any]]) -> Tuple[Optional[str], int]:
     """Return (filename, last_end_slide) from the most recent teaching header.
 
-    Stateless cursor: parses the last assistant source header (canonical
-    two-line form or the legacy one-line form). Returns (None, 0) when no
-    teaching has happened yet. Never raises.
+    Prefers the explicit `teaching` cursor in assistant metadata; falls
+    back to parsing the last assistant source header (canonical two-line
+    form or legacy one-line form) for old chats. Returns (None, 0) when
+    no teaching has happened yet. Never raises.
     """
     try:
+        # Explicit flag first — session boundary, not header heuristic.
+        try:
+            _flag = _teaching_flag_in_recent(history, window=10)
+            if _flag is not None:
+                return (_flag.get("file") or None, max(0, int(_flag.get("cursor", 0))))
+        except Exception:
+            logger.debug("explicit teaching flag read failed; header fallback", exc_info=True)
         for msg in reversed(history or []):
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
@@ -344,11 +390,10 @@ def _is_pace_feedback(text: str, history: List[Dict[str, Any]]) -> bool:
         t = str(text or "")
         if not t or not t.strip() or len(t.strip()) > 200:
             return False
+        # Explicit flag in last 3 wins; header scan (normalized) for old chats.
         try:
-            has_teaching = any(
-                isinstance(m, dict) and "📘 FILE:" in str(m.get("content", "") or "")
-                for m in (history or [])[-10:]
-            )
+            _flag = _teaching_flag_in_recent(history, window=3)
+            has_teaching = _flag is not None or _has_teaching_header_in_recent(history, window=10)
         except Exception:
             has_teaching = False
         if not has_teaching:
@@ -368,17 +413,30 @@ def _is_pace_feedback(text: str, history: List[Dict[str, Any]]) -> bool:
 
 
 def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
-    """True for "Next/continue" follow-ups AND Recall answers in a session."""
+    """True for "Next/continue" follow-ups AND Recall answers in a session.
+
+    Requires an explicit `teaching.active` flag in the last 3 messages
+    (flag+recency). Old chats without flags fall back to a normalized
+    header scan in the last 3. This prevents "teach A → unrelated Q →
+    continue" incorrectly resuming A. Never raises.
+    """
     try:
         t = str(text or "")
         if not t:
             return False
-        # Active session requires a prior teaching header in recent history.
+        # Active session requires explicit flag in last 3; old chats use
+        # normalized header scan in last 3 (not last 10) for same recency.
         try:
-            has_teaching = any(
-                isinstance(m, dict) and "📘 FILE:" in str(m.get("content", "") or "")
-                for m in (history or [])[-10:]
-            )
+            _flag = _teaching_flag_in_recent(history, window=3)
+            if _flag is not None:
+                has_teaching = True
+            else:
+                # No flags anywhere in full history = old chat → header fallback.
+                _any_flag = _teaching_flag_in_recent(history, window=1000)
+                if _any_flag is not None:
+                    has_teaching = False
+                else:
+                    has_teaching = _has_teaching_header_in_recent(history, window=3)
         except Exception:
             has_teaching = False
         if not has_teaching:

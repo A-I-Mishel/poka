@@ -1055,13 +1055,17 @@ def answer_with_fallback(
         # No weak lanes remain (removed Sep 2026): only cascade-level
         # fallback (degraded_tooled above) can mark the answer.
         latency_ms = int((time.time() - started_at) * 1000)
+        try:
+            from services.limits import CONTEXT_MAX_TOKENS as _CTX_MAX
+        except Exception:
+            _CTX_MAX = 24000
         logger.info(
             "req=%s user=%s task=%s tier=%s ok llm=%d tools=%d search=%d "
-            "reflect=%d plan=%d ext=%d timeouts=%d fallbacks=%d latency_ms=%d",
+            "reflect=%d plan=%d ext=%d timeouts=%d fallbacks=%d latency_ms=%d ctx_max=%d",
             request_id, _hash_user(user_id), task_type, active_tier, budget.llm_calls,
             budget.tool_calls, budget.search_calls, budget.reflect_calls,
             budget.plan_calls, budget.external_tokens, budget.timeouts,
-            max(0, len(answer_attempts) - 1), latency_ms,
+            max(0, len(answer_attempts) - 1), latency_ms, int(_CTX_MAX),
         )
         obs_event(
             "request.end", status="ok", request_id=request_id,

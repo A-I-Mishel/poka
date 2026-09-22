@@ -118,7 +118,8 @@ def build_chat_history(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
 
 def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
                      searched: bool, deep_mode: bool, tier: str,
-                     fallback: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                     fallback: Optional[Dict[str, str]] = None,
+                     teaching: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Response metadata stored on the message (locally known facts only)."""
     meta: Dict[str, Any] = {
         "mode": "deep" if deep_mode else "fast",
@@ -129,6 +130,19 @@ def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
     if fallback:
         meta["fallback"] = {"requested": str(fallback.get("requested", "")),
                             "reason": str(fallback.get("reason", ""))}
+    # Explicit teaching session cursor — session boundary does not rely
+    # solely on 📘 FILE: header scan. Validated + capped at write time;
+    # cleaners.py whitelists the same shape on reload.
+    if isinstance(teaching, dict) and teaching.get("active") is True:
+        try:
+            _cursor = max(0, int(teaching.get("cursor", 0)))
+        except Exception:
+            _cursor = 0
+        meta["teaching"] = {
+            "active": True,
+            "file": str(teaching.get("file", "") or "")[:120],
+            "cursor": _cursor,
+        }
     names = [t for t in tools_used if isinstance(t, str) and t]
     meta["search_executed"] = "web_search" in names
     if names:

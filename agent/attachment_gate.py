@@ -266,26 +266,52 @@ def decide(
                     "reason": "new-intent"}
 
         # 5b. Past-upload reference ("do you have info on the paper i
-        # uploaded"): no type nouns fired above, but the user points at
-        # history. Single available modality reuses its most recent file;
-        # both modalities clarify (fail-closed, like ambiguous-multi).
+        # uploaded"): requires a modality noun alongside the past-upload
+        # signal ("that PDF I uploaded", "that image I uploaded"). Vague
+        # "that thing I uploaded" without a noun stays default-deny so a
+        # stale file from 5 turns ago is not auto-activated. Single
+        # available modality reuses its most recent file; both modalities
+        # clarify (fail-closed, like ambiguous-multi).
+        # Note: bare "paper" counts as a doc noun ONLY here (past-upload
+        # disambiguates essay "write a paper" vs file "paper I uploaded";
+        # see test_paper_reuse.py). Typo "quesylon paper" still hits via
+        # the "paper" substring.
         if (imgs or dcs) and _signals(t, PAST_UPLOAD_SIGNALS):
-            if imgs and not dcs:
+            _has_v = _signals(t, VISION_NOUNS) or _signals(t, VISION_EXPLICIT)
+            _has_d = _signals(t, DOC_NOUNS) or _signals(t, DOC_EXPLICIT) or _SLIDE_RE.search(t) is not None or _PAGE_RE.search(t) is not None or ("paper" in t)
+            if not (_has_v or _has_d):
+                pass  # fall through to continuation/ambiguous/default-deny
+            elif imgs and not dcs:
                 return {"use_images": list(imgs)[-1:], "use_docs": [],
                         "clarify": None, "reason": "past-upload-image"}
-            if dcs and not imgs:
+            elif dcs and not imgs:
                 return {"use_images": [], "use_docs": list(dcs)[-1:],
                         "clarify": None, "reason": "past-upload-doc"}
-            return {"use_images": [], "use_docs": [],
-                    "clarify": CLARIFY_TEXT, "reason": "past-upload-clarify"}
+            else:
+                return {"use_images": [], "use_docs": [],
+                        "clarify": CLARIFY_TEXT, "reason": "past-upload-clarify"}
 
         # 5c. Short continuation reuses most-recent file so "continue" /
         # "next" after a long doc answer keeps teaching instead of
-        # restarting blind. Length-guarded: long new questions that
-        # happen to contain "next" stay default-deny.
+        # restarting blind. Length-guarded + noun-guarded: bare "continue"
+        # without a file noun is handled by the teaching session flag
+        # (teach.py) and stays default-deny here to avoid stale activation.
+        # Long new questions that happen to contain "next" stay deny.
         if len(t) <= 80 and (imgs or dcs) and _signals(t, CONTINUATION_SIGNALS):
-            return {"use_images": list(imgs)[-1:], "use_docs": list(dcs)[-1:],
-                    "clarify": None, "reason": "continuation"}
+            _has_vc = _signals(t, VISION_NOUNS) or _signals(t, VISION_EXPLICIT)
+            _has_dc = _signals(t, DOC_NOUNS) or _signals(t, DOC_EXPLICIT) or _SLIDE_RE.search(t) is not None or _PAGE_RE.search(t) is not None
+            if _has_vc or _has_dc:
+                # Only return the side whose noun fired, not both.
+                if _has_vc and not _has_dc and imgs:
+                    return {"use_images": list(imgs)[-1:], "use_docs": [],
+                            "clarify": None, "reason": "continuation"}
+                if _has_dc and not _has_vc and dcs:
+                    return {"use_images": [], "use_docs": list(dcs)[-1:],
+                            "clarify": None, "reason": "continuation"}
+                return {"use_images": list(imgs)[-1:], "use_docs": list(dcs)[-1:],
+                        "clarify": None, "reason": "continuation"}
+            # No noun → fall through to ambiguous/default-deny; teaching
+            # continuation is owned by teach.py flag+recency, not the gate.
 
         # 6. Ambiguous pronoun reference.
         ambiguous = _signals(t, AMBIGUOUS_PHRASES) or (

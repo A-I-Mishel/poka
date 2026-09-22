@@ -6,6 +6,7 @@ coerces) so one malformed entry cannot sink a whole registry.
 
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+import logging
 
 from services.storage.ids import (
     ATTACH_KINDS,
@@ -23,6 +24,8 @@ from services.storage.ids import (
     _SPEC_TOOLS,
     is_valid_id,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _clean_attachment(value: Any) -> Optional[Dict[str, str]]:
@@ -222,6 +225,25 @@ def clean_messages(messages: Any) -> List[Dict[str, Any]]:
                         pa.append({"id": str(a["id"])[:64], "tool": str(a["tool"])[:64], "summary": str(a.get("summary", ""))[:120]})
                 if pa:
                     entry["pending_approvals"] = pa
+            # Teaching session cursor: explicit session flag so continuation
+            # does not rely solely on 📘 FILE: header scan. Strict types,
+            # capped lengths — mirrors pending_approvals hygiene above.
+            try:
+                _t = m.get("teaching")
+                if isinstance(_t, dict) and _t.get("active") is True:
+                    _tfile = str(_t.get("file", "") or "")[:120]
+                    _cursor = _t.get("cursor", 0)
+                    try:
+                        _cursor = max(0, int(_cursor))
+                    except Exception:
+                        _cursor = 0
+                    entry["teaching"] = {
+                        "active": True,
+                        "file": _tfile,
+                        "cursor": _cursor,
+                    }
+            except Exception:
+                logger.debug("teaching cursor clean failed; dropping flag", exc_info=True)
             cleaned.append(entry)
     return cleaned[-MAX_MSGS_PER_CHAT:]
 

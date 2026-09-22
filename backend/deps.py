@@ -130,6 +130,14 @@ def invalidate_store_caches(user_id: str) -> None:
         for key in list(_file_store_cache.keys()):
             if key == user_id or key.startswith(prefix):
                 _file_store_cache.pop(key, None)
+    # Upload-map is keyed f"{user_id}:{root}" — clear it here (outside any
+    # registry path_lock; lazy import avoids services→backend cycle).
+    # Kept outside the store lock: map has its own lock, no inversion.
+    try:
+        from backend.attachments import clear_upload_map_cache as _clear_map
+        _clear_map(user_id)
+    except Exception:
+        logger.debug("upload-map cache clear failed", exc_info=True)
 
 
 def clear_all_store_caches() -> None:

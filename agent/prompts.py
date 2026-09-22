@@ -708,10 +708,23 @@ def _clean_content_blocks(content: Any) -> Any:
                 btype = str(block.get("type", "") or "").lower()
                 if btype in ("text", "input_text", "output_text"):
                     if isinstance(block.get("text"), str):
-                        kept.append(block)
+                        # Allowlist-strip: smuggled signature/encrypted keys
+                        # in a typed text block must not replay (gap: whole
+                        # dict was kept). Keep only {type, text}.
+                        kept.append({"type": "text", "text": block["text"]})
                     continue
                 if btype in ("image_url", "image"):
-                    kept.append(block)
+                    # Minimal rebuild: drop any smuggled reasoning keys.
+                    try:
+                        if btype == "image_url" and isinstance(block.get("image_url"), dict):
+                            kept.append({"type": "image_url", "image_url": dict(block["image_url"])})
+                        elif "image_url" in block:
+                            kept.append({"type": block.get("type", "image_url"), "image_url": block["image_url"]})
+                        else:
+                            kept.append({"type": block.get("type", "image"), "text": str(block.get("text", ""))} if isinstance(block.get("text"), str) else {"type": block.get("type", "image")})
+                    except Exception:
+                        logger.debug("image block rebuild failed; skipping block", exc_info=True)
+                        continue
                     continue
                 # Bare {"text": ...} without a type: keep text only.
                 if (not btype) and isinstance(block.get("text"), str):

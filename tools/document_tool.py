@@ -259,8 +259,39 @@ def _read_zip_file(path) -> str:
             if size > MAX_ZIP_FILE_BYTES:
                 skipped.append(f"{name} (too large)")
                 continue
+            # Compression-ratio guard: header file_size is spoofable, so
+            # reject absurd ratios before decompressing (bomb defense).
             try:
-                blob = z.read(info.filename)
+                _csize = max(1, int(getattr(info, "compress_size", 1) or 1))
+                if size // _csize > 100:
+                    skipped.append(f"{name} (suspicious compression ratio)")
+                    continue
+            except Exception:
+                logger.debug("compression-ratio probe failed; capped stream read next", exc_info=True)
+            try:
+                # Stream capped at MAX_ZIP_FILE_BYTES+1 via z.open(info):
+                # uses the validated ZipInfo (not raw filename re-resolve
+                # TOCTOU), never materializes a spoofed 50MB member fully.
+                from services.limits import MAX_ZIP_FILE_BYTES as _MAXM
+                _cap = int(_MAXM) + 1
+                _buf = bytearray()
+                try:
+                    with z.open(info, "r") as _f:
+                        while len(_buf) <= _cap:
+                            _chunk = _f.read(65536)
+                            if not _chunk:
+                                break
+                            _buf += _chunk
+                            if len(_buf) > _cap:
+                                break
+                except RuntimeError:
+                    raise ValueError("archive is password-protected and cannot be read.")
+                if len(_buf) > int(_MAXM):
+                    skipped.append(f"{name} (too large)")
+                    continue
+                blob = bytes(_buf)
+            except ValueError:
+                raise
             except RuntimeError:
                 raise ValueError("archive is password-protected and cannot be read.")
             except Exception:

@@ -34,7 +34,7 @@ from agent.prompts import _as_text, sanitize_messages_for_provider
 from services.limits import FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS, FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
 from services.obs import event as obs_event
 
-from agent.budget import RequestBudget
+from agent.budget import BudgetExhausted, RequestBudget
 
 _BOUNDED_MAX_WORKERS: int = 8
 # Model calls are I/O-bound (network waits) and far more numerous than
@@ -361,6 +361,12 @@ def _invoke_bounded(
     except Exception:
         logger.debug("provider history sanitize failed; sending as-is", exc_info=True)
     if budget is not None:
+        try:
+            budget.check_context(messages)
+        except BudgetExhausted:
+            raise
+        except Exception:
+            logger.debug("context budget check failed; proceeding", exc_info=True)
         budget.count_llm()
     provider = getattr(llm_instance, "model", type(llm_instance).__name__)
     first_token_timeout = _first_token_timeout_for_tier(tier_name) if tier_name else _first_token_timeout()

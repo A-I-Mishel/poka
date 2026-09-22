@@ -5,6 +5,7 @@ maps, and recent-history scans for follow-up turns. No teaching
 logic and no turn orchestration (see backend.teach, backend.flow).
 """
 
+import logging
 import threading
 from typing import (Any, Dict, List, Tuple)
 from services.files import FileValidationError
@@ -12,6 +13,8 @@ from services import kb as kb_svc
 from services.limits import (MAX_ATTACHMENTS_PER_MESSAGE, MAX_DISPLAY_NAME_CHARS, MAX_DOCUMENT_CHARS, MAX_IMAGE_ATTACHMENTS)
 from services.storage import StorageError
 from backend.deps import UserContext
+
+logger = logging.getLogger(__name__)
 
 def _escape_hint(text: str) -> str:
     """Escape user-controlled text for safe inclusion in tool hints."""
@@ -144,6 +147,27 @@ _UPLOAD_MAP_CACHE: Dict[str, Tuple[float, float, Dict[str, Any]]] = {}
 _UPLOAD_MAP_LOCK = threading.Lock()
 
 
+def _upload_map_cache_key(user_id: str) -> str:
+    """Cache key including data root (never raises)."""
+    try:
+        from services.storage import data_root
+        return f"{user_id}:{data_root()}"
+    except Exception:
+        return str(user_id)
+
+
+def clear_upload_map_cache(user_id: str) -> None:
+    """Invalidate upload-map entries for a user across data roots (never raises)."""
+    try:
+        prefix = f"{user_id}:"
+        with _UPLOAD_MAP_LOCK:
+            for key in list(_UPLOAD_MAP_CACHE.keys()):
+                if key == user_id or key.startswith(prefix):
+                    _UPLOAD_MAP_CACHE.pop(key, None)
+    except Exception:
+        logger.debug("upload-map cache clear failed", exc_info=True)
+
+
 def _upload_map(ctx: UserContext) -> Dict[str, Any]:
     """One registry read for the whole turn (vs per-attachment get_upload)."""
     try:
@@ -153,7 +177,7 @@ def _upload_map(ctx: UserContext) -> Dict[str, Any]:
         except OSError:
             mtime = 0.0
         now = __import__("time").time()
-        key = str(ctx.user_id)
+        key = _upload_map_cache_key(str(ctx.user_id))
         with _UPLOAD_MAP_LOCK:
             hit = _UPLOAD_MAP_CACHE.get(key)
             if hit is not None and hit[0] == mtime and (now - hit[1]) < 2.0:

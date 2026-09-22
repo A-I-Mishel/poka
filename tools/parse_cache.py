@@ -18,7 +18,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ParseCache:
-    """Thread-safe bounded FIFO cache with TTL, keyed by upload identity."""
+    """Thread-safe bounded LRU cache with TTL, keyed by upload identity."""
 
     def __init__(self, maxsize: int, ttl: float = 600.0):
         self._max = max(1, int(maxsize))
@@ -56,6 +56,15 @@ class ParseCache:
                 self._data.pop(key, None)
                 self._when.pop(key, None)
                 return None
+            # LRU promotion: hot second-read-in-chat entries survive;
+            # plain FIFO evicted them under interleaved reads.
+            try:
+                val = self._data.pop(key)
+                when = self._when.pop(key, _time.time())
+                self._data[key] = val
+                self._when[key] = when
+            except Exception:
+                logger.debug("parse-cache LRU promotion failed", exc_info=True)
             val = self._data.get(key)
             try:
                 return _copy.deepcopy(val)

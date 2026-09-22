@@ -29,16 +29,23 @@ Persistence lives on UserStore (services.storage, mirroring briefs);
 execution lives in agent.workflows (needs the agent tool funnel).
 """
 
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 # {{input}} or {{steps.N.output}}, tolerant of inner whitespace.
+logger = logging.getLogger(__name__)
 _TEMPLATE_RE = re.compile(r"\{\{\s*(input|steps\.(\d+)\.output)\s*\}\}")
 # Any {{...}} at all (used to reject unknown shapes).
 _ANY_TEMPLATE_RE = re.compile(r"\{\{.*?\}\}")
 
 # Tools that may never appear in a pipeline (see module docstring).
 BLOCKED_PIPELINE_TOOLS = frozenset({"send_gmail"})
+
+# Table identifiers: single SQLite table, no schema qualification or
+# quoting — single file per user, ATTACH rejected at exec. Rejects
+# `db.table`, `"table"`, `table; DROP`, etc. with Unsafe table name.
+_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 # Args that must be static: no {{steps.N.output}} templates. These are
 # code, statements, identifiers, or tool routing — templating untrusted
@@ -195,8 +202,55 @@ def _validate_step(
                     "(no {{steps.N.output}} templates in code, SQL, "
                     "identifiers, or tool routing)."
                 )
+            # Table identifiers are always allowlisted — even fully static
+            # values must match SQLite identifier syntax (no db.table,
+            # quoting, or separators). Templated tables are validated again
+            # after render in render_args (untrusted input could arrive via
+            # {{input}} at run time).
+            if key == "table" and isinstance(value, str):
+                _v = str(value).strip()
+                if _v and not ("{{" in _v and "}}" in _v) and not _TABLE_RE.match(_v):
+                    raise ValueError(
+                        f"Workflow {where}: arg 'table' has Unsafe table name."
+                    )
         clean_args[key] = value
     return {"tool": tool, "args": clean_args}
+
+
+def validate_workflow_untrusted(workflow: Dict[str, Any]) -> None:
+    """Reject {{input}} in STATIC_ARGS for untrusted/chained runs (never raises silently).
+
+    Owner-saved workflows may use {{input}} in code/sql/table (docstring
+    contract, tested in test_workflows.py). When the run-time input is
+    untrusted or chained from another step/output, call this before
+    execution to require fully static code/SQL/identifiers. Raises
+    ValueError on violation.
+    """
+    try:
+        steps = (workflow or {}).get("steps", []) if isinstance(workflow, dict) else []
+        for pos, raw in enumerate(steps or []):
+            if not isinstance(raw, dict):
+                continue
+            args = raw.get("args", {}) or {}
+            if not isinstance(args, dict):
+                continue
+            for key, value in args.items():
+                if not isinstance(value, str) or key not in STATIC_ARGS:
+                    continue
+                try:
+                    _idx, _has_input, _unknown = _template_refs(value)
+                except Exception:
+                    logger.debug("static-arg template probe failed; skipping key", exc_info=True)
+                    continue
+                if _has_input:
+                    raise ValueError(
+                        f"Workflow step {pos + 1}: arg '{key}' must be fully static "
+                        "for untrusted input (no {{input}} in code, SQL, identifiers)."
+                    )
+    except ValueError:
+        raise
+    except Exception:
+        return
 
 
 def render_args(
@@ -233,5 +287,8 @@ def render_args(
                 f"arg '{key}' exceeds {MAX_WORKFLOW_ARG_CHARS} characters "
                 "after template rendering"
             )
+        if key == "table":
+            if not _TABLE_RE.match(str(text).strip()):
+                return {}, "arg 'table' has Unsafe table name"
         rendered[key] = text
     return rendered, None

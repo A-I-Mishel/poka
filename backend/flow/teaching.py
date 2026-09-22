@@ -38,12 +38,17 @@ def _apply_teaching_session(
     except Exception:
         _explicit_request = False
     try:
-        _prior_session = any(
-            isinstance(m, dict) and "📘 FILE:" in str(m.get("content", "") or "")
-            for m in (history or [])[-10:]
-        )
+        from backend.teach import _has_teaching_header_in_recent, _teaching_flag_in_recent
+        _flag = _teaching_flag_in_recent(history, window=10)
+        _prior_session = _flag is not None or _has_teaching_header_in_recent(history, window=10)
     except Exception:
-        _prior_session = False
+        try:
+            _prior_session = any(
+                isinstance(m, dict) and "📘 file:" in str(m.get("content", "") or "").lower()
+                for m in (history or [])[-10:]
+            )
+        except Exception:
+            _prior_session = False
     vision_ids = list(image_ids or [])
     try:
         _, avail_docs = _available_for_gate(ctx, history)

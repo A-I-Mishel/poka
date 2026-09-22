@@ -7,12 +7,14 @@ exhaustion raises BudgetExhausted, which the cascade propagates without
 cooling providers (it is our limit, not theirs).
 """
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from services.limits import (
+    CONTEXT_MAX_TOKENS,
     MAX_LLM_CALLS_PER_REQUEST,
     MAX_PLANNING_CALLS,
     MAX_REFLECTION_CALLS,
@@ -25,6 +27,9 @@ from services.limits import (
 
 class BudgetExhausted(Exception):
     """Raised when a request-level budget runs out. Never marks tiers failed."""
+
+
+logger = logging.getLogger(__name__)
 
 
 class TurnCancelled(Exception):
@@ -137,3 +142,47 @@ class RequestBudget:
             self.plan_calls += 1
             if self.plan_calls > self.max_plan:
                 raise BudgetExhausted(f"Planning budget exhausted ({self.max_plan}).")
+
+    def check_context(self, messages: Any) -> None:
+        """Raise BudgetExhausted when prompt exceeds CONTEXT_MAX_TOKENS.
+
+        Shape-tolerant, never crashes: str probes, single messages,
+        dict/vision payloads and image blocks are skipped or counted as
+        text only. Probes (plain str) are exempt — they carry no history.
+        Uses services.context_budget._message_tokens + count_tokens so
+        system_text is measured dynamically instead of the static
+        CTX_SYSTEM_TOKENS=4000 estimate. Never cools tiers (our limit).
+        """
+        try:
+            if messages is None or isinstance(messages, str):
+                return
+            from langchain_core.messages import BaseMessage as _BM
+            from services.context_budget import _message_tokens as _mt
+            if isinstance(messages, _BM):
+                _msgs = [messages]
+            elif isinstance(messages, (list, tuple)):
+                _msgs = [m for m in messages if isinstance(m, _BM)]
+                if not _msgs:
+                    return
+            else:
+                return
+            try:
+                total = 0
+                for m in _msgs:
+                    try:
+                        total += int(_mt(m))
+                    except Exception:
+                        logger.debug("context token probe failed; skipping message", exc_info=True)
+                        continue
+                    if total > int(CONTEXT_MAX_TOKENS):
+                        break
+            except Exception:
+                return
+            if total > int(CONTEXT_MAX_TOKENS):
+                raise BudgetExhausted(
+                    f"Context budget exhausted ({total}>{CONTEXT_MAX_TOKENS})."
+                )
+        except BudgetExhausted:
+            raise
+        except Exception:
+            return

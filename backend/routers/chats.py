@@ -87,12 +87,13 @@ def open_chat(body: schemas.OpenChatRequest, ctx: UserContext = Depends(current_
     # has diverged from every archived chat (unsaved edit/new chat).
     if [m for m in current if isinstance(m, dict)]:
         def _content(msgs: list) -> list:
-            # Compare content only (exclude rotating approval tokens).
+            # Compare content only (exclude rotating approval tokens and
+            # volatile teaching cursor — cursor advances each turn).
             out = []
             for m in msgs:
                 if not isinstance(m, dict):
                     continue
-                d = {k: v for k, v in m.items() if k != "pending_approvals"}
+                d = {k: v for k, v in m.items() if k not in ("pending_approvals", "teaching")}
                 out.append(d)
             return out
 

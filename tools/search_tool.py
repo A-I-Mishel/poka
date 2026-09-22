@@ -123,11 +123,16 @@ def _race_search_legs(query: str, max_results: int) -> Tuple[List[Dict[str, str]
             box[key] = []
         finally:
             done[key] = True
+            try:
+                _events[key].set()
+            except Exception:
+                logger.debug("search leg %s event set failed", key, exc_info=True)
 
     try:
         import threading as _threading
         import time as _time
 
+        _events = {"lite": _threading.Event(), "wiki": _threading.Event()}
         lite_thread = _threading.Thread(
             target=_run, args=("lite", _ddg_lite_search, query, max_results))
         wiki_thread = _threading.Thread(
@@ -138,10 +143,9 @@ def _race_search_legs(query: str, max_results: int) -> Tuple[List[Dict[str, str]
         lite_thread.start()
         # Phase 1 — head start: healthy DDG answers here; Wikipedia is
         # never even called (sequential contract preserved on fast path).
-        while not done.get("lite"):
-            if _time.time() - started_at >= _DDG_HEAD_START_SECONDS:
-                break
-            _time.sleep(0.05)
+        # Event wait preserves the 0.5s head-start semantics; poll fallback
+        # retained for interpreters without precise Event timing.
+        _events["lite"].wait(timeout=max(0.0, _DDG_HEAD_START_SECONDS))
         if box.get("lite"):
             return box["lite"], []
         # Phase 2 — race: DDG slow/stalled/empty; Wikipedia runs
@@ -159,16 +163,21 @@ def _race_search_legs(query: str, max_results: int) -> Tuple[List[Dict[str, str]
                     grace_deadline = _time.time() + _DDG_PREFERENCE_GRACE_SECONDS
                 if _time.time() >= grace_deadline:
                     break
-            _time.sleep(0.05)
+            # Bounded wait: Event for prompt wakeup, sleep fallback for drift.
+            _events["lite"].wait(timeout=0.05)
+            if _time.time() - started_at > 60.0:
+                break
         if box.get("lite"):
             return box["lite"], box.get("wiki") or []
         # DDG empty/failed/slow: wait out Wikipedia (if still running)
-        # and take whatever it found.
+        # and take whatever it found. Bounded joins so a stalled leg
+        # cannot block the caller past its fetch timeouts.
         if wiki_started:
-            wiki_thread.join()
+            wiki_thread.join(timeout=10.0)
+            lite_thread.join(timeout=1.0)
         else:
             wiki_thread.start()
-            wiki_thread.join()
+            wiki_thread.join(timeout=15.0)
         return box.get("lite") or [], box.get("wiki") or []
     except Exception:
         logger.debug("search race failed; falling back sequential", exc_info=True)

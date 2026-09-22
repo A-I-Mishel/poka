@@ -79,6 +79,33 @@ def _release_inflight(key: Tuple[str, str]) -> None:
         logger.debug("inflight release failed", exc_info=True)
 
 
+def _teaching_meta_for_turn(send_text: str, output: str) -> Optional[Dict[str, Any]]:
+    """Explicit teaching cursor for the assistant message (never raises).
+
+    Parses the canonical 📘 FILE: header from the model output. Returns
+    {"active": True, "file": name, "cursor": end_slide} when teaching,
+    else None. Old chats without the flag still work via header scan
+    fallback in teach.py. Capped lengths, never raises.
+    """
+    try:
+        from backend.teach import _match_teaching_header
+        parsed = _match_teaching_header(str(output or ""))
+        if not parsed:
+            return None
+        name, _start, end = parsed
+        try:
+            _cursor = max(0, int(end))
+        except Exception:
+            _cursor = 0
+        return {
+            "active": True,
+            "file": str(name or "")[:120],
+            "cursor": _cursor,
+        }
+    except Exception:
+        return None
+
+
 def _atomic_turn(store: Any, fn: Any) -> Any:
     """Execute a turn atomically under the chat file lock.
 
@@ -185,12 +212,16 @@ def _complete_turn(ctx: UserContext, send_text: str,
     reported = result.get("fallback")
     agent_fallback = dict(reported) if isinstance(reported, dict) else None
     ui_fallback = _fallback_info(active_tier, tier) or agent_fallback
+    try:
+        _teaching_meta = _teaching_meta_for_turn(send_text, output)
+    except Exception:
+        _teaching_meta = None
     assistant_msg: Dict[str, Any] = {
         "role": "assistant",
         "content": output,
         "time": utcnow_iso(),
         **_assistant_meta(tools_used, sources, force_search, deep_mode, tier,
-                          ui_fallback),
+                          ui_fallback, _teaching_meta),
     }
     corrections = _sanitize_corrections(result)
     if corrections:
@@ -508,6 +539,17 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         if repaired:
             assistant_msg = dict(assistant_msg)
             assistant_msg["content"] = fixed
+            try:
+                _repaired_teaching = _teaching_meta_for_turn(
+                    send_text, fixed)
+                if _repaired_teaching:
+                    assistant_msg["teaching"] = _repaired_teaching
+                elif "teaching" in assistant_msg:
+                    # Repair removed header — session ended, drop flag so
+                    # stale cursor cannot resume a finished session.
+                    assistant_msg.pop("teaching", None)
+            except Exception:
+                logger.debug("repaired teaching meta rebuild failed", exc_info=True)
             # Same-turn refinement, not a second episode: the turn
             # completed but needed structural repair, so its evidence
             # counts half instead of full (one turn, one episode).
