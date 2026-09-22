@@ -26,6 +26,8 @@ from services.limits import (
     MAX_QUERY_CHARS,
     MAX_TOOL_RESULT_TOKENS,
     MAX_TOOL_ROUNDS,
+    SYNTHESIS_MIN_TIMEOUT_SECONDS,
+    SYNTHESIS_MIN_WALL_SECONDS,
     SYNTHESIS_TIMEOUT_SECONDS,
     TOOL_TIMEOUT_SECONDS,
 )
@@ -39,7 +41,7 @@ from services.tokens import count_tokens, truncate_tokens
 from tools import web_search, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool
 from tools.search_tool import extract_cited_sources
 
-from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled
+from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled, remaining_seconds
 from agent.executor import ExecutorBusyError
 from agent.cascade import (
     _record_tier_failure,
@@ -633,6 +635,28 @@ def _fit_results_to_budget(results: List[str]) -> Tuple[List[str], bool]:
         return list(results or []), False
 
 
+def _synthesis_timeout_for_wall(budget: Optional[RequestBudget]) -> Optional[float]:
+    """Synthesis timeout scaled to the remaining request wall (never raises).
+
+    Returns None when the wall is too spent for any attempt to usefully
+    finish (below SYNTHESIS_MIN_WALL_SECONDS — not even first-token
+    time): callers skip straight to salvage instead of burning provider
+    quota on a doomed call. Otherwise the 60s timeout shrinks to fit,
+    floored so short-but-viable windows still get a real attempt.
+    None budget (tests/legacy paths) keeps the full timeout.
+    """
+    try:
+        remaining = remaining_seconds(budget)
+        if remaining < SYNTHESIS_MIN_WALL_SECONDS:
+            return None
+        return max(SYNTHESIS_MIN_TIMEOUT_SECONDS,
+                   min(SYNTHESIS_TIMEOUT_SECONDS, remaining - 5.0))
+    except Exception:
+        logger.debug("synthesis wall scaling failed; using full timeout",
+                     exc_info=True)
+        return SYNTHESIS_TIMEOUT_SECONDS
+
+
 def run_tool_loop(
     llm_instance: BaseLanguageModel,
     user_input: str,
@@ -1069,60 +1093,71 @@ def run_tool_loop(
             + user_input
         ),
     ]
-    try:
-        if live is not None:
-            live.reset_for_new_call()
-        final = agent._invoke_bounded(
-            last_llm,
-            synthesis_messages,
-            timeout=SYNTHESIS_TIMEOUT_SECONDS,
-            budget=budget,
-            on_token=live,
-            tier_name=round_tier,
-        )
-        text = _as_text(final.content).strip()
-        if text:
-            _note_final_tier(round_tier)
-            return _with_sources(text)
-    except BudgetExhausted:
-        pass
-    except TurnCancelled:
-        raise
-    except Exception as e:
-        _note_tier_failure(round_tier, e)
-        if llm_provider is not None:
-            while True:
-                try:
-                    synthesis_tier, synthesis_llm = llm_provider()
-                except TurnCancelled:
-                    raise
-                except Exception:
+    # Wall-scaled final synthesis: deep turns burn rounds x 90s against a
+    # 300s wall, so by synthesis time little may remain. Below the minimum
+    # wall the whole block is skipped (salvage paths below stay exactly as
+    # before); otherwise each attempt's timeout shrinks to fit. This burns
+    # no quota on attempts that cannot finish — the previous code always
+    # spent full 60s attempts plus per-tier retries into the wall.
+    synth_timeout = _synthesis_timeout_for_wall(budget)
+    if synth_timeout is not None:
+        try:
+            if live is not None:
+                live.reset_for_new_call()
+            final = agent._invoke_bounded(
+                last_llm,
+                synthesis_messages,
+                timeout=synth_timeout,
+                budget=budget,
+                on_token=live,
+                tier_name=round_tier,
+            )
+            text = _as_text(final.content).strip()
+            if text:
+                _note_final_tier(round_tier)
+                return _with_sources(text)
+        except BudgetExhausted:
+            pass
+        except TurnCancelled:
+            raise
+        except Exception as e:
+            _note_tier_failure(round_tier, e)
+            if llm_provider is not None:
+                while True:
+                    attempt_timeout = _synthesis_timeout_for_wall(budget)
+                    if attempt_timeout is None:
+                        break
+                    try:
+                        synthesis_tier, synthesis_llm = llm_provider()
+                    except TurnCancelled:
+                        raise
+                    except Exception:
+                        break
+                    try:
+                        if live is not None:
+                            live.reset_for_new_call()
+                        final = agent._invoke_bounded(
+                            synthesis_llm,
+                            synthesis_messages,
+                            timeout=attempt_timeout,
+                            budget=budget,
+                            on_token=live,
+                            tier_name=synthesis_tier,
+                        )
+                    except BudgetExhausted:
+                        break
+                    except Exception as e2:
+                        _note_tier_failure(synthesis_tier, e2)
+                        continue
+                    try:
+                        _record_tier_success(synthesis_tier)
+                    except Exception:
+                        logger.debug("synthesis tier success record failed", exc_info=True)
+                    text = _as_text(final.content).strip()
+                    if text:
+                        _note_final_tier(synthesis_tier)
+                        return _with_sources(text)
                     break
-                try:
-                    if live is not None:
-                        live.reset_for_new_call()
-                    final = agent._invoke_bounded(
-                        synthesis_llm,
-                        synthesis_messages,
-                        timeout=SYNTHESIS_TIMEOUT_SECONDS,
-                        budget=budget,
-                        on_token=live,
-                        tier_name=synthesis_tier,
-                    )
-                except BudgetExhausted:
-                    break
-                except Exception as e2:
-                    _note_tier_failure(synthesis_tier, e2)
-                    continue
-                try:
-                    _record_tier_success(synthesis_tier)
-                except Exception:
-                    logger.debug("synthesis tier success record failed", exc_info=True)
-                text = _as_text(final.content).strip()
-                if text:
-                    _note_final_tier(synthesis_tier)
-                    return _with_sources(text)
-                break
     if last_text.strip():
         _note_final_tier(last_text_tier)
         return _with_sources(

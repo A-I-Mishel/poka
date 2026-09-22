@@ -36,6 +36,27 @@ class TurnCancelled(Exception):
     """
 
 
+def remaining_seconds(budget: Any) -> float:
+    """Wall-clock seconds left on a budget's deadline (never raises).
+
+    Returns inf for None (no deadline to honor). Same clock-domain rule
+    as check_time: huge deadlines read as wall-clock, small ones as
+    monotonic. Lets callers skip doomed long calls (synthesis retries)
+    instead of burning provider quota against an expiring wall.
+    """
+    try:
+        if budget is None:
+            return float("inf")
+        deadline = float(getattr(budget, "deadline", 0.0) or 0.0)
+        if deadline <= 0.0:
+            return float("inf")
+        if deadline > 1e9:
+            return deadline - time.time()
+        return deadline - time.monotonic()
+    except Exception:
+        return float("inf")
+
+
 @dataclass
 class RequestBudget:
     """Bounded resources for one user message (also collects metrics).

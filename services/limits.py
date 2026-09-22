@@ -135,6 +135,13 @@ TOOL_TIMEOUT_SECONDS: float = 90.0
 # Final no-tools synthesis after a tool loop: shorter than a full model
 # call by design (summary of already-collected results, not new work).
 SYNTHESIS_TIMEOUT_SECONDS: float = 60.0
+# Synthesis against an expiring request wall: below MIN_WALL the call
+# cannot usefully finish (not even first-token time), so the loop skips
+# straight to salvage instead of burning provider quota on a doomed
+# attempt. Otherwise the timeout shrinks to fit, floored at MIN_TIMEOUT
+# so short-but-viable windows still get a real attempt.
+SYNTHESIS_MIN_TIMEOUT_SECONDS: float = 10.0
+SYNTHESIS_MIN_WALL_SECONDS: float = 15.0
 MCP_TIMEOUT_SECONDS: float = 60.0
 PROBE_TIMEOUT_SECONDS: float = 20.0
 
