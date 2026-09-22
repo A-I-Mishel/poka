@@ -548,7 +548,12 @@ def answer_with_fallback(
         # hashes in update_memory_incremental dedup repeats.
         mine_msgs = list(history_list)
         if isinstance(user_input, str) and user_input.strip():
-            mine_msgs.append({"role": "user", "content": user_input})
+            # Tag the turn's files: memory dedup is turn-aware, so the
+            # same words with different attachments must reprocess.
+            # (Document IDs already ride inside user_input's hints.)
+            mine_msgs.append({"role": "user", "content": user_input,
+                              "attachments": [{"id": str(i)} for i in
+                                              (image_upload_ids or [])]})
         if mine_msgs:
             # Normalize only on managed tier tables (same distinction as
             # _is_managed_table below): caller-supplied tables own their
@@ -600,7 +605,10 @@ def answer_with_fallback(
         ROUTER_STATS["llm"] += 1
         try:
             _, task_type = _run_cascade_step(
-                lambda _name, llm: classify_task(user_input, llm, budget, tier_name=_name),
+                lambda _name, llm: classify_task(
+                    user_input, llm, budget, tier_name=_name,
+                    has_attachments=bool(image_upload_ids) or any(
+                        m in user_input for m in _HINT_MARKERS)),
                 first, cheap_table,
             )
         except RuntimeError:
@@ -608,13 +616,12 @@ def answer_with_fallback(
             # requests to simple (no tools). Creation/doc signals fail
             # open to multi_step so the tool loop can still help.
             try:
+                from services.normalize import TOOL_NEED_SIGNALS
                 from services.normalize import any_hit as _any_hit
                 from services.normalize import normalize_text as _norm
 
                 _n = _norm(user_input)
-                if _any_hit(_n, ("create", "presentation", "slides", "report",
-                                 "document", "pdf", "docx", "csv", "code",
-                                 "python", "script", "analyze", "search")):
+                if _any_hit(_n, TOOL_NEED_SIGNALS):
                     task_type = "multi_step"
                 else:
                     task_type = "simple"

@@ -144,3 +144,43 @@ def test_classifier_failure_falls_back_to_simple(monkeypatch):
     assert out["task_type"] == "simple"
     assert out["output"] == "hi there"
     assert out["tools_used"] == []
+
+
+def _canned_classifier(monkeypatch, text):
+    """Double agent._invoke_bounded so classify_task sees canned output."""
+    import agent as agent_mod
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_invoke_bounded",
+        lambda *a, **k: SimpleNamespace(content=text, tool_calls=[]))
+
+
+def test_malformed_classifier_output_falls_closed(monkeypatch):
+    """Garbage output on plain text must pick simple, not multi_step."""
+    from agent.router import classify_task
+
+    for garbage in ("", "Category: simple", "unknown", "SIMPLE.", "simple?"):
+        _canned_classifier(monkeypatch, garbage)
+        assert classify_task("what is the meaning of life?", None) == "simple"
+
+
+def test_malformed_classifier_escalates_on_tool_signals(monkeypatch):
+    """Garbage output with tool need must still reach multi_step."""
+    from agent.router import classify_task
+
+    _canned_classifier(monkeypatch, "uh, dunno??")
+    assert classify_task("create a presentation about dogs", None) == "multi_step"
+    assert classify_task("compare these", None, has_attachments=True) == "multi_step"
+    assert classify_task("compare these", None) == "simple"
+
+
+def test_valid_classifier_tokens_pass_through(monkeypatch):
+    from agent.router import classify_task
+
+    cases = (("  Research ", "research"), ("DATA", "data"),
+             ("creative", "creative"), ("multi_step", "multi_step"),
+             ("simple", "simple"))
+    for raw, want in cases:
+        _canned_classifier(monkeypatch, raw)
+        assert classify_task("anything", None) == want

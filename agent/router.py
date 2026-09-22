@@ -16,6 +16,8 @@ from langchain_core.messages import HumanMessage
 from agent.budget import RequestBudget
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
 from agent.prompts import _as_text
+from services.normalize import TOOL_NEED_SIGNALS
+from services.normalize import any_hit as _any_hit
 from services.normalize import normalize_text as _normalize_text
 
 logger = logging.getLogger(__name__)
@@ -350,8 +352,16 @@ def classify_task(
     llm_instance: BaseLanguageModel,
     budget: Optional[RequestBudget] = None,
     tier_name: Optional[str] = None,
+    has_attachments: bool = False,
 ) -> str:
-    """Classify a request: simple, research, creative, data, or multi_step."""
+    """Classify a request: simple, research, creative, data, or multi_step.
+
+    Malformed classifier output fails CLOSED to simple (no tool loop, no
+    planning) unless there is evidence of tool need — attached files or
+    creation/doc/search signals — in which case it fails OPEN to
+    multi_step so the tool loop can still help. has_attachments covers
+    files whose hints may not be embedded in user_input.
+    """
     prompt = (
         "Classify this request into exactly one category:\n"
         "- simple: Direct question, no tools needed\n"
@@ -364,8 +374,16 @@ def classify_task(
     response = agent._invoke_bounded(llm_instance, [HumanMessage(content=prompt)], budget=budget, tier_name=tier_name)
     category = _as_text(response.content).strip().lower()
     valid = ["simple", "research", "creative", "data", "multi_step"]
-    # Fail open to multi_step (keeps tools) rather than simple (disables them).
-    return category if category in valid else "multi_step"
+    if category in valid:
+        return category
+    try:
+        if has_attachments:
+            return "multi_step"
+        if _any_hit(_normalize_text(user_input), TOOL_NEED_SIGNALS):
+            return "multi_step"
+    except Exception:
+        logger.debug("router fallback signal check failed; using simple", exc_info=True)
+    return "simple"
 
 
 _ATTACHMENT_INTENTS = ("vision", "document", "presentation", "web", "none")

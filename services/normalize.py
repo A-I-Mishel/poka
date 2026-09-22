@@ -22,6 +22,14 @@ from typing import Dict, List, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Tool-need signals for routing fallbacks (single source): when the LLM
+# classifier is down or returns garbage, these words fail OPEN to the
+# tool-capable route; anything else fails CLOSED to simple (no tools).
+# Kept as plain substrings for any_hit (fuzzy, typo-tolerant).
+TOOL_NEED_SIGNALS = ("create", "presentation", "slides", "report",
+                     "document", "pdf", "docx", "csv", "code",
+                     "python", "script", "analyze", "search")
+
 # Creation family -> canonical "create". Router/tool lists check "create".
 _CREATE_VERBS = frozenset({
     "create", "make", "generate", "build", "produce", "turn",

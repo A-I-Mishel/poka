@@ -29,25 +29,41 @@ logger = logging.getLogger(__name__)
 # message while its first turn is still generating must not launch a
 # second full turn (double quota burn + duplicate answers, e.g. two
 # "teach me slide by slide" answers minutes apart). Keyed per chat file
-# + normalized text; entries are released in run_chat's finally and
-# expire via TTL so a crashed turn can never wedge the chat.
+# + normalized text + attachments + request flags: the same text with
+# different files, project, or mode is a different request and must not
+# collide. Entries are released in run_chat's finally and expire via TTL
+# so a crashed turn can never wedge the chat.
 import threading as _threading
 import time as _time
 
-_INFLIGHT_TURNS: Dict[Tuple[str, str], float] = {}
+_INFLIGHT_TURNS: Dict[Tuple[str, str, str, str, bool, bool], float] = {}
 _INFLIGHT_LOCK = _threading.Lock()
 _INFLIGHT_TTL_SECONDS: float = 300.0
 
 
-def _inflight_key(chats_path: Any, text: str) -> Tuple[str, str]:
+def _inflight_key(chats_path: Any, text: str,
+                  upload_ids: Any = None,
+                  project_id: Any = None,
+                  deep_mode: bool = False,
+                  force_search: bool = False) -> Tuple[str, str, str, str, bool, bool]:
     """Key for the double-tap guard (never raises)."""
     try:
-        return (str(chats_path or ""), " ".join(str(text or "").lower().split()))
+        try:
+            files = ",".join(sorted({str(u or "") for u in (upload_ids or [])
+                                     if str(u or "")}))
+        except Exception:
+            files = ""
+        return (str(chats_path or ""),
+                " ".join(str(text or "").lower().split()),
+                files,
+                str(project_id or ""),
+                bool(deep_mode),
+                bool(force_search))
     except Exception:
-        return ("", "")
+        return ("", "", "", "", False, False)
 
 
-def _claim_inflight(key: Tuple[str, str]) -> bool:
+def _claim_inflight(key: Tuple[str, str, str, str, bool, bool]) -> bool:
     """Claim an in-flight turn; False when a live duplicate exists."""
     try:
         now = _time.time()
@@ -70,7 +86,7 @@ def _claim_inflight(key: Tuple[str, str]) -> bool:
         return True
 
 
-def _release_inflight(key: Tuple[str, str]) -> None:
+def _release_inflight(key: Tuple[str, str, str, str, bool, bool]) -> None:
     """Release an in-flight turn claim (never raises)."""
     try:
         with _INFLIGHT_LOCK:
@@ -351,18 +367,23 @@ def run_chat(ctx: UserContext, content: str,
     # generating in this chat short-circuits without burning quota or
     # producing a duplicate answer. Regenerates are unaffected (the
     # prior turn has completed, so no claim is held).
-    _dup_key = _inflight_key(getattr(store, "chats_path", ""), text)
+    _dup_key = _inflight_key(getattr(store, "chats_path", ""), text,
+                               upload_ids, project_id, deep_mode,
+                               force_search)
     if not _claim_inflight(_dup_key):
+        # Same text AND same files/flags still generating: short-circuit
+        # without burning quota. Not persisted: the in-flight original
+        # persists its own turn on completion, so appending here would
+        # leave a junk placeholder turn in history. The "ephemeral" flag
+        # tells the UI to render it transiently (it vanishes on refresh).
         dupe_msg: Dict[str, Any] = {
             "role": "assistant",
             "content": ("I'm still generating the answer to that message — "
                         "it will appear above when ready. No need to resend."),
             "time": utcnow_iso(),
-            **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                               "clarify", None),
+                **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                                   "clarify", None),
         }
-        _append_turn_atomic(store, {"role": "user", "content": text,
-                                    "time": utcnow_iso()}, dupe_msg)
         return {
             "message": dupe_msg,
             "active_tier": "clarify",
@@ -370,6 +391,7 @@ def run_chat(ctx: UserContext, content: str,
             "warnings": [],
             "fallback": None,
             "corrections": [],
+            "ephemeral": True,
         }
     try:
         return _run_chat_inner(

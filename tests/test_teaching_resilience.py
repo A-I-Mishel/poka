@@ -136,3 +136,90 @@ def test_identical_resend_short_circuits_while_running(monkeypatch):
     assert again["message"]["content"] == "done"
     assert len(calls) == 2
     turns_mod._INFLIGHT_TURNS.clear()
+
+
+def test_same_text_different_files_are_not_duplicates(monkeypatch):
+    """Same text + different upload_ids must NOT collide (Fix: dup key)."""
+    from backend.flow import turns as turns_mod
+
+    turns_mod._INFLIGHT_TURNS.clear()
+    entered = []
+    both_entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def _blocking_inner(*args, **kwargs):
+        calls.append(args[3] if len(args) > 3 else None)
+        entered.append(1)
+        if len(entered) >= 2:
+            both_entered.set()
+        assert release.wait(timeout=10)
+        return {"message": {"role": "assistant", "content": "done"},
+                "active_tier": "T", "task_type": "simple", "warnings": [],
+                "fallback": None, "pending_approvals": [],
+                "corrections": []}
+
+    monkeypatch.setattr(turns_mod, "_run_chat_inner", _blocking_inner)
+    monkeypatch.setattr(turns_mod, "_append_turn_atomic",
+                        lambda store, *msgs: None)
+    store = types.SimpleNamespace(chats_path="chat-1")
+    ctx = types.SimpleNamespace(user_id="u", user_store=store,
+                                limit_key="u", source="env")
+
+    t1 = threading.Thread(target=lambda: turns_mod.run_chat(
+        ctx, "compare these", upload_ids=["a"]))
+    t2 = threading.Thread(target=lambda: turns_mod.run_chat(
+        ctx, "compare these", upload_ids=["b"]))
+    t1.start()
+    t2.start()
+    try:
+        assert both_entered.wait(timeout=10), "both turns must run, not dedup"
+    finally:
+        release.set()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+    assert not t1.is_alive() and not t2.is_alive()
+    assert sorted(map(str, calls)) == ["['a']", "['b']"]
+    # Different flags also collide no more (claims released by now).
+    third = turns_mod.run_chat(ctx, "compare these", upload_ids=["a"],
+                               deep_mode=True)
+    assert third["message"]["content"] == "done"
+    assert len(calls) == 3
+    turns_mod._INFLIGHT_TURNS.clear()
+
+
+def test_duplicate_placeholder_is_ephemeral(monkeypatch):
+    """Dup-hit placeholder must not persist junk turns (Fix: dup key)."""
+    from backend.flow import turns as turns_mod
+
+    turns_mod._INFLIGHT_TURNS.clear()
+    entered = threading.Event()
+    release = threading.Event()
+    appended = []
+
+    def _blocking_inner(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=10)
+        return {"message": {"role": "assistant", "content": "done"},
+                "active_tier": "T", "task_type": "simple", "warnings": [],
+                "fallback": None, "pending_approvals": [],
+                "corrections": []}
+
+    monkeypatch.setattr(turns_mod, "_run_chat_inner", _blocking_inner)
+    monkeypatch.setattr(turns_mod, "_append_turn_atomic",
+                        lambda store, *msgs: appended.append(msgs))
+    store = types.SimpleNamespace(chats_path="chat-1")
+    ctx = types.SimpleNamespace(user_id="u", user_store=store,
+                                limit_key="u", source="env")
+
+    t = threading.Thread(target=lambda: turns_mod.run_chat(ctx, "same text"))
+    t.start()
+    assert entered.wait(timeout=10)
+    try:
+        dupe = turns_mod.run_chat(ctx, "same text")
+        assert dupe.get("ephemeral") is True
+        assert appended == [], "placeholder turn must not persist"
+    finally:
+        release.set()
+        t.join(timeout=10)
+    turns_mod._INFLIGHT_TURNS.clear()

@@ -6,7 +6,8 @@ map). Persists per-user (host sets the directory; see set_memory_dir):
 - facts: extracted dated facts with type, confidence, and source
 - past_tasks: reserved for future task logging
 - user_name: detected user name, if any
-- _processed_hashes: content digests already mined (incremental updates)
+- _processed_hashes: turn-aware digests already mined (incremental
+  updates) + _processed_outcomes ({digest: ok|failed}) + version key
 
 Fact types: name, preference, task_pattern, project, temporary, style.
 Facts are DATA for prompts, never instructions (see format function).
@@ -30,6 +31,13 @@ logger = logging.getLogger(__name__)
 MEMORY_FILE: str = "structured_memory.json"
 MAX_FACTS: int = 50
 MAX_PROCESSED_HASHES: int = 300
+# Turn-digest scheme version: v1 was content-hash-only (could not tell
+# conversations apart); v2 covers conversation anchor + attachments +
+# adjacency + content. A version mismatch resets tracking once — the
+# next turn re-mines its history (bounded by the normalize batch cap)
+# and merges dedup, so no fact duplicates.
+_PROCESSED_HASH_VERSION: int = 2
+MAX_PROCESSED_OUTCOMES: int = 300
 # Contradiction supersedes keep this many prior snapshots on the fact.
 # History is audit/state-history only: never rendered as active memory,
 # never used by retrieval, never injected into prompts.
@@ -320,7 +328,48 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
 
 def _content_hash(content: str) -> str:
     """Stable digest identifying one message for processed tracking (non-security)."""
-    return hashlib.sha1(content.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()
+    return hashlib.sha1(str(content or "").encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()
+
+
+def _msg_attachment_ids(msg: Any) -> List[str]:
+    """Sorted upload IDs attached to a chat message (never raises).
+
+    Stored user turns carry attachments=[{id, kind, name}, ...]; the
+    synthetic current-turn message may carry the same shape. IDs in the
+    digest mean the same words with different files reprocess.
+    """
+    try:
+        ids = set()
+        raw = msg.get("attachments") if isinstance(msg, dict) else None
+        for a in (raw or []):
+            if isinstance(a, dict) and a.get("id"):
+                ids.add(str(a["id"]))
+            elif isinstance(a, str) and a:
+                ids.add(a)
+        return sorted(ids)
+    except Exception:
+        return []
+
+
+def _turn_digest(content: str, conversation_anchor: str = "",
+                 attachment_ids: Any = None, prev_digest: str = "") -> str:
+    """Turn-aware processing identity (never raises, non-security).
+
+    Covers the conversation anchor (first user message of the chat, so
+    repeats in another conversation reprocess), this turn's attachments,
+    the previous message's digest (adjacency-sensitive mining such as
+    bare-name replies re-fires when position changes), and content.
+    Content hashing stays as the cheap final component, never the sole
+    identity.
+    """
+    try:
+        ids = ",".join(sorted({str(a or "") for a in (attachment_ids or [])
+                               if str(a or "")}))
+    except Exception:
+        ids = ""
+    return _content_hash("\0".join((str(conversation_anchor or ""), ids,
+                                    str(prev_digest or ""),
+                                    str(content or ""))))
 
 
 _IDENTITY_SUBJECTS = ("your name", "call you", "about yourself",
@@ -582,10 +631,18 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
                                 normalize_batch: Optional[Callable[[List[Any]], List[Optional[Dict[str, Any]]]]] = None) -> Dict[str, Any]:
     """Mine only newly added user messages; persist only when state changed.
 
-    Tracks content digests in `_processed_hashes` (capped) so a 10-message
-    history followed by 1 new message processes exactly 1 message. Disk is
-    touched only when hashes or facts actually change; failed writes never
-    destroy valid memory (save is best-effort, chat continues regardless).
+    Tracks turn-aware digests in `_processed_hashes` (capped) so a
+    10-message history followed by 1 new message processes exactly 1
+    message. Each digest covers the conversation anchor (first user
+    message) + this turn's attachments + previous-message adjacency +
+    content: content hashing stays as the cheap final component, never
+    the sole identity — repeats in another conversation, with different
+    files, at a new position, or after a failed attempt reprocess.
+    Per-digest outcomes (`ok`/`failed`, capped) are persisted; `failed`
+    entries are retried next turn instead of suppressing forever. Disk
+    is touched only when hashes, outcomes, or facts actually change;
+    failed writes never destroy valid memory (save is best-effort, chat
+    continues regardless).
 
     Args:
         messages: Raw chat message dicts with 'role'/'content'.
@@ -614,28 +671,76 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
     if not isinstance(messages, list):
         return {"processed": 0, "new_facts": 0, "saved": False}
 
+    # Scheme migration: v1 digests were content-only and cannot satisfy
+    # turn-aware identity, so a version mismatch resets tracking once.
+    # The next turn re-mines its history (bounded by the normalize batch
+    # cap); merges dedup, so no fact duplicates.
+    migrated = False
+    if mem.get("_processed_hash_version") != _PROCESSED_HASH_VERSION:
+        mem["_processed_hash_version"] = _PROCESSED_HASH_VERSION
+        mem["_processed_hashes"] = []
+        mem["_processed_outcomes"] = {}
+        migrated = True
     processed = mem.get("_processed_hashes")
     if not isinstance(processed, list):
         processed = []
     seen = set(h for h in processed if isinstance(h, str))
     already = len(processed)
+    outcomes = mem.get("_processed_outcomes")
+    if not isinstance(outcomes, dict):
+        outcomes = {}
+        migrated = True
+    outcomes_dirty = bool(migrated)
+
+    # Conversation anchor: first user message of this chat, stable across
+    # its turns, different across chats — repeats in another conversation
+    # reprocess without any caller plumbing.
+    anchor = ""
+    try:
+        for m in messages:
+            if (isinstance(m, dict) and m.get("role") == "user"
+                    and isinstance(m.get("content"), str)
+                    and m.get("content").strip()):
+                anchor = _content_hash(m["content"])
+                break
+    except Exception:
+        anchor = ""
 
     new_facts = 0
     # (fact, neighbors) in encounter order; norms resolved after
     # collection so one batched call can cover the whole turn.
     pending: List[Any] = []
+    prev_cdigest = ""
     for idx, msg in enumerate(messages):
         if not isinstance(msg, dict) or msg.get("role") != "user":
+            # Assistant (or system) turns are never mined, but they DO
+            # shape adjacency: a bare-name reply is meaningful only right
+            # after an identity ask, so the previous message's digest is
+            # part of the next user turn's identity.
+            _prev_text = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(_prev_text, str) and _prev_text.strip():
+                prev_cdigest = _content_hash(_prev_text)
             continue
         content = msg.get("content", "")
         if not isinstance(content, str) or not content.strip():
             continue
-        digest = _content_hash(content)
-        if digest in seen:
+        cdigest = _content_hash(content)
+        digest = _turn_digest(content, anchor, _msg_attachment_ids(msg),
+                              prev_cdigest)
+        prev_cdigest = cdigest
+        if digest in seen and outcomes.get(digest) != "failed":
             continue
         seen.add(digest)
         processed.append(digest)
-        msg_facts = extract_facts_from_message(content)
+        try:
+            msg_facts = extract_facts_from_message(content)
+        except Exception:
+            logger.debug("fact extraction failed; will retry next turn", exc_info=True)
+            outcomes[digest] = "failed"
+            outcomes_dirty = True
+            continue
+        outcomes[digest] = "ok"
+        outcomes_dirty = True
         if not any(f.get("type") == "name" for f in msg_facts):
             # Bare-name reply: a lone name ("mishel") is only meaningful
             # directly after the assistant asked for identity. Adjacency
@@ -703,7 +808,17 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
 
     added = len(processed) - already
     mem["_processed_hashes"] = processed[-MAX_PROCESSED_HASHES:]
-    if added == 0 and new_facts == 0:
+    if isinstance(outcomes, dict) and len(outcomes) > MAX_PROCESSED_OUTCOMES:
+        for _old in list(outcomes)[:len(outcomes) - MAX_PROCESSED_OUTCOMES]:
+            try:
+                del outcomes[_old]
+            except Exception:
+                logger.debug("outcome prune failed", exc_info=True)
+                break
+        outcomes_dirty = True
+    if outcomes_dirty:
+        mem["_processed_outcomes"] = outcomes
+    if added == 0 and new_facts == 0 and not outcomes_dirty:
         return {"processed": 0, "new_facts": 0, "saved": False}
     ok = save_structured_memory(mem)
     return {"processed": added, "new_facts": new_facts, "saved": bool(ok), "batched": batched}
