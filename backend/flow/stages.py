@@ -14,6 +14,84 @@ from backend.deps import UserContext
 from backend.attachments import (_recent_document_attachments, _recent_image_ids)
 
 
+_IDENTITY_QUESTION_RES = None
+
+
+def _identity_patterns():
+    """Compiled identity-about-user patterns (built once, never raises)."""
+    global _IDENTITY_QUESTION_RES
+    try:
+        if _IDENTITY_QUESTION_RES is None:
+            import re as _re
+
+            _IDENTITY_QUESTION_RES = tuple(
+                _re.compile(p) for p in (
+                    r"who am i",
+                    r"what(?:'s| is|s| s) my name",
+                    r"do (?:you|u) know my name",
+                    r"what do you call me",
+                    r"tell me my name",
+                ))
+        return _IDENTITY_QUESTION_RES
+    except Exception:
+        return ()
+
+
+_GREETING_PREFIX_RES = None
+
+
+def _is_user_identity_question(text: Any) -> bool:
+    """True when the message IS a user-identity question (never raises).
+
+    Full-match only (after an optional greeting): "who am i" qualifies,
+    "who am i in this essay" does not. "who are you" / "what is your
+    name" (about Pluto) never match — different pronouns, different
+    patterns. Narrow by design; the model still handles everything else.
+    """
+    try:
+        import re as _re
+
+        global _GREETING_PREFIX_RES
+        if _GREETING_PREFIX_RES is None:
+            _GREETING_PREFIX_RES = _re.compile(
+                r"^(?:hi|hey|hello|ok|okay|so|please)[, ]+", _re.IGNORECASE)
+        normalized = str(text or "").lower()
+        normalized = _re.sub(r"[?!.\u2026]+", " ", normalized)
+        normalized = _re.sub(r"\s+", " ", normalized).strip()
+        if not normalized or len(normalized) > 60:
+            return False
+        normalized = _GREETING_PREFIX_RES.sub("", normalized).strip()
+        if not normalized:
+            return False
+        return any(p.fullmatch(normalized) for p in _identity_patterns())
+    except Exception:
+        return False
+
+
+def _stored_user_name_or_none(ctx: UserContext) -> Optional[str]:
+    """Stored user name, or None when unknown/unreadable (never raises).
+
+    Binds the request user first (memory is per-user vault state); any
+    failure falls through to None so the turn takes the normal model
+    path instead of answering from a blank vault.
+    """
+    try:
+        from backend.deps import bind_request_user as _bind
+
+        try:
+            _bind(ctx.user_id, ctx.limit_key or ctx.user_id, ctx.source or "")
+        except Exception:
+            return None
+        from services.memory import load_structured_memory
+
+        name = load_structured_memory().get("user_name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        return None
+    except Exception:
+        return None
+
+
 def build_chat_history(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
     """Convert stored messages to LangChain history (content only).
 

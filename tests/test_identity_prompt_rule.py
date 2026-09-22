@@ -26,7 +26,9 @@ def test_identity_rule_present_and_placed():
         assert "Identity questions about the user" in out, simple
 
 
-def test_rule_reaches_built_prompt_with_nameless_vault(tmp_path, monkeypatch):
+def test_rule_reaches_built_prompt_with_named_vault(tmp_path, monkeypatch):
+    # Nameless vaults never reach the model (deterministic canned answer,
+    # zero quota); the prompt rule matters on the stored-name path.
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("PLUTO_USER_ID", "identity-user")
@@ -35,17 +37,20 @@ def test_rule_reaches_built_prompt_with_nameless_vault(tmp_path, monkeypatch):
     from agent import runtime as rt_mod
     from types import SimpleNamespace
     from backend.deps import UserContext
+    from services import memory as mem
     from services.files import FileStore
     from services.storage import UserStore
     from backend.chatflow import run_chat
 
     seen = {}
+    calls = []
 
     def _invoke(llm, messages, budget=None, **kw):
+        calls.append(1)
         for m in messages:
             if m.__class__.__name__ == "SystemMessage":
                 seen["system"] = str(getattr(m, "content", ""))
-        return SimpleNamespace(content="I don't know your name yet.")
+        return SimpleNamespace(content="You are Sam.", tool_calls=[])
 
     monkeypatch.setattr(agent_mod, "_invoke_bounded", _invoke)
     monkeypatch.setattr(rt_mod, "SYNTHESIS_TIERS", [("Fake", lambda: object())])
@@ -54,9 +59,40 @@ def test_rule_reaches_built_prompt_with_nameless_vault(tmp_path, monkeypatch):
                       user_store=UserStore("identity-user"),
                       file_store=FileStore("identity-user"),
                       limit_key="identity-user", source="env")
-    run_chat(ctx, "who am i")
+    mem.set_memory_dir(str(ctx.user_store.root))
+    mem.update_memory_incremental([{"role": "user", "content": "my name is sam"}])
+    try:
+        out = run_chat(ctx, "who am i")
+    finally:
+        mem.set_memory_dir("")
+    assert out["active_tier"] != "identity"
+    assert calls, "stored-name identity uses the model"
     system = seen.get("system", "")
     assert "Identity questions about the user" in system, system
+
+
+def test_nameless_vault_never_reaches_model(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PLUTO_USER_ID", "identity-user")
+    monkeypatch.delenv("PLUTO_AUTH_MODE", raising=False)
+    import agent as agent_mod
+    from backend.deps import UserContext
+    from services.files import FileStore
+    from services.storage import UserStore
+    from backend.chatflow import run_chat
+
+    def _boom(*a, **k):
+        raise AssertionError("nameless identity must not call any model")
+
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", _boom)
+    ctx = UserContext(user_id="identity-user",
+                      user_store=UserStore("identity-user"),
+                      file_store=FileStore("identity-user"),
+                      limit_key="identity-user", source="env")
+    out = run_chat(ctx, "who am i")
+    assert out["active_tier"] == "identity"
+    assert "don't know your name" in out["message"]["content"]
 
 
 def test_rule_present_in_simple_system_prompt():

@@ -408,6 +408,46 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         if len(image_ids) > 1:
             user_msg["images"] = list(image_ids)
 
+    # Deterministic identity answers: "who am i?" with no stored name is
+    # answered WITHOUT a model call (weak tiers invent names instead of
+    # admitting ignorance — the reported "You're Currently!" defect).
+    # With a stored name, or attachments in play, the normal path answers.
+    # The canned question re-arms bare-name mining ("Mishel" next turn is
+    # extracted), so the follow-up "who am i?" then resolves from memory.
+    try:
+        from backend.flow.stages import _is_user_identity_question as _is_idq
+        from backend.flow.stages import _stored_user_name_or_none as _stored_name
+    except Exception:
+        _is_idq = None  # type: ignore[assignment]
+        _stored_name = None  # type: ignore[assignment]
+    try:
+        _idq_hit = bool(_is_idq is not None and _is_idq(text))
+    except Exception:
+        _idq_hit = False
+    if _idq_hit and not attachments and not image_ids:
+        try:
+            _known = _stored_name(ctx) if _stored_name is not None else None
+        except Exception:
+            _known = None
+        if not _known:
+            identity_msg: Dict[str, Any] = {
+                "role": "assistant",
+                "content": ("I don't know your name yet — "
+                            "what should I call you?"),
+                "time": utcnow_iso(),
+                **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                                   "identity", None),
+            }
+            _append_turn_atomic(store, user_msg, identity_msg)
+            return {
+                "message": identity_msg,
+                "active_tier": "identity",
+                "task_type": "simple",
+                "warnings": warnings,
+                "fallback": None,
+                "corrections": [],
+            }
+
     prior_history = build_chat_history(
         [m for m in current if isinstance(m, dict)])
     prior_raw: List[Dict[str, Any]] = [

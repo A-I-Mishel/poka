@@ -145,3 +145,75 @@ def test_two_chat_bare_name_shared(tmp_path, monkeypatch):
         assert "User name: Mishel" in seen.get("system", ""), seen
     finally:
         mem.set_memory_dir("")
+
+
+def test_adverbs_never_become_names(tmp_path):
+    # Reported defect shape: "i am currently studying" stored Currently.
+    for text in ("i am currently studying", "i am actually tired",
+                 "i am just looking", "this is now urgent",
+                 "i am still here", "i am already done"):
+        _res, stored = _mine([{"role": "user", "content": text}], tmp_path)
+        assert stored["user_name"] is None, text
+        assert [f for f in stored["facts"] if f.get("type") == "name"] == [], text
+
+
+def test_real_names_still_extract(tmp_path):
+    for text, want in (("i am mishel", "Mishel"), ("my name is sam", "Sam"),
+                       ("call me ana", "Ana")):
+        _res, stored = _mine([{"role": "user", "content": text}], tmp_path)
+        assert stored["user_name"] == want, text
+
+
+def test_correction_after_name_claim_stores_name(tmp_path):
+    _res, stored = _mine([
+        {"role": "assistant", "content": "Your name is Currently!"},
+        {"role": "user", "content": "nope mishel"},
+    ], tmp_path)
+    assert stored["user_name"] == "Mishel"
+    names = [f for f in stored["facts"] if f.get("type") == "name"]
+    assert len(names) == 1
+    assert names[0]["confidence"] == "low"
+    assert names[0]["source"] == "inferred"
+
+
+def test_correction_variants(tmp_path):
+    for text in ("No, Mishel.", "actually mishel", "wrong sam"):
+        _res, stored = _mine([
+            {"role": "assistant", "content": "You're Currently, right?"},
+            {"role": "user", "content": text},
+        ], tmp_path)
+        assert stored["user_name"] is not None, text
+
+
+def test_correction_guards(tmp_path):
+    # Same name repeated: no-op, not a new fact.
+    _res, stored = _mine([
+        {"role": "assistant", "content": "Your name is Sam!"},
+        {"role": "user", "content": "nope sam"},
+    ], tmp_path)
+    assert stored["user_name"] is None
+    assert stored["facts"] == []
+    # Non-name token after a claim: guard list wins.
+    _res, stored = _mine([
+        {"role": "assistant", "content": "Your name is Sam!"},
+        {"role": "user", "content": "nope, wrong answer"},
+    ], tmp_path)
+    assert stored["user_name"] is None
+    assert stored["facts"] == []
+    # No prior claim: "nope mishel" out of nowhere stays unmined.
+    _res, stored = _mine([
+        {"role": "user", "content": "nope mishel"},
+    ], tmp_path)
+    assert stored["user_name"] is None
+    assert stored["facts"] == []
+
+
+def test_claimed_name_detection():
+    assert mem._assistant_claimed_name("Your name is Currently!") == "Currently"
+    assert mem._assistant_claimed_name("You're Sam, right?") == "Sam"
+    assert mem._assistant_claimed_name("Names are hard to remember.") is None
+    assert mem._assistant_claimed_name(None) is None
+    assert mem._correction_name_reply("nope mishel",
+                                      "Your name is Currently!") == "Mishel"
+    assert mem._correction_name_reply("nope, wrong answer",
+                                      "Your name is Sam!") is None

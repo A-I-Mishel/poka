@@ -47,7 +47,8 @@ _EXPLICIT_RE = re.compile(r"\b(remember this|remember that|my name is|call me|al
 
 # Single words that are never a person's name. Guards the broad "i am X" /
 # "this is X" name patterns below so "i am happy" or "this is great" are
-# not stored as the user's name.
+# not stored as the user's name. Includes adverbs/time-words the same
+# patterns catch ("i am currently studying" must never store "Currently").
 _NON_NAME_WORDS = frozenset({
     "happy", "sad", "glad", "sorry", "fine", "good", "bad", "busy", "tired",
     "ready", "done", "here", "there", "back", "new", "sure", "afraid",
@@ -55,6 +56,9 @@ _NON_NAME_WORDS = frozenset({
     "coming", "doing", "asking", "wondering", "hoping", "showing", "sharing",
     "great", "awesome", "cool", "nice", "ok", "okay", "right", "wrong",
     "available", "offline", "online", "bored", "sick", "ill",
+    "currently", "actually", "really", "just", "still", "already", "now",
+    "never", "always", "soon", "today", "tonight", "again", "also",
+    "even", "quite", "very", "yet",
 })
 
 # Communication-style requests → stored as type="style" facts (DATA for
@@ -315,6 +319,64 @@ def _bare_name_reply(text: Any) -> Optional[str]:
     return stripped.title()[:120]
 
 
+# Correction lead-ins: the user is rejecting what came before, not
+# volunteering something new. Kept narrow (single correction word +
+# single candidate) so "no, that's wrong" never parses as anything.
+# The reply pattern below is built from this tuple (single source).
+_CORRECTION_LEADS = ("nope", "no", "wrong", "actually")
+
+# Name-claim shapes in assistant text ("Your name is Currently!",
+# "You're Sam"). A correction reply is only meaningful next to one.
+_NAME_CLAIM_RE = re.compile(
+    r"(?:your name is|you're|you are|call you)\s+([A-Za-z]{2,20})",
+    re.IGNORECASE)
+
+
+def _assistant_claimed_name(text: Any) -> Optional[str]:
+    """Return the name an assistant message claimed, else None (never raises).
+
+    Conservative like _assistant_asked_identity: only explicit claim
+    shapes count, so passing mentions ("names are hard") never qualify.
+    """
+    try:
+        if not isinstance(text, str) or not text.strip():
+            return None
+        match = _NAME_CLAIM_RE.search(text)
+        if not match:
+            return None
+        return match.group(1).strip()
+    except Exception:
+        return None
+
+
+def _correction_name_reply(text: Any, prev_assistant: Any) -> Optional[str]:
+    """Return the corrected name from "nope X" after a name claim, else None.
+
+    Triple gate: (1) short correction shape "<lead> <token>", (2) the
+    previous assistant message claimed a *different* name, (3) the token
+    is name-shaped and off the guard list. "nope, wrong answer" yields
+    "wrong" -> guard list -> None. Never raises.
+    """
+    try:
+        if not isinstance(text, str):
+            return None
+        leads = "|".join(_CORRECTION_LEADS)
+        match = re.match(
+            r"^(?:" + leads + r")[,\s]+([A-Za-z]{2,20})\s*[.!?]*$",
+            text.strip(), re.IGNORECASE)
+        if not match:
+            return None
+        token = match.group(1).strip()
+        if not token or token.lower() in _NON_NAME_WORDS:
+            return None
+        claimed = _assistant_claimed_name(prev_assistant)
+        if not claimed or token.lower() == claimed.lower():
+            return None
+        return token.title()[:120]
+    except Exception:
+        return None
+
+
 def _fallback_key(fact: Dict[str, Any]) -> str:
     """Deterministic canonical key for a fact (fail-closed fallback).
 
@@ -538,6 +600,21 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
                     "confidence": "low",
                     "source": "inferred",
                 })
+            else:
+                # Correction reply: "nope mishel" right after the assistant
+                # claimed a name ("Your name is Currently!") carries the
+                # real one. Triple-gated — correction shape, a name-claim
+                # in the previous assistant message, guard words — so
+                # "nope, wrong answer" never becomes a stored name.
+                corrected = _correction_name_reply(content, prev_content)
+                if corrected is not None:
+                    msg_facts.append({
+                        "type": "name",
+                        "value": corrected,
+                        "polarity": "positive",
+                        "confidence": "low",
+                        "source": "inferred",
+                    })
         for fact in msg_facts:
             fact["date"] = utcnow_iso()
             if fact.get("type") == "name":
