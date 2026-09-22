@@ -73,9 +73,10 @@ def test_getter_by_name(monkeypatch):
 
 def test_cascade_position_is_tail(monkeypatch):
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names[-3:] == ["OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
-                          "OpenRouter Ling VL"]
-    assert names[-1] == "OpenRouter Ling VL"
+    assert names[-5:] == ["OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
+                          "OpenRouter Ling VL", "TokenHarbor Mimo",
+                          "TokenHarbor DeepSeek"]
+    assert names[-1] == "TokenHarbor DeepSeek"
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert config.get_tier_llm("OpenRouter Nemotron Ultra", temperature=0.5) is None
     assert config.get_tier_llm("OpenRouter Qwen 27B", temperature=0.5) is None
@@ -86,9 +87,10 @@ def test_provider_table_includes_openrouter():
     from agent import providers
 
     names = [name for name, _ in providers.TIER_AGENT_GETTERS]
-    assert names[-3:] == ["OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
-                          "OpenRouter Ling VL"]
-    assert names[-1] == "OpenRouter Ling VL"
+    assert names[-5:] == ["OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
+                          "OpenRouter Ling VL", "TokenHarbor Mimo",
+                          "TokenHarbor DeepSeek"]
+    assert names[-1] == "TokenHarbor DeepSeek"
 
 
 def test_ultra_full_synthesis_member():

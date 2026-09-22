@@ -10,6 +10,8 @@ import sys
 import time
 import types
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import agent
@@ -31,10 +33,11 @@ def test_remaining_seconds():
 def test_synthesis_timeout_scaling():
     assert tr._synthesis_timeout_for_wall(None) == 60.0
     assert tr._synthesis_timeout_for_wall(RequestBudget()) == 60.0
+    # Wall-clock math: allow sub-second scheduling jitter.
     assert tr._synthesis_timeout_for_wall(
-        RequestBudget(deadline=time.monotonic() + 25.0)) == 20.0
+        RequestBudget(deadline=time.monotonic() + 25.0)) == pytest.approx(20.0, abs=1.0)
     assert tr._synthesis_timeout_for_wall(
-        RequestBudget(deadline=time.monotonic() + 16.0)) == 11.0
+        RequestBudget(deadline=time.monotonic() + 16.0)) == pytest.approx(11.0, abs=1.0)
     assert tr._synthesis_timeout_for_wall(
         RequestBudget(deadline=time.monotonic() + 12.0)) is None
     assert tr._synthesis_timeout_for_wall(
@@ -107,8 +110,9 @@ def test_synthesis_timeout_scaled_to_wall(monkeypatch):
     budget = RequestBudget(deadline=time.monotonic() + 25.0)
     out = tr.run_tool_loop(llm, "search things", [], max_rounds=1, budget=budget)
     assert out == "final answer"
-    # Round invoke carries no timeout kwarg; synthesis is wall-scaled.
-    assert seen["timeouts"][-1] == 20.0
+    # Round invoke carries no timeout kwarg; synthesis is wall-scaled
+    # (approx: live wall-clock jitter).
+    assert seen["timeouts"][-1] == pytest.approx(20.0, abs=1.0)
 
 
 def test_synthesis_timeout_full_on_fresh_wall(monkeypatch):

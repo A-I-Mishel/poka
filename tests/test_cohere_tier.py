@@ -58,9 +58,10 @@ def test_cascade_position():
     names = [name for name, _ in config.TIER_GETTERS]
     assert names.index("Groq") < names.index("Cohere")
     assert names.index("Cohere") < names.index("OpenRouter Nemotron Ultra")
-    assert names[-3:] == ["OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
-                           "OpenRouter Ling VL"]
-    assert names[-1] == "OpenRouter Ling VL"
+    assert names[-5:] == ["OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
+                           "OpenRouter Ling VL", "TokenHarbor Mimo",
+                           "TokenHarbor DeepSeek"]
+    assert names[-1] == "TokenHarbor DeepSeek"
 
 
 def test_synthesis_member_cheap_excluded():
