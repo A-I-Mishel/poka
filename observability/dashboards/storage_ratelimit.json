@@ -16,7 +16,7 @@
       "title": "Migration Status",
       "type": "table",
       "targets": [
-        {"expr": "pluto_storage_migration_status", "format": "table"}
+        {"expr": "count by (user_id) (pluto_storage_migration_status)", "format": "table"}
       ],
       "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
     },
@@ -37,10 +37,10 @@
       "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}
     },
     {
-      "title": "Bucket State (sample)",
+      "title": "Bucket State (sample, aggregated — identity labels are privileged)",
       "type": "graph",
       "targets": [
-        {"expr": "topk(20, pluto_rate_limit_bucket_state)", "legendFormat": "{{action}} {{identity}} {{metric}}"}
+        {"expr": "topk(20, sum by (action, metric) (pluto_rate_limit_bucket_state))", "legendFormat": "{{action}} {{metric}}"}
       ],
       "gridPos": {"x": 0, "y": 16, "w": 24, "h": 8}
     }

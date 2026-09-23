@@ -1,18 +1,103 @@
 """Observability endpoints: /api/metrics, /api/health/detailed, /debug/pprof"""
 
 import platform
+import secrets as _secrets
 import shutil
 import time
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
 from backend.deps import UserContext, current_user
-from services.metrics import REGISTRY
+from services.metrics import PRIVILEGED_METRIC_FAMILIES, REGISTRY
+from services.secrets import get_secret
 from services.structured_logging import get_logger
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 logger = get_logger("pluto.observability")
 router = APIRouter(prefix="/api", tags=["observability"])
+
+
+def _is_privileged_metrics_viewer(request: Request) -> bool:
+    """True when the scraper may see identity-bearing series.
+
+    Privileged = presenting PLUTO_METRICS_TOKEN (Bearer or
+    X-Pluto-Metrics-Token, constant-time compare) or a stable
+    authenticated identity (session/account/token/env). Ephemeral
+    open-mode visitors are never privileged.
+    """
+    try:
+        configured = (get_secret("PLUTO_METRICS_TOKEN", "") or "").strip()
+    except Exception:
+        configured = ""
+    if configured:
+        presented = ""
+        try:
+            auth = (request.headers.get("authorization") or "").strip()
+            scheme, _, value = auth.partition(" ")
+            if scheme.lower() == "bearer" and value.strip():
+                presented = value.strip()
+            else:
+                presented = (request.headers.get("x-pluto-metrics-token") or "").strip()
+        except Exception:
+            presented = ""
+        try:
+            if presented and _secrets.compare_digest(presented, configured):
+                return True
+        except Exception:
+            logger.debug("metrics token compare failed", exc_info=True)
+    # Stable session/token/env identity (never ephemeral visitor ids).
+    try:
+        from backend.deps import session_token_from
+        from services.auth import authenticate
+
+        try:
+            auth_header = request.headers.get("authorization")
+        except Exception:
+            auth_header = None
+        try:
+            token, _via = session_token_from(request, auth_header)
+        except Exception:
+            token = None
+        try:
+            result = authenticate(token)
+        except Exception:
+            return False
+        return result.identity.source in ("env", "token", "account")
+    except Exception:
+        return False
+
+
+def _strip_privileged_families(payload: bytes) -> bytes:
+    """Remove identity-bearing families from a Prometheus exposition."""
+    try:
+        text = payload.decode("utf-8")
+    except Exception:
+        return payload
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip("# ").strip()
+        # HELP/TYPE lines: "# HELP pluto_x ..." / "# TYPE pluto_x ..."
+        token = ""
+        if line.startswith("#"):
+            parts = stripped.split()
+            # parts[0] is HELP|TYPE, parts[1] is the metric name
+            if len(parts) >= 2:
+                token = parts[1]
+        else:
+            token = line.split("{", 1)[0].split(" ", 1)[0].strip()
+        base = token
+        # prometheus_client counters expose _total/_created samples;
+        # privileged families here are gauges, but match generically.
+        for suffix in ("_total", "_created", "_bucket", "_sum", "_count"):
+            if base.endswith(suffix):
+                candidate = base[: -len(suffix)]
+                if candidate in PRIVILEGED_METRIC_FAMILIES:
+                    base = candidate
+                    break
+        if base in PRIVILEGED_METRIC_FAMILIES:
+            continue
+        out.append(line)
+    return "".join(out).encode("utf-8")
 
 
 class DetailedHealthResponse(BaseModel):
@@ -28,15 +113,23 @@ _start_time = time.time()
 
 
 @router.get("/metrics")
-def metrics():
-    """Prometheus metrics exposition endpoint (public, like /api/health).
+def metrics(request: Request):
+    """Prometheus metrics exposition endpoint (public, filtered).
 
     Stays unauthenticated for orchestrators/scrapers (see
-    test_detailed_health_private_requires_auth). Cardinality risk from
-    per-user labels is handled in dashboards (topk) — a scrape-auth
-    proxy is future work, not a silent contract break.
+    test_detailed_health_private_requires_auth), but unauthenticated
+    (ephemeral) scrapes receive a filtered exposition with
+    identity-bearing families (user_id/identity labels) removed.
+    Authenticated scrapers (stable session/token/env identity or
+    PLUTO_METRICS_TOKEN) receive the full registry. Per-identity
+    series are additionally cardinality-capped at the source (see
+    services.obs) so one-shot identities cannot grow process memory
+    without bound.
     """
-    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+    payload = generate_latest(REGISTRY)
+    if _is_privileged_metrics_viewer(request):
+        return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
+    return Response(content=_strip_privileged_families(payload), media_type=CONTENT_TYPE_LATEST)
 
 
 @router.get("/health/detailed", response_model=DetailedHealthResponse)

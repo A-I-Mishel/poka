@@ -8,6 +8,18 @@ from prometheus_client import Counter, Histogram, Gauge, Info, CollectorRegistry
 REGISTRY = CollectorRegistry()
 METRICS_PREFIX = "pluto"
 
+# Identity-bearing families (Finding 1): raw user/visitor/token identities
+# are attacker-multipliable, so the public /metrics exposition strips
+# these series. Authenticated scrapers (stable identity or
+# PLUTO_METRICS_TOKEN) still receive the full registry. Callers must not
+# add new user_id/identity labels without updating the public filter in
+# backend/routers/observability.py.
+PRIVILEGED_METRIC_FAMILIES = frozenset({
+    f"{METRICS_PREFIX}_kb_index_size",
+    f"{METRICS_PREFIX}_storage_migration_status",
+    f"{METRICS_PREFIX}_rate_limit_bucket_state",
+})
+
 # ---- HTTP ----
 HTTP_REQUEST_DURATION = Histogram(
     f"{METRICS_PREFIX}_http_request_duration_seconds",

@@ -18,8 +18,13 @@ router = APIRouter(prefix="/api", tags=["meta"])
 # Cached live-tier probe: probing every /health would burn quota and
 # add up to PROBE_TIMEOUT_SECONDS latency to orchestrator checks.
 # Cache for 60s; failures cache as None (still report configured tiers).
+# Single-flight (Finding 5): the lock previously covered only the cache
+# check, so every concurrent request after expiry fired its own provider
+# probe (quota burn x N). Now the first request becomes the prover while
+# the rest get the stale tier immediately (stale-while-revalidate —
+# health never blocks behind a slow provider).
 _live_cache_lock = threading.Lock()
-_live_cache: dict = {"at": 0.0, "tier": None}
+_live_cache: dict = {"at": 0.0, "tier": None, "probing": False}
 
 
 def _cached_live_tier(configured: list) -> object:
@@ -38,6 +43,10 @@ def _cached_live_tier(configured: list) -> object:
     with _live_cache_lock:
         if now - float(_live_cache.get("at", 0.0)) < 60.0:
             return _live_cache.get("tier")
+        if _live_cache.get("probing"):
+            # A probe is already in flight: serve stale immediately.
+            return _live_cache.get("tier")
+        _live_cache["probing"] = True
     tier = None
     try:
         from agent.runtime import probe_live_tier as _probe
@@ -48,8 +57,9 @@ def _cached_live_tier(configured: list) -> object:
         logger.debug("live tier probe failed", exc_info=True)
         tier = None
     with _live_cache_lock:
-        _live_cache["at"] = now
+        _live_cache["at"] = time.time()
         _live_cache["tier"] = tier
+        _live_cache["probing"] = False
     return tier
 
 

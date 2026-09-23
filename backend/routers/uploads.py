@@ -16,6 +16,11 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
+# Bounded background KB ingestion (Finding 2 + shed-reaper follow-up):
+# implementation lives in services.kb_ingest so the background scheduler
+# can reuse it without importing backend routers.
+from services.kb_ingest import schedule_kb_ingest  # noqa: E402
+
 
 def _check_upload_rate_limit(ctx: UserContext) -> None:
     """Enforce upload rate limits; raises HTTPException(429)."""
@@ -87,21 +92,24 @@ async def upload(file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail="Upload rejected: unexpected storage error.")
     # Best-effort knowledge-base ingest (never fails the upload):
     # small files ingest inline (tests expect immediate visibility);
-    # large files (>512KB) go daemon thread so upload returns fast
-    # (embedding can take seconds on Gemini free tier).
+    # large files (>512KB) go to the bounded background pool so upload
+    # returns fast (embedding can take seconds on Gemini free tier).
+    # `data` is passed by reference (no extra copy); the request scope
+    # releases it below so only the ingest worker (if scheduled) holds it.
     try:
         if len(data) > 512 * 1024:
-            import threading
-
-            threading.Thread(
-                target=kb_svc.ingest_document,
-                args=(ctx.user_id, meta.id, str(meta.display_name), data),
-                daemon=True,
-            ).start()
+            schedule_kb_ingest(ctx.user_id, meta.id, str(meta.display_name), data)
         else:
             kb_svc.ingest_document(ctx.user_id, meta.id, str(meta.display_name), data)
     except Exception:
         logger.debug("kb ingest document failed", exc_info=True)
+    finally:
+        # Release the request-scope reference promptly; a scheduled
+        # background worker still holds its own reference.
+        try:
+            del data
+        except Exception:
+            logger.debug("upload bytes release failed", exc_info=True)
     return {
         "id": meta.id,
         "kind": str(getattr(meta, "kind", "image") or "image"),
@@ -113,12 +121,20 @@ async def upload(file: UploadFile = File(...),
 def list_uploads(ctx: UserContext = Depends(current_user)):
     """List the user's vaulted uploads."""
     # Reads must not burn the `upload` write quota.
+    # Infrastructure failures are 503 (Finding 6): returning [] would
+    # make disk/storage loss indistinguishable from an empty vault and
+    # invite re-uploads. Genuinely empty (missing/corrupt-quarantined
+    # registry yields {} inside FileStore) still returns [].
     try:
         metas = ctx.file_store.list_uploads()
-    except (StorageError, FileValidationError):
+    except FileValidationError:
         return []
+    except StorageError:
+        logger.warning("list_uploads storage failure for user %s", ctx.user_id)
+        raise HTTPException(status_code=503, detail="Storage unavailable. Retry in a moment.")
     except Exception:
-        return []
+        logger.warning("list_uploads unexpected failure for user %s", ctx.user_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="Storage unavailable. Retry in a moment.")
     out = []
     for meta in metas or []:
         try:

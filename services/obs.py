@@ -168,7 +168,36 @@ def record_kb_cache_hit(hit: bool) -> None:
     KB_CACHE_HITS.labels(result="hit" if hit else "miss").inc()
 
 
+# Cardinality guard for identity-bearing series (Finding 1): raw
+# user/visitor/token identities are attacker-multipliable (open-mode
+# visitor header, per-request ephemerals). Bound distinct label values
+# so one-shot identities cannot grow in-process series without bound.
+# Public /metrics additionally strips these families (see
+# backend/routers/observability); authenticated scrapes still see them.
+import threading as _obs_threading
+
+_identity_guard_lock = _obs_threading.Lock()
+_seen_kb_users: set = set()
+_seen_migration_users: set = set()
+_seen_bucket_identities: set = set()
+# Per-process caps (static bound on series count, not on users served).
+_MAX_TRACKED_USERS = 1000
+_MAX_TRACKED_IDENTITIES = 2000
+
+
+def _admit(seen: set, key: str, cap: int) -> bool:
+    with _identity_guard_lock:
+        if key in seen:
+            return True
+        if len(seen) >= cap:
+            return False
+        seen.add(key)
+        return True
+
+
 def set_kb_index_size(user_id: str, size: int) -> None:
+    if not _admit(_seen_kb_users, str(user_id or ""), _MAX_TRACKED_USERS):
+        return
     KB_INDEX_SIZE.labels(user_id=user_id).set(size)
 
 
@@ -205,6 +234,8 @@ def trace_sqlite_query(operation: str):
 
 
 def set_migration_status(user_id: str, status: int) -> None:  # 1=done, 0=pending, -1=failed
+    if not _admit(_seen_migration_users, str(user_id or ""), _MAX_TRACKED_USERS):
+        return
     STORAGE_MIGRATION_STATUS.labels(user_id=user_id).set(status)
 
 
@@ -218,6 +249,8 @@ def record_rate_limit_rejection(action: str, source: str) -> None:
 
 
 def set_rate_limit_bucket_state(action: str, identity: str, used: int, remaining: int, limit: int) -> None:
+    if not _admit(_seen_bucket_identities, f"{action}\0{identity}", _MAX_TRACKED_IDENTITIES):
+        return
     RATE_LIMIT_BUCKET_STATE.labels(action=action, identity=identity, metric="used").set(used)
     RATE_LIMIT_BUCKET_STATE.labels(action=action, identity=identity, metric="remaining").set(remaining)
     RATE_LIMIT_BUCKET_STATE.labels(action=action, identity=identity, metric="limit").set(limit)

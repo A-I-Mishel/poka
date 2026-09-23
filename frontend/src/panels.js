@@ -213,7 +213,16 @@ var SECTIONS = {
   files: {
     title: "Files",
     render: async function () {
-      var list = await req("/api/uploads");
+      var list;
+      try {
+        list = await req("/api/uploads");
+      } catch (e) {
+        // 503 storage outage (backend distinguishes it from empty):
+        // never show "No files yet" here — the vault may be intact.
+        return "<h2>Files</h2><div class=\"sub\">Documents shared in this workspace.</div>" +
+          "<div class=\"sub\" style=\"margin-top:16px\">Files are unavailable right now (" +
+          esc((e && e.message) || "storage error") + "). Your files are safe — retry in a moment.</div>";
+      }
       if (!Array.isArray(list)) list = [];
       var rows = list.map(function (f) {
         return '<div class="card" data-up="' + escapeAttr(f.id) + '">' + ic("doc") +
@@ -228,7 +237,14 @@ var SECTIONS = {
   artifacts: {
     title: "Artifacts",
     render: async function () {
-      var list = await req("/api/artifacts");
+      var list;
+      try {
+        list = await req("/api/artifacts");
+      } catch (e) {
+        return "<h2>Artifacts</h2><div class=\"sub\">Generated documents, code, and visuals. Click to download.</div>" +
+          "<div class=\"sub\" style=\"margin-top:16px\">Artifacts are unavailable right now (" +
+          esc((e && e.message) || "storage error") + "). Your files are safe — retry in a moment.</div>";
+      }
       if (!Array.isArray(list)) list = [];
       var rows = list.map(function (a) {
         var hint = (a.kind === "html") ? "HTML — download, then open in browser to run" : (a.sub || a.kind || "");

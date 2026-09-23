@@ -93,6 +93,13 @@ def start_scheduler() -> None:
         except Exception:
             logger.debug("hygiene jitter parse failed; using base interval", exc_info=True)
 
+        try:
+            reaper_raw = get_secret("PLUTO_KB_REAPER_INTERVAL_SECONDS", "60") or "60"
+            reaper_interval = max(15.0, float(reaper_raw))
+        except (ValueError, TypeError):
+            logger.warning("bad PLUTO_KB_REAPER_INTERVAL_SECONDS; using 60s")
+            reaper_interval = 60.0
+
         _scheduler = BackgroundScheduler(daemon=True)
         try:
             _scheduler.add_job(
@@ -102,6 +109,14 @@ def start_scheduler() -> None:
                 max_instances=1,
                 coalesce=True,
                 misfire_grace_time=300,
+            )
+            _scheduler.add_job(
+                _run_kb_reaper,
+                IntervalTrigger(seconds=reaper_interval),
+                id="kb_ingest_reaper",
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=120,
             )
             _scheduler.start()
         except Exception:
@@ -130,9 +145,30 @@ def is_running() -> bool:
     return _started and _scheduler is not None and _scheduler.running
 
 
+def _run_kb_reaper() -> None:
+    """Retry shed KB ingests from disk (never raises; scheduler-safe)."""
+    try:
+        from services.kb_ingest import run_reaper_once
+
+        run_reaper_once()
+    except Exception:
+        logger.debug("kb ingest reaper job failed", exc_info=True)
+
+
 def trigger_hygiene_now() -> None:
     """Manually trigger hygiene run (for testing/admin)."""
     _run_all_users_hygiene()
+
+
+def trigger_kb_reaper_now() -> int:
+    """Manually trigger one KB reaper pass (for testing/admin)."""
+    try:
+        from services.kb_ingest import run_reaper_once
+
+        return run_reaper_once()
+    except Exception:
+        logger.debug("manual kb reaper trigger failed", exc_info=True)
+        return 0
 
 
 if __name__ == "__main__":

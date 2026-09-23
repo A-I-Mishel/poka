@@ -19,12 +19,17 @@ router = APIRouter(prefix="/api/artifacts", tags=["artifacts"])
 @router.get("", response_model=List[schemas.ArtifactMeta])
 def list_artifacts(ctx: UserContext = Depends(current_user)):
     """List generated outputs, newest first."""
+    # See list_uploads: infra failure is 503, genuinely empty is [].
     try:
         metas = ctx.file_store.list_outputs()
-    except (StorageError, FileValidationError):
+    except FileValidationError:
         return []
+    except StorageError:
+        logger.warning("list_artifacts storage failure for user %s", ctx.user_id)
+        raise HTTPException(status_code=503, detail="Storage unavailable. Retry in a moment.")
     except Exception:
-        return []
+        logger.warning("list_artifacts unexpected failure for user %s", ctx.user_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="Storage unavailable. Retry in a moment.")
     out = []
     for meta in metas or []:
         try:

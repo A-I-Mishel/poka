@@ -99,10 +99,17 @@ MAX_WORKFLOW_INPUT_CHARS: int = 2000
 # Code/output caps keep snippets and transcripts small; the iteration
 # budget bounds `for`/comprehension/range workloads (see codeexec).
 # Wall-clock timeout bounds giant-int/CPU burns the AST check cannot see.
+# Execution runs in a killable subprocess (see codeexec._exec_timed):
+# the parent kills the child past the timeout, so abandoned threads can
+# never accumulate. Concurrency is capped so timed-out bursts shed fast.
 MAX_PYTHON_CODE_CHARS: int = 4000
 MAX_PYTHON_OUTPUT_CHARS: int = 4000
 MAX_PYTHON_ITERATIONS: int = 100000
 MAX_PYTHON_EXEC_SECONDS: float = 10.0
+MAX_PYTHON_PROCS: int = 4
+# Best-effort child address-space cap (POSIX only; Windows has no
+# setrlimit — timeout+kill still applies there).
+MAX_PYTHON_CHILD_RSS_BYTES: int = 512 * 1024 * 1024
 
 # Per-user code workspace (services.workspace via tools.workspace_tool).
 # Private-mode writes + execution; list/read stay per-user isolated.

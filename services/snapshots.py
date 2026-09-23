@@ -266,7 +266,12 @@ def _fingerprint(root: Optional[Path] = None) -> str:
 
 
 def _build_archive(root: Optional[Path] = None) -> bytes:
-    """Tar.gz the data root (rel paths). Raises on I/O errors."""
+    """Tar.gz the data root (rel paths). Raises on I/O errors.
+
+    Kept for backward compatibility (tests/CLI). Production upload
+    uses _build_archive_to_file() to avoid holding the whole archive
+    in RAM (Finding 3).
+    """
     base = root or _data_root()
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
@@ -275,11 +280,33 @@ def _build_archive(root: Optional[Path] = None) -> bytes:
     return buf.getvalue()
 
 
-def _safe_extract(payload: bytes, root: Optional[Path] = None) -> int:
-    """Extract an archive into the data root, refusing path escapes.
+def _build_archive_to_file(root: Optional[Path] = None, dest: Optional[str] = None) -> str:
+    """Tar.gz the data root directly to a temp file. Returns its path.
 
-    Returns the number of members applied. Raises on corrupt archives.
-    Caps member count and total uncompressed size to bound zip/tar bombs.
+    Same format/layout as _build_archive (rel paths, skips *.tmp), but
+    the archive is never held fully in RAM — required when the data
+    root approaches ~1 GiB (Finding 3). Caller owns cleanup (unlink).
+    Raises on I/O errors.
+    """
+    import tempfile
+
+    base = root or _data_root()
+    if dest is None:
+        fd, dest = tempfile.mkstemp(prefix="pluto-snap-", suffix=".tar.gz")
+        os.close(fd)
+    with open(dest, "wb") as f:
+        with tarfile.open(fileobj=f, mode="w:gz") as tar:
+            for rel, full in _iter_data_files(base):
+                tar.add(str(full), arcname=rel, recursive=False)
+    return dest
+
+
+def _safe_extract_file(archive_path: str, root: Optional[Path] = None) -> int:
+    """Extract a tar.gz archive file into the data root, refusing escapes.
+
+    Streaming variant of _safe_extract (Finding 3): the archive is read
+    from disk, never held fully in RAM. Returns the number of members
+    applied. Raises on corrupt archives. Same caps/format as before.
     """
     MAX_SNAPSHOT_FILES = 5000
     MAX_SNAPSHOT_TOTAL_BYTES = 500 * 1024 * 1024
@@ -288,7 +315,7 @@ def _safe_extract(payload: bytes, root: Optional[Path] = None) -> int:
     base.mkdir(parents=True, exist_ok=True)
     applied = 0
     total = 0
-    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+    with tarfile.open(name=archive_path, mode="r:gz") as tar:
         members = tar.getmembers()
         if len(members) > MAX_SNAPSHOT_FILES:
             raise ValueError(f"snapshot archive too many members ({len(members)} > {MAX_SNAPSHOT_FILES})")
@@ -329,6 +356,28 @@ def _safe_extract(payload: bytes, root: Optional[Path] = None) -> int:
     return applied
 
 
+def _safe_extract(payload: bytes, root: Optional[Path] = None) -> int:
+    """Extract an archive from bytes (compat wrapper).
+
+    Writes to a temp file then streams via _safe_extract_file so there
+    is a single extraction code path. Production restore uses
+    _download_to_temp() + _safe_extract_file() directly to avoid ever
+    holding the archive in RAM.
+    """
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(prefix="pluto-snap-in-", suffix=".tar.gz")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(bytes(payload or b""))
+        return _safe_extract_file(tmp, root)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _is_missing_error(err: BaseException) -> bool:
     resp = getattr(err, "response", None)
     if isinstance(resp, dict):
@@ -348,6 +397,38 @@ _last_upload = 0.0
 _last_fingerprint: Optional[str] = None
 
 
+# Minimum temp-disk headroom kept free around a snapshot build (the
+# Render disk is 1 GiB total; a doomed build must be skipped, never
+# attempted). Archive ≈ compressed data size, so requiring data_bytes
+# + headroom bounds the worst case without measuring compression.
+_SNAPSHOT_MIN_HEADROOM_BYTES = 64 * 1024 * 1024
+
+
+def _data_bytes(root: Path) -> int:
+    """Sum of data-file sizes (archive upper bound pre-compression)."""
+    total = 0
+    try:
+        for _rel, full in _iter_data_files(root):
+            try:
+                total += max(0, full.stat().st_size)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return total
+
+
+def _temp_free_bytes() -> Optional[int]:
+    """Free bytes on the temp filesystem (None when unmeasurable)."""
+    import shutil
+    import tempfile
+
+    try:
+        return shutil.disk_usage(tempfile.gettempdir()).free
+    except Exception:
+        return None
+
+
 def _upload_now(client: Any = None, force: bool = False) -> bool:
     """Upload immediately if data changed. Returns True on success/skip."""
     global _dirty, _last_upload, _last_fingerprint
@@ -365,14 +446,37 @@ def _upload_now(client: Any = None, force: bool = False) -> bool:
             if not force and fp == _last_fingerprint:
                 _dirty = False
                 return True  # unchanged — skip the network round trip
-        payload = _build_archive(root)
-        own_client = client if client is not None else _get_client()
-        own_client.put_object(Bucket=cfg["bucket"], Key=cfg["key"], Body=payload)
+        # Disk precheck: the temp archive needs ~data_bytes on the temp
+        # filesystem plus headroom (1 GiB Render disk). Skip — keeping
+        # _dirty so the debounced worker retries — instead of a doomed
+        # build. Never blocks writes; never raises.
+        need = _data_bytes(root)
+        free = _temp_free_bytes()
+        if free is not None and free < need + _SNAPSHOT_MIN_HEADROOM_BYTES:
+            logger.warning(
+                "snapshot skipped: temp free %d < need %d (+%d headroom)",
+                free, need, _SNAPSHOT_MIN_HEADROOM_BYTES,
+            )
+            return False
+        # File-backed archive (Finding 3): never hold the whole tar.gz
+        # in RAM. boto3 streams file-like Body (multipart for large
+        # objects); temp file is unlinked on every path below.
+        archive_path = _build_archive_to_file(root)
+        try:
+            size = os.path.getsize(archive_path)
+            own_client = client if client is not None else _get_client()
+            with open(archive_path, "rb") as f:
+                own_client.put_object(Bucket=cfg["bucket"], Key=cfg["key"], Body=f)
+        finally:
+            try:
+                os.unlink(archive_path)
+            except OSError:
+                pass
         with _lock:
             _dirty = False
             _last_upload = time.time()
             _last_fingerprint = fp
-        logger.info("snapshot uploaded (%d bytes)", len(payload))
+        logger.info("snapshot uploaded (%d bytes)", size)
         return True
     except ImportError:
         logger.warning("snapshots need boto3 (pip install boto3); backup skipped")
@@ -440,7 +544,43 @@ def flush() -> bool:
 
 
 def _download_now(client: Any = None) -> Optional[bytes]:
-    """Fetch the remote archive bytes, or None when absent/failed."""
+    """Fetch the remote archive bytes, or None when absent/failed.
+
+    Kept for backward compatibility (tests/CLI). Production restore
+    uses _download_to_temp() to avoid holding the archive in RAM.
+    """
+    try:
+        tmp = _download_to_temp(client)
+        if not tmp:
+            return None
+        try:
+            with open(tmp, "rb") as f:
+                data = f.read()
+            return data or None
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    except ImportError:
+        logger.warning("snapshots need boto3 (pip install boto3); restore skipped")
+        return None
+    except Exception as e:
+        if _is_missing_error(e):
+            logger.info("no remote snapshot yet; starting with empty data")
+        else:
+            logger.warning("snapshot download failed", exc_info=True)
+        return None
+
+
+def _download_to_temp(client: Any = None) -> Optional[str]:
+    """Stream the remote archive to a temp file. Returns path or None.
+
+    No full-archive bytes object is ever retained (Finding 3). Caller
+    owns cleanup (unlink). Returns None when absent/failed/unconfigured.
+    """
+    import tempfile
+
     try:
         cfg = _backend_config()
         if cfg is None:
@@ -448,8 +588,46 @@ def _download_now(client: Any = None) -> Optional[bytes]:
         own_client = client if client is not None else _get_client()
         resp = own_client.get_object(Bucket=cfg["bucket"], Key=cfg["key"])
         body = resp.get("Body")
-        data = body.read() if hasattr(body, "read") else bytes(body or b"")
-        return data or None
+        if body is None:
+            return None
+        fd, tmp = tempfile.mkstemp(prefix="pluto-snap-dl-", suffix=".tar.gz")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                # botocore StreamingBody supports iter_chunks(); fakes
+                # and raw bytes fall back to chunked read()/direct write.
+                iter_chunks = getattr(body, "iter_chunks", None)
+                if callable(iter_chunks):
+                    try:
+                        for chunk in iter_chunks(chunk_size=1024 * 1024):
+                            if chunk:
+                                f.write(chunk)
+                    except TypeError:
+                        for chunk in iter_chunks():
+                            if chunk:
+                                f.write(chunk)
+                elif hasattr(body, "read"):
+                    while True:
+                        chunk = body.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                elif isinstance(body, (bytes, bytearray)):
+                    f.write(bytes(body))
+                else:
+                    return None
+            if os.path.getsize(tmp) == 0:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                return None
+            return tmp
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except ImportError:
         logger.warning("snapshots need boto3 (pip install boto3); restore skipped")
         return None
@@ -469,10 +647,16 @@ def maybe_restore(client: Any = None) -> bool:
         root = _data_root()
         if _local_data_present(root) and not _local_data_partial(root):
             return False  # full local data wins; never clobber
-        payload = _download_now(client)
-        if not payload:
+        tmp = _download_to_temp(client)
+        if not tmp:
             return False
-        applied = _safe_extract(payload, root)
+        try:
+            applied = _safe_extract_file(tmp, root)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         global _last_fingerprint
         with _lock:
             _last_fingerprint = _fingerprint(root)
@@ -538,15 +722,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("snapshots not configured (set the backend env vars, see module docstring)")
             return 2
         if args.force:
-            payload = _download_now()
-            if not payload:
+            tmp = _download_to_temp()
+            if not tmp:
                 print("no remote snapshot")
                 return 1
             try:
-                applied = _safe_extract(payload)
+                applied = _safe_extract_file(tmp)
             except Exception:
                 print("remote snapshot is corrupt")
                 return 1
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
             print(f"restored {applied} files")
             return 0
         print("restored" if maybe_restore() else "nothing restored")
