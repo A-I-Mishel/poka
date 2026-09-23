@@ -94,6 +94,7 @@ def test_classify_uses_cheap_table(monkeypatch):
     synth = FakeLLM(["final answer"])
     monkeypatch.setattr(runtime, "CHEAP_TIERS", [("cheap", lambda: cheap)])
     monkeypatch.setattr(runtime, "SYNTHESIS_TIERS", [("s", lambda: synth)])
+    monkeypatch.setattr(runtime, "FAST_TIERS", [("s", lambda: synth)])
     out = agent.answer_with_fallback(
         "flibbertigibbet blorpt doodle snooze wibble wobble extra words here",
         raw_messages=[],
@@ -140,7 +141,8 @@ def test_synthesis_fallback_marks_degraded(monkeypatch):
     fallback = FakeLLM(["fallback answer"])
     monkeypatch.setattr(agent, "TIER_AGENT_GETTERS",
                         [("fb", lambda: fallback)])
-    out = agent.answer_with_fallback("hello there friend", raw_messages=[])
+    out = agent.answer_with_fallback("hello there friend", raw_messages=[],
+                                     deep_mode=True)
     assert out["output"] == "fallback answer"
     assert out["fallback"] == {"requested": "synthesis",
                                "reason": "synthesis tiers unavailable"}

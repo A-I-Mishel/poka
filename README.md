@@ -66,7 +66,7 @@ python -m pytest tests/ -q
 | `GEMINI_API_KEY` | yes (or Groq/OpenRouter key) | Google Gemini models (3.8/3.7/3.6 Flash main + 3.5 backup) |
 | `GROQ_API_KEY` | no | Groq 120B strong fallback + cheap-backup (`GROQ_MODEL`) |
 | `OPENROUTER_API_KEY` | no | OpenRouter trial lanes (Nemotron Ultra, Qwen 27B, Ling VL) |
-| `TOKENHARBOR_API_KEY` | no | TokenHarbor free-allowance lanes (MiMo 2.6 Flash, DeepSeek V4.1 Flash — never billed) |
+| `TOKENHARBOR_API_KEY` | removed | TokenHarbor trial lanes (MiMo 2.6 Flash, DeepSeek V4.1 Flash) deleted — unset |
 | `COHERE_API_KEY` | no | Cohere Command tier (direct key, OpenAI-compatible endpoint). Set `COHERE_MODEL=command-a-vision-07-2025` to also use it as backup vision lane behind Gemini |
 | `PLUTO_AUTH_MODE` | no (`open`) | `open` = dev/trusted, `private` = login required |
 | `PLUTO_ACCESS_TOKENS` | for private mode | Comma-separated access tokens |
@@ -148,9 +148,11 @@ lanes remain to answer degraded):
 10. OpenRouter Qwen 3.8 27B (`qwen/qwen3.8-27b:free` via `OPENROUTER_QWEN_MODEL`; trial Sep 2026)
 11. OpenRouter Ling 3.0 Flash VL (`inclusionai/ling-3.0-flash-vl:free` via `OPENROUTER_LING_VL_MODEL`;
     vision-capable trial Sep 2026 — free vision fallback behind Gemini/Cohere)
-12. TokenHarbor MiMo 2.6 Flash (`mimo-v2.6-flash:free` via `TOKENHARBOR_MIMO_MODEL`; trial Sep 2026)
-13. TokenHarbor DeepSeek V4.1 Flash (`deepseek-v4.1-flash:free` via `TOKENHARBOR_DEEPSEEK_MODEL`;
-    reasoning trial Sep 2026)
+
+Fast mode answers use only lanes 6 + 9–11 (Gemini 3.1 Flash Lite,
+Nemotron Ultra, Qwen 27B, Ling VL) and fail honestly when all four are
+down; Deep Mode uses the full cascade above. TokenHarbor MiMo 2.6 Flash
++ DeepSeek V4.1 Flash removed (trial ended).
 
 Cheap table (dumb calls): Groq 120B (local cheap tier joins first when it lands).
 GitHub Models + NVIDIA removed (dead); Groq Fast 20B / Mistral /

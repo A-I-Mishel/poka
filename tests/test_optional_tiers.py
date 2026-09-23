@@ -83,12 +83,16 @@ def test_getter_by_name(monkeypatch, lane):
 
 
 def test_removed_lanes_resolve_to_none():
-    """Groq Fast / Mistral / Free Router are gone: unknown names -> None."""
+    """Groq Fast / Mistral / Free Router / TokenHarbor are gone: unknown names -> None."""
     assert config.get_tier_llm("Groq Fast", temperature=0.5) is None
     assert config.get_tier_llm("Mistral", temperature=0.5) is None
     assert config.get_tier_llm("OpenRouter Free Router", temperature=0.5) is None
+    assert config.get_tier_llm("TokenHarbor Mimo", temperature=0.5) is None
+    assert config.get_tier_llm("TokenHarbor DeepSeek", temperature=0.5) is None
     for stale in ("get_tier_groq_fast_llm", "get_tier_mistral_llm",
-                  "get_tier_openrouter_free_router_llm"):
+                  "get_tier_openrouter_free_router_llm",
+                  "get_tier_tokenharbor_mimo_llm",
+                  "get_tier_tokenharbor_deepseek_llm"):
         assert not hasattr(config, stale), stale
 
 
@@ -99,7 +103,7 @@ def test_cascade_position_gemini_led():
         "Gemini 3.5 Flash", "Gemini 3.5 Flash Lite",
         "Gemini 3.1 Flash Lite", "Groq", "Cohere",
         "OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
-        "OpenRouter Ling VL", "TokenHarbor Mimo", "TokenHarbor DeepSeek",
+        "OpenRouter Ling VL",
     ]
 
 
@@ -111,5 +115,6 @@ def test_registered_in_agent_table():
                  "OpenRouter Ling VL"):
         assert lane in names
     for gone in ("Groq Fast", "Mistral", "OpenRouter Free Router",
-                 "OpenRouter GLM 5.2"):
+                 "OpenRouter GLM 5.2", "TokenHarbor Mimo",
+                 "TokenHarbor DeepSeek"):
         assert gone not in names

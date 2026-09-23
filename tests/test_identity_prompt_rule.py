@@ -54,6 +54,7 @@ def test_rule_reaches_built_prompt_with_named_vault(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agent_mod, "_invoke_bounded", _invoke)
     monkeypatch.setattr(rt_mod, "SYNTHESIS_TIERS", [("Fake", lambda: object())])
+    monkeypatch.setattr(rt_mod, "FAST_TIERS", [("Fake", lambda: object())])
 
     ctx = UserContext(user_id="identity-user",
                       user_store=UserStore("identity-user"),

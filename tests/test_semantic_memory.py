@@ -363,6 +363,7 @@ def test_two_chat_shared_memory_through_cascade(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agent_mod, "_invoke_bounded", _invoke)
     monkeypatch.setattr(rt_mod, "SYNTHESIS_TIERS", [("Fake", lambda: object())])
+    monkeypatch.setattr(rt_mod, "FAST_TIERS", [("Fake", lambda: object())])
 
     ctx = UserContext(user_id="sem-user", user_store=UserStore("sem-user"),
                       file_store=FileStore("sem-user"), limit_key="sem-user",

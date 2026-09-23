@@ -91,6 +91,7 @@ def test_name_shared_across_chats(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agent_mod, "_invoke_bounded", _invoke)
     monkeypatch.setattr(rt_mod, "SYNTHESIS_TIERS", [("Fake", lambda: object())])
+    monkeypatch.setattr(rt_mod, "FAST_TIERS", [("Fake", lambda: object())])
 
     ctx = UserContext(user_id="name-user", user_store=UserStore("name-user"),
                       file_store=FileStore("name-user"), limit_key="name-user",

@@ -4,11 +4,12 @@ Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
 same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
 (fresh per-model quota pools) -> Groq 120B (strong fallback, cheap-backup
 included) -> Cohere -> Nemotron 3 Ultra -> Qwen 3.8 27B
--> Ling 3.0 Flash VL (vision-capable) -> TokenHarbor MiMo 2.6 Flash
--> TokenHarbor DeepSeek V4.1 Flash (both free-allowance trials). GitHub Models + NVIDIA removed
-(dead). Groq Fast 20B / Mistral / OpenRouter Free Router removed Sep 2026
-(superseded by the local cheap tier; see retired notes inline). GLM 5.2
-removed Sep 2026 (failed trial — persistent upstream rate limits).
+-> Ling 3.0 Flash VL (vision-capable, emergency pool tail).
+GitHub Models + NVIDIA removed (dead). Groq Fast 20B / Mistral /
+OpenRouter Free Router removed Sep 2026 (superseded by the local cheap
+tier; see retired notes inline). GLM 5.2 removed Sep 2026 (failed trial
+— persistent upstream rate limits). TokenHarbor MiMo 2.6 Flash +
+DeepSeek V4.1 Flash removed (trial ended — lanes deleted).
 
 OpenCode Zen free tier retired Sep 2026: provider returns
 MissingSessionID ("free tier can only be used in OpenCode") for
@@ -79,13 +80,9 @@ OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 OPENROUTER_QWEN_MODEL: str = "qwen/qwen3.8-27b:free"
 OPENROUTER_LING_VL_MODEL: str = "inclusionai/ling-3.0-flash-vl:free"
-# TokenHarbor via its OpenAI-compatible endpoint (same ChatOpenAI client).
-# Free-allowance lanes (never billed): MiMo 2.6 Flash general chat ahead
-# of DeepSeek V4.1 Flash reasoning, both trial Sep 2026 — keep while
-# stable, delete on repeated bans/flakes like any trial lane.
-TOKENHARBOR_BASE_URL: str = "https://tokenharbor.ai/v1"
-TOKENHARBOR_MIMO_MODEL: str = "mimo-v2.6-flash:free"
-TOKENHARBOR_DEEPSEEK_MODEL: str = "deepseek-v4.1-flash:free"
+# TokenHarbor lanes removed (trial ended): MiMo 2.6 Flash +
+# DeepSeek V4.1 Flash deleted along with their getters and table
+# entries. Re-add via https://tokenharbor.ai/v1 if the trial resumes.
 TEMPERATURE: float = 0.7
 
 # Client cache: clients hold only model config + credentials (no user
@@ -457,54 +454,9 @@ def get_tier_openrouter_ling_vl_llm(temperature: float = TEMPERATURE) -> Optiona
 # ("openrouter/free") if a random-free fallback is ever needed again.
 
 
-def _get_tokenharbor_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
-    """Build a TokenHarbor client for one model (shared factory).
-
-    TokenHarbor is OpenAI-compatible (same ChatOpenAI shape as the
-    OpenRouter tiers); only the base URL, key, and model slug differ.
-    Missing key -> None (tier skipped).
-    """
-    key: Optional[str] = _get_secret("TOKENHARBOR_API_KEY")
-    if key is None:
-        return None
-    try:
-        return _cached_client(
-            tier,
-            temperature,
-            key,
-            model,
-            lambda: ChatOpenAI(
-                model=model,
-                api_key=key,
-                base_url=TOKENHARBOR_BASE_URL,
-                temperature=temperature,
-                # Native HTTP timeout: truly aborts hung provider calls.
-                request_timeout=MODEL_TIMEOUT_SECONDS,
-                max_tokens=MODEL_MAX_TOKENS,
-                # Fail fast into the cascade (see _make_gemini).
-                max_retries=0,
-            ),
-        )
-    except Exception:
-        return None
-
-
-def get_tier_tokenharbor_mimo_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """TokenHarbor trial (Sep 2026): MiMo 2.6 Flash general chat (free tier)."""
-    return _get_tokenharbor_llm(
-        "TokenHarbor Mimo",
-        _model_override("TOKENHARBOR_MIMO_MODEL", TOKENHARBOR_MIMO_MODEL),
-        temperature,
-    )
-
-
-def get_tier_tokenharbor_deepseek_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """TokenHarbor trial (Sep 2026): DeepSeek V4.1 Flash reasoning (free tier)."""
-    return _get_tokenharbor_llm(
-        "TokenHarbor DeepSeek",
-        _model_override("TOKENHARBOR_DEEPSEEK_MODEL", TOKENHARBOR_DEEPSEEK_MODEL),
-        temperature,
-    )
+# TokenHarbor factory + getters removed (trial ended) — see retired
+# note above. Re-add _get_tokenharbor_llm + TOKENHARBOR_BASE_URL +
+# per-lane getters if the trial resumes.
 
 
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
@@ -519,8 +471,6 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
     "OpenRouter Qwen 27B": get_tier_openrouter_qwen_llm,
     "OpenRouter Ling VL": get_tier_openrouter_ling_vl_llm,
-    "TokenHarbor Mimo": get_tier_tokenharbor_mimo_llm,
-    "TokenHarbor DeepSeek": get_tier_tokenharbor_deepseek_llm,
 }
 
 
@@ -552,8 +502,6 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
-    ("TokenHarbor Mimo", get_tier_tokenharbor_mimo_llm),
-    ("TokenHarbor DeepSeek", get_tier_tokenharbor_deepseek_llm),
 ]
 
 
@@ -565,8 +513,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
 # remains the escape hatch when synthesis is down. Tables hold (name,
 # getter) pairs like TIER_GETTERS.
 # Gemini leads; Groq 120B is the strong fallback; Cohere -> Nemotron
-# Ultra -> Qwen 27B -> Ling VL -> TokenHarbor Mimo -> TokenHarbor DeepSeek
-# is the emergency pool. Groq's
+# Ultra -> Qwen 27B -> Ling VL is the emergency pool. Groq's
 # free pool absorbs cheap traffic; Gemini's per-model pool is spent on
 # quality final answers + vision.
 # Weak/strict tier sets removed Sep 2026 with their only members (Groq
@@ -585,8 +532,20 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
-    ("TokenHarbor Mimo", get_tier_tokenharbor_mimo_llm),
-    ("TokenHarbor DeepSeek", get_tier_tokenharbor_deepseek_llm),
+]
+# Fast-mode answer table (mode-based routing): only these lanes may
+# produce the visible answer when deep_mode is off. Order matches the
+# cascade (cheapest adequate lane first). Deep mode uses the full
+# SYNTHESIS_TIERS. Internal/dumb calls (classify, memory, reflection,
+# citations) stay on CHEAP_TIERS in both modes — they never choose the
+# visible answer tier. When every fast lane is down, fast mode fails
+# honestly (no silent fallback to the full cascade: that would defeat
+# the quota savings this table exists for).
+FAST_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
+    ("Gemini 3.1 Flash Lite", get_tier_gemini31_lite_llm),
+    ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
+    ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
+    ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
 ]
 CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),

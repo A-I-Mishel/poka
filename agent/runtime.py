@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from config import CHEAP_TIERS, SYNTHESIS_TIERS, TASK_TEMPERATURES, get_tier_llm
+from config import CHEAP_TIERS, FAST_TIERS, SYNTHESIS_TIERS, TASK_TEMPERATURES, get_tier_llm
 from services.context import get_current_user_id
 from services.vision import VISION_TIER_ORDER
 
@@ -535,9 +535,15 @@ def answer_with_fallback(
     history: List[BaseMessage] = list(chat_history) if chat_history else []
     history_list: List[Dict[str, Any]] = list(raw_messages) if raw_messages else []
     combined_notes: str = memory_notes
-    logger.info("req=%s start tiers=%s", request_id,
-                [n for n, _ in _usable_tiers(
-                    first, SYNTHESIS_TIERS if tiers is None else tiers)])
+    # Role tables (prod default only): cheap tiers for dumb calls,
+    # synthesis tiers for final answers (deep mode) or the fast subset
+    # (fast mode). Caller-supplied tables (tests, explicit overrides)
+    # keep legacy behavior exactly.
+    cheap_table = CHEAP_TIERS if tiers is None else tiers
+    synth_table = (SYNTHESIS_TIERS if deep_mode else FAST_TIERS) if tiers is None else tiers
+    logger.info("req=%s start mode=%s tiers=%s", request_id,
+                "deep" if deep_mode else "fast",
+                [n for n, _ in _usable_tiers(first, synth_table)])
     obs_event("request.start", request_id=request_id)
 
     try:
@@ -563,7 +569,8 @@ def answer_with_fallback(
             # extraction/merging still runs everywhere.
             normalize = None
             normalize_batch = None
-            if tiers is None or tiers is SYNTHESIS_TIERS or tiers is CHEAP_TIERS:
+            if (tiers is None or tiers is SYNTHESIS_TIERS
+                    or tiers is FAST_TIERS or tiers is CHEAP_TIERS):
                 table = CHEAP_TIERS if tiers is None else tiers
                 normalize = lambda cand, neigh: _normalize_memory_candidate(
                     cand, neigh, first, budget, request_id, table)
@@ -583,12 +590,6 @@ def answer_with_fallback(
         relevant_context = ""
     if formatted_memory:
         combined_notes = (combined_notes + "\n" + formatted_memory).strip()
-
-    # Role tables (prod default only): cheap tiers for dumb calls,
-    # synthesis tiers for final answers. Caller-supplied tables (tests,
-    # explicit overrides) keep legacy behavior exactly.
-    cheap_table = CHEAP_TIERS if tiers is None else tiers
-    synth_table = SYNTHESIS_TIERS if tiers is None else tiers
 
     task_type: str = rule_route(user_input) or ""
     if task_type:
@@ -713,7 +714,8 @@ def answer_with_fallback(
         # Managed tables hold real shared getters, so per-task sizing via
         # get_tier_llm is thread-safe. Caller-supplied tables own their
         # instances and are used exactly as given (even on name collision).
-        return table is None or table is SYNTHESIS_TIERS or table is CHEAP_TIERS
+        return (table is None or table is SYNTHESIS_TIERS
+                or table is FAST_TIERS or table is CHEAP_TIERS)
 
     def _size_llm_for_task(tier_name: str, llm: BaseLanguageModel) -> BaseLanguageModel:
         # Task temperature via a cached client for (tier, temperature):
@@ -778,11 +780,13 @@ def answer_with_fallback(
                 raise RuntimeError("degenerate model response")
             return text_out
 
-        # Synthesis table first; the full cascade is the escape hatch when
-        # synthesis is down (answers then carry a degraded marker). Custom
-        # tables run exactly once, as before.
+        # Mode table first; the full cascade is the escape hatch when the
+        # mode table is down in deep mode (answers then carry a degraded
+        # marker). Fast mode has no escape hatch: it fails honestly
+        # instead of spending other lanes' quota. Custom tables run
+        # exactly once, as before.
         tables = [synth_table]
-        if tiers is None:
+        if tiers is None and deep_mode:
             tables.append(None)
         degraded: Optional[Dict[str, str]] = None
         answer_attempts: List[str] = []
@@ -797,9 +801,9 @@ def answer_with_fallback(
                 # Our limit, not the provider's: never retry, never fall back.
                 raise RuntimeError(f"{e} (ref {request_id})") from e
             except RuntimeError as e:
-                if table is SYNTHESIS_TIERS and tables:
+                if table is synth_table and tables:
                     degraded = {"requested": "synthesis",
-                                "reason": "synthesis tiers unavailable"}
+                                 "reason": "synthesis tiers unavailable"}
                     continue
                 raise RuntimeError(f"{e} (ref {request_id})") from e
         else:  # pragma: no cover - loop always breaks or raises
@@ -1030,7 +1034,7 @@ def answer_with_fallback(
     try:
         answer_attempts = []
         _tooled_tables = [synth_table]
-        if tiers is None:
+        if tiers is None and deep_mode:
             _tooled_tables.append(None)
         while _tooled_tables:
             _table = _tooled_tables.pop(0)
@@ -1042,7 +1046,7 @@ def answer_with_fallback(
             except BudgetExhausted as e:
                 raise RuntimeError(f"{e} (ref {request_id})") from e
             except RuntimeError as e:
-                if _table is SYNTHESIS_TIERS and _tooled_tables:
+                if _table is synth_table and _tooled_tables:
                     degraded_tooled = {"requested": "synthesis",
                                        "reason": "synthesis tiers unavailable"}
                     continue
