@@ -1,8 +1,22 @@
 """UserStore: all persistent state owned by one user ID."""
 
+import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+
+def _snapshot_notify() -> None:
+    """Queue an R2 snapshot (no-op when unconfigured; never raises)."""
+    try:
+        from services.snapshots import notify as _snapshots_notify
+
+        _snapshots_notify()
+    except Exception:
+        logger.debug("snapshot notify failed", exc_info=True)
 
 from services.storage.cleaners import (
     _clean_brief_record,
@@ -599,7 +613,13 @@ class UserStore:
             with path_lock(path):
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                    except OSError:
+                        logger.debug("fsync failed for %s", path.name, exc_info=True)
                 atomic_replace(tmp_path, path)
+                _snapshot_notify()
         except OSError as e:
             try:
                 if tmp_path.exists():
@@ -627,7 +647,13 @@ class UserStore:
             with path_lock(self.memory_path):
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     f.write(text)
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                    except OSError:
+                        logger.debug("fsync failed for %s", self.memory_path.name, exc_info=True)
                 atomic_replace(tmp_path, self.memory_path)
+                _snapshot_notify()
         except OSError as e:
             try:
                 if tmp_path.exists():

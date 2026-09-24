@@ -171,13 +171,22 @@ def _read_json(path: Path) -> Tuple[Any, bool]:
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    """Write JSON atomically via unique-tmp + os.replace."""
+    """Write JSON atomically via unique-tmp + fsync + os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = _tmp_path(path)
     try:
         with path_lock(path):
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
+                # Durability: flush + fsync before the atomic replace so a
+                # crash/power loss cannot lose the just-written payload
+                # (old file stays intact either way; without fsync only the
+                # last write is at risk, never corruption).
+                try:
+                    f.flush()
+                    os.fsync(f.fileno())
+                except OSError:
+                    logger.debug("fsync failed for %s", path.name, exc_info=True)
             atomic_replace(tmp_path, path)
             # Free-tier durability: queue an R2 snapshot (no-op when
             # unconfigured; never raises into the write path).

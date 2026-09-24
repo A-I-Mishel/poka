@@ -21,6 +21,7 @@ token → env/ephemeral/open): this dependency only parses transport
 
 import logging
 import re
+import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -293,6 +294,13 @@ SESSION_COOKIE = "pluto_session"
 #: Header required for cookie-authenticated unsafe methods (CSRF).
 CSRF_HEADER = "x-pluto-csrf"
 
+#: Double-submit CSRF cookie (non-HttpOnly, readable by same-origin JS).
+#: Issued on signup/login alongside the session cookie. When present,
+#: the header must match it; otherwise the legacy static "1" marker is
+#: accepted (split-origin frontends cannot read API-origin cookies, so
+#: they keep the preflight-level marker until a per-session token lands).
+CSRF_COOKIE = "pluto_csrf"
+
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
@@ -318,7 +326,12 @@ def session_token_from(request: Request, authorization: Optional[str]) -> tuple[
 
 
 def _require_csrf(request: Request, via: str) -> None:
-    """Require a CSRF marker for cookie-authenticated unsafe methods."""
+    """Require a CSRF marker for cookie-authenticated unsafe methods.
+
+    Double-submit when the CSRF cookie is present (same-origin upgrade):
+    the header must equal the readable cookie value. Otherwise the
+    legacy static "1" marker is accepted (split-origin compat).
+    """
     if via != "cookie":
         return
     if request.method.upper() not in _UNSAFE_METHODS:
@@ -328,6 +341,18 @@ def _require_csrf(request: Request, via: str) -> None:
     except Exception:
         logger.debug("csrf header read failed", exc_info=True)
         marker = ""
+    try:
+        expected = request.cookies.get(CSRF_COOKIE)
+    except Exception:
+        logger.debug("csrf cookie read failed", exc_info=True)
+        expected = None
+    if expected and expected.strip():
+        if marker and secrets.compare_digest(marker, expected.strip()):
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="CSRF check failed (send X-Pluto-Csrf matching the pluto_csrf cookie).",
+        )
     if marker != "1":
         raise HTTPException(
             status_code=403,

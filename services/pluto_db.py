@@ -25,6 +25,17 @@ from services.storage import user_dir
 
 logger = logging.getLogger(__name__)
 
+
+def _snapshot_notify() -> None:
+    """Queue an R2 snapshot after a DB write (no-op; never raises)."""
+    try:
+        from services.snapshots import notify as _snapshots_notify
+
+        _snapshots_notify()
+    except Exception:
+        logger.debug("snapshot notify failed", exc_info=True)
+
+
 DB_FILENAME = "pluto.db"
 MAX_ROWS = 5000
 MAX_CELL_CHARS = 10000
@@ -297,6 +308,7 @@ def execute_write(user_id: Any, sql: str) -> Dict[str, Any]:
             cur = conn.execute(text)
             conn.commit()
             affected = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
+        _snapshot_notify()
         return {"ok": True, "affected": int(affected)}
     except Exception as e:
         return {"error": _safe_db_error("write", e)}
@@ -364,6 +376,7 @@ def import_csv(user_id: Any, table: str, data: bytes) -> Dict[str, Any]:
                 f"INSERT INTO {qname} VALUES ({', '.join('?' * len(columns))})", padded  # noqa: S608 (validated + quoted identifier; values are placeholders)
             )
             conn.commit()
+        _snapshot_notify()
         return {"table": name, "rows": len(padded), "columns": columns}
     except Exception as e:
         return {"error": _safe_db_error("import", e)}

@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 
 from backend import schemas
 from backend.deps import (
+    CSRF_COOKIE,
     SESSION_COOKIE,
     UserContext,
+    _require_csrf,
     current_user,
     session_token_from,
 )
@@ -142,7 +144,33 @@ def _clear_session_cookie(response: Response, request: Request | None = None) ->
     # for it and the user would stay "logged in").
     secure = _is_secure(request) if request is not None else False
     samesite = "none" if (request is not None and _is_cross_site(request) and secure) else "lax"
-    response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, samesite=samesite)
+    response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, samesite=samesite, httponly=True)
+    response.delete_cookie(CSRF_COOKIE, path="/", secure=secure, samesite=samesite, httponly=False)
+
+
+def _set_csrf_cookie(response: Response, request: Request) -> str:
+    """Issue the double-submit CSRF cookie (readable by same-origin JS).
+
+    Returns the raw value. Split-origin frontends cannot read API-origin
+    cookies, so they keep sending the legacy "1" marker (accepted when
+    no cookie is present); same-origin clients send this value back.
+    """
+    import secrets as _secrets
+
+    token = _secrets.token_urlsafe(32)
+    secure = _is_secure(request)
+    cross = _is_cross_site(request)
+    samesite = "none" if (cross and secure) else "lax"
+    response.set_cookie(
+        CSRF_COOKIE,
+        token,
+        max_age=_SESSION_MAX_AGE,
+        httponly=False,
+        secure=secure,
+        samesite=samesite,
+        path="/",
+    )
+    return token
 
 
 def _agent(request: Request) -> str:
@@ -193,6 +221,7 @@ def signup(body: schemas.AccountRequest, request: Request, response: Response):
     except AccountError as e:
         raise HTTPException(status_code=400, detail=str(e))
     _set_session_cookie(response, request, token)
+    _set_csrf_cookie(response, request)
     return {"token": token, "username": info["username"], "user_id": info["user_id"]}
 
 
@@ -212,6 +241,7 @@ def login(body: schemas.AccountRequest, request: Request, response: Response):
     except AccountError as e:
         raise HTTPException(status_code=400, detail=str(e))
     _set_session_cookie(response, request, token)
+    _set_csrf_cookie(response, request)
     return {"token": token, "username": info["username"], "user_id": info["user_id"]}
 
 
@@ -245,6 +275,7 @@ def change_password(body: schemas.ChangePasswordRequest,
     except AccountError as e:
         raise HTTPException(status_code=400, detail=str(e))
     _set_session_cookie(response, request, token)
+    _set_csrf_cookie(response, request)
     return {"token": token, "username": info["username"], "user_id": info["user_id"]}
 
 
@@ -270,7 +301,10 @@ def logout_all(request: Request, response: Response, ctx: UserContext = Depends(
 def logout(request: Request, response: Response,
            authorization: Optional[str] = Header(default=None)):
     """Revoke the presenting session token (idempotent, always 200)."""
-    presented, _via = session_token_from(request, authorization)
+    presented, via = session_token_from(request, authorization)
+    # Cookie sessions on unsafe methods need the CSRF marker (matches
+    # backend/deps.py _require_csrf via current_user); Bearer is exempt.
+    _require_csrf(request, via)
     accounts_svc.logout(presented)
     _clear_session_cookie(response, request)
     return {"ok": True}

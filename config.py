@@ -18,6 +18,7 @@ usable via the same base URL if billing is added.
 """
 
 import hashlib
+import logging
 import secrets
 import threading
 from typing import Any, Callable, Dict, Optional, Tuple, Union
@@ -26,6 +27,26 @@ from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from services.limits import MODEL_MAX_TOKENS, MODEL_TIMEOUT_SECONDS
 from services.secrets import get_secret
+
+logger = logging.getLogger(__name__)
+
+
+def _tier_init_failed(tier: str, exc: Exception) -> None:
+    """Log + count a tier construction failure (tier skipped, cascade continues).
+
+    Never logs keys or model secrets — tier name + exception class only.
+    Best-effort: metrics failures must not break the cascade fallback.
+    """
+    try:
+        logger.warning("LLM tier %r init failed (%s); tier skipped", tier, type(exc).__name__)
+    except Exception:
+        logger.debug("tier-failure log failed", exc_info=True)
+    try:
+        from services.metrics import LLM_TIER_INIT_FAILURES as _ctr
+
+        _ctr.labels(tier=tier).inc()
+    except Exception:
+        logger.debug("tier-failure metric failed", exc_info=True)
 
 import os as _os
 
@@ -202,7 +223,8 @@ def get_tier_gemini38_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoog
             "Gemini 3.8 Flash", temperature, key, GEMINI_38_MODEL,
             lambda: _make_gemini(_model_override("GEMINI_38_MODEL", GEMINI_38_MODEL), key, temperature),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed("Gemini 3.8 Flash", e)
         return None
 
 
@@ -216,7 +238,8 @@ def get_tier_gemini37_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoog
             "Gemini 3.7 Flash", temperature, key, GEMINI_37_MODEL,
             lambda: _make_gemini(_model_override("GEMINI_37_MODEL", GEMINI_37_MODEL), key, temperature),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed("Gemini 3.7 Flash", e)
         return None
 
 
@@ -230,7 +253,8 @@ def get_tier2_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenera
             "Gemini 3.6 Flash", temperature, key, GEMINI_36_MODEL,
             lambda: _make_gemini(_model_override("GEMINI_36_MODEL", GEMINI_36_MODEL), key, temperature),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed("Gemini 3.6 Flash", e)
         return None
 
 
@@ -244,7 +268,8 @@ def get_tier3_llm(temperature: float = TEMPERATURE) -> Optional[ChatGoogleGenera
             "Gemini 3.5 Flash", temperature, key, GEMINI_35_MODEL,
             lambda: _make_gemini(_model_override("GEMINI_35_MODEL", GEMINI_35_MODEL), key, temperature),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed("Gemini 3.5 Flash", e)
         return None
 
 
@@ -258,7 +283,8 @@ def get_tier_gemini35_lite_llm(temperature: float = TEMPERATURE) -> Optional[Cha
             "Gemini 3.5 Flash Lite", temperature, key, GEMINI_35_LITE_MODEL,
             lambda: _make_gemini(_model_override("GEMINI_35_LITE_MODEL", GEMINI_35_LITE_MODEL), key, temperature),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed("Gemini 3.5 Flash Lite", e)
         return None
 
 
@@ -272,7 +298,8 @@ def get_tier_gemini31_lite_llm(temperature: float = TEMPERATURE) -> Optional[Cha
             "Gemini 3.1 Flash Lite", temperature, key, GEMINI_31_LITE_MODEL,
             lambda: _make_gemini(_model_override("GEMINI_31_LITE_MODEL", GEMINI_31_LITE_MODEL), key, temperature),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed("Gemini 3.1 Flash Lite", e)
         return None
 
 
@@ -312,7 +339,8 @@ def get_tier_groq_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
                 max_retries=0,
             ),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed("Groq", e)
         return None
 
 
@@ -368,7 +396,8 @@ def _get_generic_openai_tier(
                 max_retries=0,
             ),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed(tier, e)
         return None
 
 
@@ -416,7 +445,8 @@ def _get_openrouter_llm(tier: str, model: str, temperature: float) -> Optional[C
                 max_retries=0,
             ),
         )
-    except Exception:
+    except Exception as e:
+        _tier_init_failed(tier, e)
         return None
 
 
@@ -486,7 +516,8 @@ def get_tier_llm(name: str, temperature: float = TEMPERATURE) -> Optional[Any]:
         return None
     try:
         return getter(temperature=temperature)
-    except Exception:
+    except Exception as e:
+        _tier_init_failed(name, e)
         return None
 
 

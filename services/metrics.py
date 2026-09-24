@@ -66,6 +66,12 @@ LLM_PROVIDER_ERRORS = Counter(
     ["tier", "error_kind"],  # from classify_provider_error
     registry=REGISTRY,
 )
+LLM_TIER_INIT_FAILURES = Counter(
+    f"{METRICS_PREFIX}_llm_tier_init_failures_total",
+    "LLM client construction failures by tier (tier skipped, cascade continues)",
+    ["tier"],
+    registry=REGISTRY,
+)
 LLM_ACTIVE_TIER = Gauge(
     f"{METRICS_PREFIX}_llm_active_tier",
     "Current active tier per request (1=active, 0=inactive)",

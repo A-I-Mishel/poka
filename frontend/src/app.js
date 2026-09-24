@@ -7,7 +7,8 @@ import { API_BASE } from "./config.js";
 import { S, TIERS, savePrefs, setPref, setTIERS, setAuthMode } from "./state.js";
 import { req, setApiHooks } from "./api.js";
 import { ACCT, refreshMe, authAsync, authDismissed, setAuthHooks, initAuth } from "./auth.js";
-import { renderProjects, renderRecents, renderChat, refreshProjects, refreshChats, setActiveTier, stopSpeaking, initChat } from "./chat.js";
+import { renderProjects, renderRecents, renderChat, refreshProjects, refreshChats, openChatById, setActiveTier, stopSpeaking, initChat } from "./chat.js";
+import { parseHash, isSyncedHash } from "./route.js";
 import { applyTheme, setMode, setWeb, updatePlaceholder, placeThumb, webBtn, initPanels } from "./panels.js";
 import { closeAttachMenu, closeCamera, camModal, initComposer } from "./composer.js";
 import { initRender } from "./render.js";
@@ -80,7 +81,7 @@ $("keysBtn").addEventListener("click", function () { $("keys").classList.remove(
 $("keysClose").addEventListener("click", function () { $("keys").classList.add("hidden"); });
 /* ---------- init (server-driven) ---------- */
 applyTheme();
-document.body.classList.toggle("folded", innerWidth < 861 ? true : !!S.folded);
+document.body.classList.toggle("folded", window.innerWidth < 861 ? true : !!S.folded);
 setMode(S.mode || "fast", true);
 setWeb(!!S.web);
 renderProjects();
@@ -114,4 +115,20 @@ window.addEventListener("resize", placeThumb);
   }
   try { await refreshProjects(); } catch (err) { toast("Cannot load projects: " + err.message); }
   try { await refreshChats(); } catch (err) { toast("Cannot load chats: " + err.message); }
+  /* Hash deep-links: `#/chats/<id>` adopts the archived chat (back /
+   * forward / reload / shared URL). Stale ids fail quietly home. */
+  async function openFromHash(quiet) {
+    var r = null;
+    try { r = parseHash(window.location.hash); } catch (e) { r = null; }
+    if (r && r.kind === "chat") {
+      await openChatById(r.id, { sync: false, quiet: !!quiet });
+    }
+  }
+  try { await openFromHash(true); } catch (err) {}
+  window.addEventListener("hashchange", function () {
+    try {
+      if (isSyncedHash(window.location.hash)) return;
+      openFromHash(false);
+    } catch (e) {}
+  });
 })();

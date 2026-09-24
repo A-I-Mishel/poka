@@ -1,7 +1,9 @@
 /* Pluto web client module: api (fetch client; 401 flow via hooks wired in app.js).
- * Sessions are HttpOnly cookies: every request uses credentials:"include"
- * so the browser attaches pluto_session automatically. No Bearer tokens
- * are stored in JS (see auth-store.js).
+ * Cookie-first + Bearer fallback: every request uses credentials:"include"
+ * so the browser attaches pluto_session automatically, plus authHeaders()
+ * (see auth-store.js). Same-site relies on the HttpOnly cookie; cross-site
+ * (Vercel UI + Render API, third-party cookies blocked) falls back to the
+ * persisted Bearer token.
  */
 import { apiUrl, API_BASE } from "./config.js";
 import { authHeaders } from "./auth-store.js";
