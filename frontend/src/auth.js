@@ -3,10 +3,27 @@
  */
 import { $, toast } from "./ui.js";
 import { escHtml } from "./markdown.js";
-import { AUTH_SEEN_KEY } from "./config.js";
+import { AUTH_SEEN_KEY, apiUrl } from "./config.js";
 import { S, AUTH_MODE } from "./state.js";
 import { rawReq } from "./api.js";
-import { setToken, clearToken } from "./auth-store.js";
+import { setTokenMemoryOnly, persistToken, clearToken } from "./auth-store.js";
+
+/* Cookie-probe-gated persistence: keep the Bearer fallback in memory
+ * always, but only write it to localStorage when the HttpOnly cookie
+ * never sticks (blocked third-party cookies cross-site). Same-site
+ * users stay cookie-only, so XSS cannot exfiltrate a stored session.
+ * Probe failure (offline) falls back to persisting — the old behavior. */
+async function _cookieSticks() {
+  try {
+    var res = await fetch(apiUrl("/api/auth/me"), { credentials: "include" });
+    return res.status !== 401;
+  } catch (e) { return false; }
+}
+async function adoptSessionToken(token) {
+  setTokenMemoryOnly(token);
+  var sticks = await _cookieSticks();
+  if (!sticks) persistToken();
+}
 
 var _authHooks = {};
 export function setAuthHooks(h) { _authHooks = h || {}; }
@@ -131,13 +148,14 @@ async function authSubmit(path) {
   err.classList.add("hidden");
   try {
     // Primary transport is the HttpOnly pluto_session cookie. The server
-    // ALSO returns the raw session token once in JSON: persist it as a
-    // Bearer fallback for cross-site deploys (Vercel + Render) where
-    // third-party cookies are blocked. Backend accepts Bearer first,
-    // cookie second (backend/deps.py session_token_from), so storing the
-    // token makes /me succeed even when the cookie never sticks.
+    // ALSO returns the raw session token once in JSON: keep it in memory
+    // and persist as a Bearer fallback only when the cookie never sticks
+    // (cross-site deploys like Vercel + Render where third-party cookies
+    // are blocked). Backend accepts Bearer first, cookie second
+    // (backend/deps.py session_token_from), so the fallback makes /me
+    // succeed even when the cookie never sticks.
     var data = await authCall(path, { username: u, password: p });
-    if (data && data.token) setToken(data.token);
+    if (data && data.token) await adoptSessionToken(data.token);
     await refreshMe();
     if (!ACCT.username) {
       clearToken();
@@ -245,7 +263,7 @@ async function submitPasswordChange() {
       throw new Error(detail);
     }
     var changed = await res.json();
-    if (changed && changed.token) setToken(changed.token);
+    if (changed && changed.token) await adoptSessionToken(changed.token);
     hideAcct();
     toast("Password changed — other devices signed out");
   } catch (e) {

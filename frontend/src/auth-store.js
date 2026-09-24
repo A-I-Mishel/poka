@@ -39,6 +39,7 @@ function getToken() {
   if (stored) _memToken = stored;
   return stored;
 }
+/** @param {*} t */
 function setToken(t) {
   _clearLegacyTokens();
   var v = typeof t === "string" ? t.trim() : "";
@@ -51,6 +52,35 @@ function setToken(t) {
 function clearToken() {
   setToken("");
 }
+/* Scoped persistence: cookie-first means the Bearer fallback only needs
+ * localStorage when the HttpOnly cookie never sticks (blocked
+ * third-party cookies cross-site). Memory always holds the token for
+ * the tab lifetime; localStorage is the cross-reload fallback. */
+/** @param {*} t */
+function setTokenMemoryOnly(t) {
+  _clearLegacyTokens();
+  var v = typeof t === "string" ? t.trim() : "";
+  _memToken = v;
+  try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+}
+function persistToken() {
+  _clearLegacyTokens();
+  try {
+    if (_memToken) localStorage.setItem(TOKEN_KEY, _memToken);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch (e) {}
+}
+function _csrfCookie() {
+  // Double-submit value issued as the readable `pluto_csrf` cookie on
+  // signup/login (same-origin only; split-origin frontends cannot read
+  // API-origin cookies and keep the legacy "1" marker, which the
+  // server accepts when no cookie is present).
+  try {
+    var m = String(document.cookie || "").match(/(?:^|;\s*)pluto_csrf=([^;]*)/);
+    var v = m ? decodeURIComponent(m[1] || "").trim() : "";
+    return v || "";
+  } catch (e) { return ""; }
+}
 function authHeaders() {
   var h = {};
   var tok = getToken();
@@ -60,7 +90,7 @@ function authHeaders() {
   // Required for cookie-authenticated POST/PUT/PATCH/DELETE (see
   // backend/deps.py _require_csrf). Safe (and harmless for Bearer) to
   // send always.
-  h["X-Pluto-Csrf"] = "1";
+  h["X-Pluto-Csrf"] = _csrfCookie() || "1";
   return h;
 }
 function getVisitor() {
@@ -90,4 +120,4 @@ function getVisitor() {
   } catch (e) { return ""; }
 }
 
-export { getToken, setToken, clearToken, authHeaders, getVisitor };
+export { getToken, setToken, setTokenMemoryOnly, persistToken, clearToken, authHeaders, getVisitor };

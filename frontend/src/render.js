@@ -6,6 +6,7 @@
 import { $, toast, esc, enc, isSafeHttpUrl, fmtTime, fmtDay } from "./ui.js";
 import { md, planet } from "./markdown.js";
 import { apiUrl } from "./config.js";
+import { syncHashForChat } from "./route.js";
 import { S, TIERS, chats, current, projects, setPref, setChats, setCurrent, setProjects } from "./state.js";
 import { req, authedDownload } from "./api.js";
 import { authHeaders } from "./auth-store.js";
@@ -366,6 +367,28 @@ async function refreshProjects() {
   if (S.projectId && !projects.some(function (p) { return p && p.id === S.projectId; })) setPref("projectId", null);
   renderProjects();
 }
+/* ---------- hash deep-links (#/chats/<id>) ----------
+ * Same POST /api/chats/open the recents list uses; opts.sync=false
+ * skips rewriting the hash (hash-driven opens already match),
+ * opts.quiet=true skips the error toast (boot-time stale hashes). */
+async function openChatById(id, opts) {
+  var sync = !opts || opts.sync !== false;
+  var quiet = !!opts && !!opts.quiet;
+  try {
+    var data = await req("/api/chats/open", { method: "POST", body: JSON.stringify({ id: id }) });
+    setChats(data.chats || []);
+    setCurrent(data.current || []);
+    renderRecents();
+    renderChat();
+    showChat();
+    if (sync) syncHashForChat(id);
+    if (window.innerWidth < 861) document.body.classList.add("folded");
+    return true;
+  } catch (err) {
+    if (!quiet) toast("Cannot open chat: " + err.message);
+    return false;
+  }
+}
 /* ---------- message actions ---------- */
 function copyText(t) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -444,15 +467,7 @@ function renderRecents() {
     d.appendChild(kb);
     d.addEventListener("click", async function (e) {
       if (e.target === kb) return;
-      try {
-        var data = await req("/api/chats/open", { method: "POST", body: JSON.stringify({ id: c.id }) });
-        setChats(data.chats || []);
-        setCurrent(data.current || []);
-        renderRecents();
-        renderChat();
-        showChat();
-      } catch (err) { toast("Cannot open chat: " + err.message); }
-      if (window.innerWidth < 861) document.body.classList.add("folded");
+      await openChatById(c.id);
     });
     kb.addEventListener("click", function (e) {
       e.stopPropagation();
@@ -617,4 +632,4 @@ function renderModelDD() {
 function getCtxId() { return ctxId; }
 function getProjId() { return projId; }
 
-export { initRender, chipForAttachment, rememberApprovalTokens, approvalTokenFor, decideApproval, msgEl, msgMeta, hydrateUploadImages, versionGroup, renderChat, maybeScroll, scrollBottom, refreshChats, refreshProjects, copyText, legacyCopy, stopSpeaking, speakable, speakText, renderRecents, renderProjects, chatMarkdown, downloadMarkdown, downloadChatPdf, setActiveTier, renderModelDD, getCtxId, getProjId };
+export { initRender, chipForAttachment, rememberApprovalTokens, approvalTokenFor, decideApproval, msgEl, msgMeta, hydrateUploadImages, versionGroup, renderChat, maybeScroll, scrollBottom, refreshChats, refreshProjects, openChatById, copyText, legacyCopy, stopSpeaking, speakable, speakText, renderRecents, renderProjects, chatMarkdown, downloadMarkdown, downloadChatPdf, setActiveTier, renderModelDD, getCtxId, getProjId };

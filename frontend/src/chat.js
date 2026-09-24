@@ -9,7 +9,8 @@ import { S, chats, current, projects, setPref, setChats, setCurrent } from "./st
 import { req } from "./api.js";
 import { ask } from "./auth.js";
 import { openSection, showChat, openTitle } from "./panels.js";
-import { decideApproval, copyText, speakText, renderChat, renderRecents, refreshProjects, refreshChats, downloadMarkdown, downloadChatPdf, chatMarkdown, getCtxId, getProjId, msgEl, msgMeta, renderProjects, setActiveTier, renderModelDD, stopSpeaking, hydrateUploadImages } from "./render.js";
+import { decideApproval, copyText, speakText, renderChat, renderRecents, refreshProjects, refreshChats, openChatById, downloadMarkdown, downloadChatPdf, chatMarkdown, getCtxId, getProjId, msgEl, msgMeta, renderProjects, setActiveTier, renderModelDD, stopSpeaking, hydrateUploadImages } from "./render.js";
+import { syncHashForChat } from "./route.js";
 import { send, sendText, isStreaming, clearComposer, restoreComposer, uploadPending, streamInto } from "./send.js";
 
 /* All DOM wiring lives in initChat(), not at import time, so this
@@ -214,6 +215,7 @@ $("newChatBtn").addEventListener("click", async function () {
   renderRecents();
   renderChat();
   showChat();
+  syncHashForChat(null);
   if (window.innerWidth < 861) document.body.classList.add("folded");
   input.focus();
 });
@@ -251,4 +253,4 @@ $("modelBtn").addEventListener("click", function (e) {
 });
 } /* end initChat */
 
-export { initChat, msgEl, renderChat, refreshChats, refreshProjects, sendText, send, copyText, renderRecents, renderProjects, chatMarkdown, downloadChatPdf, setActiveTier, renderModelDD, clearComposer, restoreComposer, uploadPending, streamInto, stopSpeaking, speakText, hydrateUploadImages };
+export { initChat, msgEl, renderChat, refreshChats, refreshProjects, openChatById, sendText, send, copyText, renderRecents, renderProjects, chatMarkdown, downloadChatPdf, setActiveTier, renderModelDD, clearComposer, restoreComposer, uploadPending, streamInto, stopSpeaking, speakText, hydrateUploadImages };
