@@ -9,7 +9,8 @@ RUN npm run build
 # ---- Pluto API + serving ----
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PLUTO_DATA_DIR=/app/data
 WORKDIR /app
 COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
@@ -33,4 +34,7 @@ EXPOSE 7860
 # No curl in slim: stdlib-only probe of the public health endpoint.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
   CMD python -c "import os,sys,urllib.request; p=os.getenv('PORT','7860'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{p}/api/health', timeout=4).status==200 else 1)"
-CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
+# --proxy-headers mirrors render.yaml: TLS-terminating proxies forward plain
+# HTTP + X-Forwarded-Proto, without it Secure/SameSite=None cookies degrade
+# to Lax and cross-site logins loop (200 + /me 401). exec so PID 1 is uvicorn.
+CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --proxy-headers --forwarded-allow-ips '*'"]

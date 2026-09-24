@@ -1,0 +1,36 @@
+# Pluto local production-parity stack (see audit Phase 1).
+# API builds the UI (Dockerfile multi-stage) and serves it single-server.
+# Data persists in the named volume via PLUTO_DATA_DIR=/app/data.
+services:
+  api:
+    build: .
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    environment:
+      PORT: "7860"
+      PLUTO_DATA_DIR: /app/data
+      # Set to the UI origin when testing split-frontend cookie flows:
+      # PLUTO_FRONTEND_ORIGIN: http://localhost:5173
+      # PLUTO_TRUST_PROXY: "true"
+    volumes:
+      - pluto-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,urllib.request; p=os.getenv('PORT','7860'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{p}/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+  # Optional Redis for UVICORN_WORKERS>1 testing (private mode requires REDIS_URL).
+  # Enable with: docker compose --profile workers up --build
+  redis:
+    image: redis:7-alpine
+    profiles: ["workers"]
+    volumes:
+      - pluto-redis:/data
+
+volumes:
+  pluto-data:
+  pluto-redis:

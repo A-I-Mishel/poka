@@ -8,6 +8,13 @@ data/
 memory/
 frontend/node_modules/
 frontend/dist/
+.venv/
+.e2e-data/
+tests/
+load-test/
+chaos/*.log
+chaos/results.json
+*.log
 *.pdf
 *.png
 *.jpg
