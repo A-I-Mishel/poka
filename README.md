@@ -45,6 +45,20 @@ uvicorn backend.main:app --port 8000   # API on http://localhost:8000
 cd frontend && npm install && npm run dev   # UI on http://localhost:5173
 ```
 
+Windows PowerShell 5.1 has no `&&` — use `; if ($?) { ... }`:
+
+```powershell
+pip install -r requirements.lock
+uvicorn backend.main:app --port 8000
+cd frontend; if ($?) { npm install }; if ($?) { npm run dev }
+```
+
+Reproducible prod-parity stack (API builds and serves the UI):
+
+```bash
+docker compose up --build   # API on http://localhost:7860, data in pluto-data volume
+```
+
 `requirements.txt` holds the loose constraints; `requirements.lock`
 is the hash-pinned build input (regenerate with
 `uv pip compile --universal --generate-hashes --python-version 3.12 -o requirements.lock requirements.txt`;
@@ -100,6 +114,13 @@ under Environment Variables. Never commit keys.
   into localStorage, so logged-out chats persist), else a per-request
   ephemeral id. Clients may send `Authorization: Bearer <token>`; it is
   verified only against `PLUTO_ACCESS_TOKENS`.
+- **Sessions are cookie-first.** Browsers authenticate with the HttpOnly
+  `pluto_session` cookie. The raw token in the login JSON is kept in
+  memory and persisted to localStorage only when the cookie never sticks
+  (blocked third-party cookies in split-origin deploys) — same-site
+  users stay cookie-only. Cookie-authenticated unsafe methods also need
+  `X-Pluto-Csrf` matching the readable `pluto_csrf` cookie (legacy `"1"`
+  still accepted when no cookie is present, e.g. split-origin).
 - **private**: only `PLUTO_USER_ID` or holders of a `PLUTO_ACCESS_TOKENS`
   token (sent as `Authorization: Bearer <token>`) are admitted.
   Everyone else gets HTTP 401. Tokens are compared with
@@ -300,6 +321,14 @@ failures raise instead of masquerading as corruption.
 - Public deployments must set `PLUTO_AUTH_MODE=private` plus
   `PLUTO_ACCESS_TOKENS`: the default `open` mode is for local/dev/
   trusted use only.
+- Behind a TLS-terminating proxy (Render, load balancers, the Docker
+  image), set `PLUTO_TRUST_PROXY=true` so `Secure`/`SameSite=None`
+  cookies are issued correctly (the Docker `CMD` already passes
+  `--proxy-headers`).
+- Single worker (`UVICORN_WORKERS=1`) is the supported production
+  default. `UVICORN_WORKERS>1` requires `REDIS_URL` (fail-closed at
+  startup); without it, rate limits and store caches are per-process
+  best-effort.
 
 ## Tests
 

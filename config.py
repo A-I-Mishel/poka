@@ -5,16 +5,14 @@ same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
 (fresh per-model quota pools) -> Groq 120B (strong fallback, cheap-backup
 included) -> Cohere -> Nemotron 3 Ultra -> Qwen 3.8 27B
 -> Ling 3.0 Flash VL (vision-capable, emergency pool tail).
-GitHub Models + NVIDIA removed (dead). Groq Fast 20B / Mistral /
-OpenRouter Free Router removed Sep 2026 (superseded by the local cheap
-tier; see retired notes inline). GLM 5.2 removed Sep 2026 (failed trial
-— persistent upstream rate limits). TokenHarbor MiMo 2.6 Flash +
-DeepSeek V4.1 Flash removed (trial ended — lanes deleted).
 
-OpenCode Zen free tier retired Sep 2026: provider returns
-MissingSessionID ("free tier can only be used in OpenCode") for
-API calls, so the 6 free lanes were removed. Paid Zen models remain
-usable via the same base URL if billing is added.
+RETIRED_LANES (Sep 2026, re-add pointers live inline where each lane
+was removed): GitHub Models + NVIDIA (dead); Groq Fast 20B / Mistral /
+OpenRouter Free Router (superseded by the local cheap tier); GLM 5.2
+(failed trial — upstream rate limits); TokenHarbor MiMo 2.6 Flash +
+DeepSeek V4.1 Flash (trial ended); OpenCode Zen free lanes
+(MissingSessionID — free tier only works inside OpenCode; paid Zen
+models remain usable via https://opencode.ai/zen/v1 if billing is added).
 """
 
 import hashlib

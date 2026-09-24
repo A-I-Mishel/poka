@@ -3,6 +3,10 @@ name = "pluto-smart-task-agent"
 version = "0.1.0"
 description = "Pluto — Smart Task Agent (free-tier multi-model assistant)"
 requires-python = ">=3.12"
+# Empty on purpose: requirements.lock (compiled from requirements.txt via
+# `uv pip compile --universal --generate-hashes --python-version 3.12`)
+# is the install source for CI, Docker, and Render. `pip install -e .`
+# installs nothing and is unsupported.
 dependencies = []
 
 [tool.pytest.ini_options]
