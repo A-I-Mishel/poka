@@ -102,7 +102,7 @@ def test_first_token_timeout_per_tier(monkeypatch):
     monkeypatch.delenv("PLUTO_FIRST_TOKEN_TIMEOUT", raising=False)
     assert _first_token_timeout_for_tier("Ollama 8B") == 120.0
     assert _first_token_timeout_for_tier("Ollama") == 120.0
-    assert _first_token_timeout_for_tier("OpenRouter Ling VL") == 20.0
+    assert _first_token_timeout_for_tier("OpenRouter Nemotron Ultra") == 20.0
     assert _first_token_timeout_for_tier("Groq") == 12.0
     assert _first_token_timeout_for_tier(None) == 12.0
 

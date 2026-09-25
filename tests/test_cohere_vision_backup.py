@@ -16,7 +16,7 @@ from services.vision import vision_supported_tier
 
 def test_cohere_admitted_unknown_stays_text_only():
     assert vision_supported_tier("Cohere") is True
-    assert vision_supported_tier("OpenRouter Ling VL") is True
+    assert vision_supported_tier("OpenRouter Ling VL") is False
     assert vision_supported_tier("Gemini 3.8 Flash") is True
     assert vision_supported_tier("Gemini 3.7 Flash") is True
     assert vision_supported_tier("Gemini 3.6 Flash") is True
@@ -36,8 +36,7 @@ def test_bridge_converter_backup_order():
     assert _CONVERTER_TIERS is VISION_TIER_ORDER
     assert list(_CONVERTER_TIERS) == [
         "Gemini 3.8 Flash", "Gemini 3.7 Flash",
-        "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere",
-        "OpenRouter Ling VL"]
+        "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere"]
 
 
 def test_runtime_vision_tier_names_mirror():
@@ -47,11 +46,9 @@ def test_runtime_vision_tier_names_mirror():
 
     assert rt._VISION_TIER_NAMES is VISION_TIER_ORDER
     assert "Cohere" in rt._VISION_TIER_NAMES
-    assert "OpenRouter Ling VL" in rt._VISION_TIER_NAMES
+    assert "OpenRouter Ling VL" not in rt._VISION_TIER_NAMES
     assert rt._VISION_TIER_NAMES.index("Gemini 3.5 Flash") < \
         rt._VISION_TIER_NAMES.index("Cohere")
-    assert rt._VISION_TIER_NAMES.index("Cohere") < \
-        rt._VISION_TIER_NAMES.index("OpenRouter Ling VL")
 
 
 def test_degraded_message_is_provider_neutral(monkeypatch):

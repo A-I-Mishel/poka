@@ -3,14 +3,14 @@
 Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
 same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
 (fresh per-model quota pools) -> Groq 120B (strong fallback, cheap-backup
-included) -> Cohere -> Nemotron 3 Ultra
--> Ling 3.0 Flash VL (vision-capable, emergency pool tail).
+included) -> Cohere -> Nemotron 3 Ultra (emergency pool).
 
 RETIRED_LANES (Sep 2026, re-add pointers live inline where each lane
 was removed): GitHub Models + NVIDIA (dead); Groq Fast 20B / Mistral /
 OpenRouter Free Router (superseded by the local cheap tier); GLM 5.2
 (failed trial — upstream rate limits); Qwen 3.8 27B (trial ended —
-removed per user request); TokenHarbor MiMo 2.6 Flash +
+removed per user request); Ling 3.0 Flash VL (removed per user request);
+TokenHarbor MiMo 2.6 Flash +
 DeepSeek V4.1 Flash (trial ended); OpenCode Zen free lanes
 (MissingSessionID — free tier only works inside OpenCode; paid Zen
 models remain usable via https://opencode.ai/zen/v1 if billing is added).
@@ -89,16 +89,15 @@ COHERE_BASE_URL: str = "https://api.cohere.com/compatibility/v1"
 COHERE_MODEL: str = "command-a-03-2025"
 # OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Emergency pool: one curated strong lane (Nemotron 3 Ultra, user pick)
-# ahead of the trial lane (Ling 3.0 Flash VL vision-capable MoE) as the
-# emergency pool tail. Other curated free-model lanes (Gemma/Super/
+# as the emergency pool tail. Other curated free-model lanes (Gemma/Super/
 # 3.5/26B/Ling-Fin/Laguna) stay removed — promos rotate. Free Router
 # removed Sep 2026 (local tier takes the fallback role); GLM 5.2 removed
 # Sep 2026 (failed trial — rate-limited).
-# Trial lanes: keep while stable, delete on repeated bans/flakes — one
-# constant + its list entries each.
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
-OPENROUTER_LING_VL_MODEL: str = "inclusionai/ling-3.0-flash-vl:free"
+# Ling 3.0 Flash VL removed (per user request). Re-add
+# get_tier_openrouter_ling_vl_llm + OPENROUTER_LING_VL_MODEL
+# ("inclusionai/ling-3.0-flash-vl:free") if the lane is ever needed again.
 # TokenHarbor lanes removed (trial ended): MiMo 2.6 Flash +
 # DeepSeek V4.1 Flash deleted along with their getters and table
 # entries. Re-add via https://tokenharbor.ai/v1 if the trial resumes.
@@ -476,15 +475,6 @@ def get_tier_openrouter_ultra_llm(temperature: float = TEMPERATURE) -> Optional[
 # ("z-ai/glm-5.2:free") if the lane recovers.
 
 
-def get_tier_openrouter_ling_vl_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter trial (Sep 2026): Ling 3.0 Flash VL vision MoE (free tier)."""
-    return _get_openrouter_llm(
-        "OpenRouter Ling VL",
-        _model_override("OPENROUTER_LING_VL_MODEL", OPENROUTER_LING_VL_MODEL),
-        temperature,
-    )
-
-
 # Free Router removed Sep 2026 (superseded by the local cheap tier as
 # the deterministic always-available fallback). Re-add
 # get_tier_openrouter_free_router_llm + OPENROUTER_FREE_ROUTER_MODEL
@@ -566,7 +556,6 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Groq": get_tier_groq_llm,
     "Cohere": get_tier_cohere_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
-    "OpenRouter Ling VL": get_tier_openrouter_ling_vl_llm,
     "Ollama 8B": get_tier_ollama_llm,
     # Legacy alias: single "Ollama" name resolves to the same slot.
     "Ollama": get_tier_ollama_llm,
@@ -600,7 +589,6 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
     ("Ollama 8B", get_tier_ollama_llm),
 ]
 
@@ -613,7 +601,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
 # remains the escape hatch when synthesis is down. Tables hold (name,
 # getter) pairs like TIER_GETTERS.
 # Gemini leads; Groq 120B is the strong fallback; Cohere -> Nemotron
-# Ultra -> Ling VL is the emergency pool. Groq's
+# Ultra is the emergency pool. Groq's
 # free pool absorbs cheap traffic; Gemini's per-model pool is spent on
 # quality final answers + vision.
 # Weak/strict tier sets removed Sep 2026 with their only members (Groq
@@ -630,7 +618,6 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
     ("Ollama 8B", get_tier_ollama_llm),
 ]
 # Fast-mode answer table (mode-based routing): only these lanes may
@@ -649,7 +636,6 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
 FAST_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.1 Flash Lite", get_tier_gemini31_lite_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
 ]
 CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),

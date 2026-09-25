@@ -30,12 +30,9 @@ VISION_EXTS = frozenset({"png", "jpg", "jpeg", "webp", "gif", "bmp"})
 # agent.runtime._VISION_TIER_NAMES) instead of maintaining their own
 # copies — the three lists drifted before, and drift here means one
 # path sees a lane the others don't. Trial lanes join/leave HERE only.
-# Ling VL (OpenRouter trial, Sep 2026) trails Cohere: free vision MoE,
-# single provider — remove the name here to drop it from every vision
-# path at once.
 VISION_TIER_ORDER = ("Gemini 3.8 Flash", "Gemini 3.7 Flash",
                      "Gemini 3.6 Flash", "Gemini 3.5 Flash",
-                     "Cohere", "OpenRouter Ling VL")
+                     "Cohere")
 
 # Tier names known to accept image content blocks. Unknown tiers are
 # treated as text-only so we never send images into the void.
@@ -46,7 +43,7 @@ VISION_TIER_ORDER = ("Gemini 3.8 Flash", "Gemini 3.7 Flash",
 # (including Lite lanes) in cascade-filter loops, while VISION_TIER_ORDER
 # above lists only trial-verified lanes for converter/runtime paths.
 # Do NOT "fix" the asymmetry without a vision trial on the added lanes.
-_VISION_TIERS = ("gemini", "cohere", "ling")
+_VISION_TIERS = ("gemini", "cohere")
 
 
 def vision_supported_tier(tier_name: str) -> bool:
