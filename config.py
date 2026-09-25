@@ -104,24 +104,24 @@ OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 # DeepSeek V4.1 Flash deleted along with their getters and table
 # entries. Re-add via https://tokenharbor.ai/v1 if the trial resumes.
 # Kilo Gateway via its OpenAI-compatible endpoint (same ChatOpenAI
-# client). Keyless lane: :free models need no API key (anonymous,
-# 200 req/hr per IP) so a dummy key is sent. Dots 3 Note Preview
+# client). Keyless lane: :free models accept anonymous requests, so no
+# Authorization header is sent at all (a dummy Bearer is rejected).
+# Dots 3 Note Preview
 # (MoE 16B active/280B, 512K ctx) sits in the emergency pool behind
 # Nemotron Ultra. Override the model with KILO_DOTS_MODEL if needed.
 KILO_BASE_URL: str = "https://api.kilo.ai/api/gateway"
 KILO_DOTS_MODEL: str = "dots-studio/dots-3-note-preview:free"
-# Local Ollama tier (Oct 2026): whatever model the local Ollama daemon
+# Local Ollama tier: whatever model the local Ollama daemon
 # serves via its OpenAI-compatible endpoint. Single slot, default
-# qwen3:8b (offline fallback tail of the synthesis tables).
+# qwen2.5:7b (offline fallback tail of the synthesis tables).
 # Set OLLAMA_ENABLED=false to skip it on machines without Ollama.
 # No API key needed (dummy "ollama" is sent). Text-only by design (the
 # name matches no services.vision.py vision key, so vision lanes never
-# select it). Thinking stays ON via this client — Ollama's OpenAI
-# endpoint ignores think:false, and reasoning arrives in a separate
-# field, so answer content stays clean (plus strip_internal_reasoning
-# backup). Same ChatOpenAI client as Groq/Cohere: tool calling works.
+# select it). Qwen2.5 has no thinking chains, so no reasoning field
+# arrives (strip_internal_reasoning stays as backup). Same ChatOpenAI
+# client as Groq/Cohere: tool calling works.
 OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
-OLLAMA_MODEL: str = "qwen3:8b"
+OLLAMA_MODEL: str = "qwen2.5:7b"
 TEMPERATURE: float = 0.7
 
 # Client cache: clients hold only model config + credentials (no user
@@ -625,7 +625,7 @@ def _get_ollama_llm(
 
 
 def get_tier_ollama_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Local Ollama slot: qwen3:8b (offline fallback tail of synthesis).
+    """Local Ollama slot: qwen2.5:7b (offline fallback tail of synthesis).
 
     No key required (Ollama ignores auth; "ollama" is sent as a dummy).
     Base URL via OLLAMA_BASE_URL, model via OLLAMA_MODEL. The daemon
@@ -633,7 +633,7 @@ def get_tier_ollama_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI
     first invoke fails fast (connection refused) and the cascade cools
     the tier over to cloud — offline-safe by construction.
     """
-    return _get_ollama_llm("Ollama 8B", "OLLAMA_MODEL", OLLAMA_MODEL, temperature)
+    return _get_ollama_llm("Ollama 7B", "OLLAMA_MODEL", OLLAMA_MODEL, temperature)
 
 
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
@@ -647,9 +647,11 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Cohere": get_tier_cohere_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
     "Kilo Dots 3 Note": get_tier_kilo_dots_llm,
-    "Ollama 8B": get_tier_ollama_llm,
-    # Legacy alias: single "Ollama" name resolves to the same slot.
+    "Ollama 7B": get_tier_ollama_llm,
+    # Legacy aliases: single "Ollama" and old "Ollama 8B" names resolve
+    # to the same slot so saved preferences keep working.
     "Ollama": get_tier_ollama_llm,
+    "Ollama 8B": get_tier_ollama_llm,
 }
 
 
@@ -681,7 +683,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("Kilo Dots 3 Note", get_tier_kilo_dots_llm),
-    ("Ollama 8B", get_tier_ollama_llm),
+    ("Ollama 7B", get_tier_ollama_llm),
 ]
 
 
@@ -711,7 +713,7 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("Kilo Dots 3 Note", get_tier_kilo_dots_llm),
-    ("Ollama 8B", get_tier_ollama_llm),
+    ("Ollama 7B", get_tier_ollama_llm),
 ]
 # Fast-mode answer table (mode-based routing): only these lanes may
 # produce the visible answer when deep_mode is off. Order matches the
@@ -721,7 +723,7 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
 # visible answer tier. When every fast lane is down, fast mode fails
 # honestly (no silent fallback to the full cascade: that would defeat
 # the quota savings this table exists for).
-# NOTE (Oct 2026): Ollama 8B stays in SYNTHESIS_TIERS (deep-mode offline
+# NOTE: Ollama 7B stays in SYNTHESIS_TIERS (deep-mode offline
 # tail) but is out of FAST_TIERS. Fast answers must never come from the
 # weakest lane: a robotic low-quality answer with a fallback footer is
 # worse than an honest all-fast-lanes error, and it costs an extra

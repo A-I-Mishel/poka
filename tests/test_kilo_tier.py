@@ -66,8 +66,8 @@ def test_no_authorization_header_sent():
 
 def test_cascade_position_is_tail():
     names = [name for name, _ in config.TIER_GETTERS]
-    assert names[-3:] == ["OpenRouter Nemotron Ultra", "Kilo Dots 3 Note", "Ollama 8B"]
-    assert names[-1] == "Ollama 8B"
+    assert names[-3:] == ["OpenRouter Nemotron Ultra", "Kilo Dots 3 Note", "Ollama 7B"]
+    assert names[-1] == "Ollama 7B"
 
 
 def test_synthesis_only():

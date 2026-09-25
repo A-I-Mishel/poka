@@ -93,8 +93,8 @@ def test_fast_tiers_exclude_weakest_lane():
 
     fast = [n for n, _ in config.FAST_TIERS]
     synth = [n for n, _ in config.SYNTHESIS_TIERS]
-    assert "Ollama 8B" not in fast
-    assert "Ollama 8B" in synth  # deep-only offline tail kept
+    assert "Ollama 7B" not in fast
+    assert "Ollama 7B" in synth  # deep-only offline tail kept
     assert set(fast) < set(synth)
 
 
