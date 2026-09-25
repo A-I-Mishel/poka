@@ -44,6 +44,157 @@ def _identity_patterns():
 _GREETING_PREFIX_RES = None
 
 
+# Pure-greeting fast path (zero model calls): the highest-frequency,
+# lowest-value turns ("hi", "hello") skip the cascade entirely.
+# Full-match ONLY on bare greetings — "hi, what is a vertex?" still
+# takes the model path. Evaluated AFTER sticky continuations in turns.py
+# (a mid-teaching "hi" is a session ack, never a greeting). Any doubt
+# fails open to the model. Kill-switch: PLUTO_GREETINGS=0.
+_PURE_GREETINGS = frozenset({
+    "hi", "hii", "hiii", "hello", "helloo", "hey", "heyy",
+    "yo", "sup", "howdy", "greetings",
+    "good morning", "good afternoon", "good evening",
+    "salam", "assalamualaikum", "assalamu alaikum",
+})
+
+_GREETING_REPLIES = (
+    "Hey! Good to see you — what are we working on?",
+    "Hi there! What's on your mind?",
+    "Hello! Ready when you are — what's up?",
+)
+
+_SALAM_REPLIES = (
+    "Walaikum assalam! How can I help you today?",
+    "Walaikum assalam! What are we working on?",
+)
+
+
+def _is_pure_greeting(text: Any) -> bool:
+    """True when the message is ONLY a greeting (never raises)."""
+    try:
+        import re as _re
+
+        normalized = str(text or "").lower()
+        normalized = _re.sub(r"[!?.\u2026,]+", " ", normalized)
+        normalized = _re.sub(r"\s+", " ", normalized).strip()
+        if not normalized or len(normalized) > 30:
+            return False
+        return normalized in _PURE_GREETINGS
+    except Exception:
+        return False
+
+
+def _greeting_reply(text: Any, user_id: Any = "") -> str:
+    """Deterministic rotating greeting reply (never raises).
+
+    Rotation is a stable hash of user + day: same user sees variety
+    across days without per-turn randomness to test. Salam greetings
+    get salam replies; everything else shares the standard set.
+    """
+    try:
+        import hashlib as _hl
+
+        normalized = str(text or "").lower()
+        pool = _SALAM_REPLIES if "salam" in normalized else _GREETING_REPLIES
+        try:
+            import datetime as _dt
+
+            day = _dt.date.today().isoformat()
+        except Exception:
+            day = ""
+        digest = _hl.sha256(f"{user_id or ''}:{day}".encode()).digest()
+        return pool[digest[0] % len(pool)]
+    except Exception:
+        return _GREETING_REPLIES[0]
+
+
+def _greetings_enabled() -> bool:
+    """False when the operator disables the zero-call greeting path."""
+    try:
+        from services.secrets import get_secret as _get_secret
+
+        return (_get_secret("PLUTO_GREETINGS", "1") or "1").strip().lower() not in (
+            "0", "false", "no", "off")
+    except Exception:
+        return True
+
+
+# Exact-repeat cache (opt-in): identical questions answered twice in a
+# row cost the full 4-8 call pipeline twice. A short-TTL cache keyed
+# on (user, normalized text, deep_mode, pinned tier) reuses the last
+# answer with zero calls. OFF by default (PLUTO_REPEAT_CACHE=1 to try):
+# same words can deserve a fresh answer when files, teaching cursor,
+# or memory changed — callers must exclude teaching/vision/attachment
+# turns and only store clean (no-fallback, no-approval) answers.
+# Hits are metered (obs "repeat_cache.hit") so the trial reads out.
+_REPEAT_CACHE_TTL_S = 300.0
+_REPEAT_CACHE_MAX = 64
+_repeat_cache: Dict[str, tuple] = {}
+
+
+def _repeat_cache_enabled() -> bool:
+    """True only when the operator opts into the repeat-answer trial."""
+    try:
+        from services.secrets import get_secret as _get_secret
+
+        return (_get_secret("PLUTO_REPEAT_CACHE", "0") or "0").strip().lower() in (
+            "1", "true", "yes", "on")
+    except Exception:
+        return False
+
+
+def _repeat_cache_key(text: Any, user_id: Any = "",
+                      deep_mode: bool = False,
+                      pinned_tier: Any = "") -> str:
+    """Cache key for one repeatable turn (never raises)."""
+    try:
+        import hashlib as _hl
+        import re as _re
+
+        normalized = _re.sub(r"\s+", " ", str(text or "").lower()).strip()
+        raw = f"{user_id or ''}\n{normalized}\n{bool(deep_mode)}\n{pinned_tier or ''}"
+        return _hl.sha256(raw.encode()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _repeat_cache_get(key: str) -> Optional[Dict[str, Any]]:
+    """Fresh cached answer or None (never raises; prunes expired)."""
+    try:
+        import time as _time
+
+        if not key:
+            return None
+        now = _time.time()
+        hit = _repeat_cache.get(key)
+        if hit is None:
+            return None
+        ts, value = hit
+        if now - float(ts) > _REPEAT_CACHE_TTL_S:
+            _repeat_cache.pop(key, None)
+            return None
+        return dict(value) if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def _repeat_cache_put(key: str, value: Dict[str, Any]) -> None:
+    """Store one clean answer (never raises; bounded)."""
+    import logging as _logging
+
+    try:
+        import time as _time
+
+        if not key or not isinstance(value, dict):
+            return
+        while len(_repeat_cache) >= _REPEAT_CACHE_MAX:
+            _repeat_cache.pop(next(iter(_repeat_cache)))
+        _repeat_cache[key] = (_time.time(), dict(value))
+    except Exception:
+        _logging.getLogger(__name__).debug(
+            "repeat-cache store failed", exc_info=True)
+
+
 def _is_user_identity_question(text: Any) -> bool:
     """True when the message IS a user-identity question (never raises).
 

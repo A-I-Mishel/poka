@@ -75,8 +75,12 @@ def test_loop_budget_exhaustion_synthesizes():
     assert len(llm.calls) == 2
 
 
+def _bogus(n):
+    return [{"name": "bogus-tool-xyz", "args": {"n": n}, "id": "1"}]
+
+
 def test_deep_mode_chains_past_four():
-    script = [("thinking %d" % i, BOGUS) for i in range(6)]
+    script = [("thinking %d" % i, _bogus(i)) for i in range(6)]
     script.append("final answer " + "x" * 80)
     llm = ScriptLLM(script)
     # One tier entry per round: the runtime failover provider serves
@@ -93,7 +97,7 @@ def test_deep_mode_chains_past_four():
 
 
 def test_fast_mode_still_stops_at_four():
-    script = [("thinking %d" % i, BOGUS) for i in range(4)]
+    script = [("thinking %d" % i, _bogus(i)) for i in range(4)]
     script.append("synth done")
     llm = ScriptLLM(script)
     tiers = [("f%d" % i, lambda: llm) for i in range(5)]
@@ -108,7 +112,7 @@ def test_fast_mode_still_stops_at_four():
 
 def test_single_tier_chains_multiple_rounds():
     """One healthy tier must serve every round (provider reuses it)."""
-    script = [("thinking %d" % i, BOGUS) for i in range(3)]
+    script = [("thinking %d" % i, _bogus(i)) for i in range(3)]
     script.append("final answer here")
     llm = ScriptLLM(script)
     out = agent.answer_with_fallback(

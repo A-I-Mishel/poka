@@ -527,6 +527,95 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             "corrections": [],
         }
 
+    # Zero-call pure greetings ("hi", "hello"): highest-frequency,
+    # lowest-value turns skip the cascade. Runs AFTER the gate above so
+    # sticky continuations keep priority (mid-teaching "hi" with a pending
+    # question is a session answer, never a greeting); attachments/image
+    # turns never match (pure text only). Any doubt fails open to the
+    # model path below. Kill-switch: PLUTO_GREETINGS=0.
+    try:
+        from backend.flow.stages import (
+            _greeting_reply as _greet_reply,
+            _greetings_enabled as _greet_on,
+            _is_pure_greeting as _is_greet,
+        )
+        _in_session = bool(
+            _is_teaching_request(text)
+            or _is_teaching_continuation(text, current)
+            or _is_pace_feedback(text, current))
+        _greet_hit = bool(
+            _greet_on() and not _in_session and _is_greet(text)
+            and not attachments and not image_ids)
+    except Exception:
+        logger.debug("greeting fast-path check failed", exc_info=True)
+        _greet_hit = False
+    if _greet_hit:
+        try:
+            _greet_text = _greet_reply(text, ctx.user_id)
+        except Exception:
+            _greet_text = "Hey! Good to see you — what are we working on?"
+        greeting_msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": _greet_text,
+            "time": utcnow_iso(),
+            **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                               "greeting", None),
+        }
+        _append_turn_atomic(store, user_msg, greeting_msg)
+        return {
+            "message": greeting_msg,
+            "active_tier": "greeting",
+            "task_type": "simple",
+            "warnings": warnings,
+            "fallback": None,
+            "corrections": [],
+        }
+
+    # Exact-repeat cache (opt-in trial, PLUTO_REPEAT_CACHE=1): identical
+    # text reuses the last clean answer with zero calls. Teaching,
+    # vision, and attachment turns are excluded by construction (their
+    # answers depend on cursor/files, never just the words).
+    _repeat_key = ""
+    try:
+        from backend.flow.stages import (
+            _repeat_cache_enabled as _repeat_on,
+            _repeat_cache_get as _repeat_get,
+            _repeat_cache_key as _repeat_key_fn,
+        )
+        _repeat_key = (
+            _repeat_key_fn(text, ctx.user_id, bool(deep_mode), active_tier)
+            if _repeat_on() and not attachments and not image_ids
+            and "[Teaching mode:" not in str(send_text or "") else "")
+        _repeat_hit = _repeat_get(_repeat_key) if _repeat_key else None
+    except Exception:
+        logger.debug("repeat-cache lookup failed", exc_info=True)
+        _repeat_hit = None
+    if _repeat_hit is not None:
+        try:
+            from services.obs import event as _obs_hit
+
+            _obs_hit("repeat_cache.hit", task_type=str(
+                _repeat_hit.get("task_type", "") or ""))
+        except Exception:
+            logger.debug("repeat-cache hit metric failed", exc_info=True)
+        repeat_msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": str(_repeat_hit.get("content", "") or ""),
+            "time": utcnow_iso(),
+            **_assistant_meta([], [], bool(force_search), bool(deep_mode),
+                               str(_repeat_hit.get("tier", "") or "repeat"),
+                               None),
+        }
+        _append_turn_atomic(store, user_msg, repeat_msg)
+        return {
+            "message": repeat_msg,
+            "active_tier": str(_repeat_hit.get("tier", "") or "repeat"),
+            "task_type": str(_repeat_hit.get("task_type", "") or "simple"),
+            "warnings": warnings,
+            "fallback": None,
+            "corrections": [],
+        }
+
     try:
         assistant_msg, tier, task_type, fallback, turn_budget = _complete_turn_guarded(
             ctx, send_text, prior_history, prior_raw, vision_ids,
@@ -593,6 +682,36 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
     if persisted:
         assistant_msg = dict(assistant_msg)
         assistant_msg["pending_approvals"] = persisted
+    # Per-turn call accounting (observation only): which task types cost
+    # how many provider calls, so the next cut aims at measured waste.
+    try:
+        from services.obs import event as _obs_calls
+
+        _obs_calls(
+            "turn.calls",
+            task_type=str(task_type or ""),
+            tier=str(tier or ""),
+            llm_calls=int(getattr(turn_budget, "llm_calls", 0) or 0),
+            tool_calls=int(getattr(turn_budget, "tool_calls", 0) or 0),
+            search_calls=int(getattr(turn_budget, "search_calls", 0) or 0),
+        )
+    except Exception:
+        logger.debug("turn call accounting failed", exc_info=True)
+    # Repeat-cache store (opt-in trial): clean answers only (no
+    # fallback, no pending approvals); same eligibility as lookup.
+    try:
+        if (_repeat_key and fallback is None and not persisted
+                and not attachments and not image_ids
+                and "[Teaching mode:" not in str(send_text or "")):
+            from backend.flow.stages import _repeat_cache_put as _repeat_put
+
+            _repeat_put(_repeat_key, {
+                "content": str(assistant_msg.get("content", "") or ""),
+                "tier": str(tier or ""),
+                "task_type": str(task_type or ""),
+            })
+    except Exception:
+        logger.debug("repeat-cache store failed", exc_info=True)
     _append_turn_atomic(store, user_msg, assistant_msg)
     return {
         "message": assistant_msg,

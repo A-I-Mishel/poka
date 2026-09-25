@@ -94,6 +94,52 @@ def test_no_provider_leaves_box_for_caller():
     assert box == []
 
 
+def test_duplicate_tool_round_stops_early():
+    """Byte-identical tool repeat synthesizes instead of looping."""
+    from agent.toolrun import _tool_calls_signature
+
+    call = {"name": "bogus-tool-xyz", "args": {}, "id": "1"}
+    assert _tool_calls_signature([call])
+    assert _tool_calls_signature([call]) == _tool_calls_signature(
+        [{"name": "bogus-tool-xyz", "args": {}, "id": "2"}])
+    assert _tool_calls_signature([call]) != _tool_calls_signature(
+        [{"name": "bogus-tool-xyz", "args": {"page": 2}, "id": "1"}])
+    assert _tool_calls_signature([]) == ""
+
+    script = [(f"t{i}", [dict(call)]) for i in range(2)] + [("final", [])] * 3
+    llm = ScriptLLM(script)
+    out = run_tool_loop(llm, "hi", [], max_rounds=4)
+    assert "final" in out
+    # Rounds 1+2 + synthesis only: the 2nd identical round breaks
+    # instead of executing rounds 3-4.
+    assert len(script) - len(llm._script) == 3
+
+
+def test_failover_same_call_different_tier_still_runs():
+    """Failover retries are not duplicate loops: same call on another
+    tier must execute (mid-task recovery depends on it)."""
+    bogus = [{"name": "bogus-tool-xyz", "args": {}, "id": "1"}]
+    states = {
+        "tier-a": ScriptLLM([("thinking on a", bogus), ("final from a", [])]),
+        "tier-b": ScriptLLM([("thinking on b", bogus)]),
+    }
+    order = ["tier-a", "tier-b", "tier-a"]
+    calls = {"n": 0}
+
+    def provider():
+        calls["n"] += 1
+        name = order[calls["n"] - 1]
+        return name, states[name]
+
+    box = []
+    out = run_tool_loop(
+        ScriptLLM(["unused"]), "hi", [],
+        llm_provider=provider, final_tier=box,
+    )
+    assert "final from a" in out
+    assert box == ["tier-a"]
+
+
 def test_no_tools_tier_skipped_without_call_or_cool():
     """Screenshot regression: VL 400s tools-bound calls, so tool rounds
     skip it fast — no network call, no failure record, no cooldown.

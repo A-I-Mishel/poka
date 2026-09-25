@@ -32,6 +32,8 @@ def _clean(tmp_path, monkeypatch):
     monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("PLUTO_USER_ID", "fb-user")
     monkeypatch.delenv("PLUTO_AUTH_MODE", raising=False)
+    # Fallback tests post throwaway "hey": keep them on the model path.
+    monkeypatch.setenv("PLUTO_GREETINGS", "0")
     for store in (_TIER_FAILS, _TIER_LAST_ERROR, _TIER_SKIP_UNTIL, _TIER_TIMEOUTS):
         store.clear()
     agent._clear_summary_cache()

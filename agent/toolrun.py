@@ -208,6 +208,34 @@ def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_
     return tool.invoke(args)
 
 
+def _tool_calls_signature(tool_calls: Sequence[Any]) -> str:
+    """Canonical signature of one round's tool calls (never raises).
+
+    Same tool + byte-identical args twice in a row adds zero new
+    information — the loop stops and synthesizes from collected
+    results instead of burning another round. Refined retries
+    (page 2, corrected query) have different args and run normally.
+    """
+    try:
+        parts: List[str] = []
+        for tc in tool_calls or []:
+            if isinstance(tc, dict):
+                name = str(tc.get("name", ""))
+                args = tc.get("args", {}) or {}
+            else:
+                name = str(getattr(tc, "name", ""))
+                raw_args = getattr(tc, "args", {}) or {}
+                args = dict(raw_args) if isinstance(raw_args, dict) else {}
+            try:
+                canon = _json.dumps(args, sort_keys=True, default=str)
+            except Exception:
+                canon = str(args)
+            parts.append(f"{name}({canon})")
+        return "|".join(sorted(parts))
+    except Exception:
+        return ""
+
+
 def _result_status(text: str) -> str:
     """Map a raw tool result to an obs status (metadata only)."""
     head = text[:24]
@@ -977,6 +1005,7 @@ def run_tool_loop(
     last_text: str = ""
     last_text_tier: Optional[str] = None
     last_results: List[str] = []
+    last_tool_key: Optional[tuple] = None
     last_llm: Any = llm_instance
     provider_error: Optional[Exception] = None
     rounds_used = 0
@@ -1093,6 +1122,26 @@ def run_tool_loop(
             tool_calls, _dropped = _drop_teaching_refetch_calls(tool_calls, user_input)
         except Exception:
             logger.debug("teaching refetch drop failed", exc_info=True)
+        try:
+            _sig = _tool_calls_signature(tool_calls)
+        except Exception:
+            _sig = ""
+        _key = (tier_name, _sig) if _sig else None
+        if _key is not None and _key == last_tool_key:
+            # Same tier repeating the byte-identical call back-to-back:
+            # executing again returns the same results, so stop and
+            # synthesize from what is collected (same outcome as
+            # round-budget exhaustion). A failover retry of the same
+            # call on a DIFFERENT tier still runs (different key), and
+            # refined retries have different args.
+            logger.debug("duplicate tool round skipped; synthesizing")
+            last_results.append(
+                "[note] Repeated the same tool call; no further tool calls. "
+                "Synthesize the final answer from results so far."
+            )
+            _ledger_write()
+            break
+        last_tool_key = _key
         if on_progress is not None and tool_calls:
             try:
                 names: List[str] = []

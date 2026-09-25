@@ -29,6 +29,8 @@ def open_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("PLUTO_USER_ID", raising=False)
     monkeypatch.delenv("PLUTO_AUTH_MODE", raising=False)
+    # Streaming tests post throwaway "hi": keep them on the model path.
+    monkeypatch.setenv("PLUTO_GREETINGS", "0")
     return tmp_path
 
 
