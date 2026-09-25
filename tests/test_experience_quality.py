@@ -157,7 +157,7 @@ def test_repair_path_amends_runtime_episode(tmp_path, monkeypatch):
     monkeypatch.setattr(
         turns_mod, "_maybe_repair_teaching_turn",
         lambda send_text, content, tier, on_token=None, on_reset=None,
-        budget=None: (content + " [fixed]", True, []))
+        budget=None, on_progress=None: (content + " [fixed]", True, []))
     out = turns_mod.run_chat(ctx, "teach me the research slides")
     assert out["message"]["content"].endswith("[fixed]")
     rows = _rows()

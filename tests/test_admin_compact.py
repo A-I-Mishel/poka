@@ -116,3 +116,69 @@ def test_admin_repair_uses_compact_shape(monkeypatch):
     assert "Administrative Information" in fixed
     assert fixed.strip().endswith("Say Next when ready.")
     assert "compact admin shape" in seen.get("system", "")
+
+
+_PLACEHOLDER_DRAFT = (
+    "📘 FILE: Lecture_01.pptx\nSlides: 9-Y\n"
+    "## Concept: Paths and Cycles (Slide 9)\n"
+    "A path moves without revisiting.\n"
+    "Source: [slide N]\n"
+    "Q: How"
+)
+
+
+def test_template_placeholders_fail_validation():
+    from backend.chatflow import _validate_teaching_draft
+
+    reasons = _validate_teaching_draft(_PLACEHOLDER_DRAFT, 9, 9)
+    assert any("placeholder" in r for r in reasons)
+    assert _validate_teaching_draft(_GOODCite(), 9, 9) == []
+
+
+def _GOODCite():
+    return (
+        "📘 FILE: Lecture_01.pptx\nSlides: 9-9\n"
+        "## Concept: Paths and Cycles (Slide 9)\n"
+        "A path moves without revisiting.\n"
+        "**Source:** [slide 9]\n"
+        "Where would you spot a cycle on a road map?"
+    )
+
+
+def test_placeholder_free_draft_passes():
+    from backend.chatflow import _validate_teaching_draft
+
+    assert _validate_teaching_draft(_GOODCite(), 9, 9) == []
+
+
+def test_repair_narrates_the_wipe(monkeypatch):
+    import types
+
+    import agent as agent_mod
+    import config
+    from backend.chatflow import _maybe_repair_teaching_turn
+
+    def fake_llm(name, temperature=0.3):
+        return object()
+
+    def fake_invoke(llm, messages, **kw):
+        return types.SimpleNamespace(content=_ADMIN_COMPACT_DRAFT)
+
+    monkeypatch.setattr(config, "get_tier_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", fake_invoke)
+    notes = []
+    fixed, repaired, _left = _maybe_repair_teaching_turn(
+        _admin_send(), _ADMIN_CONCEPT_DRAFT, "Groq",
+        on_progress=notes.append)
+    assert repaired is True
+    assert notes == ["Polishing the lesson…"]
+
+
+def test_placeholder_rule_in_both_contracts():
+    from agent.prompts import SYSTEM_PROMPT
+    from backend.chatflow import TEACHING_SUFFIX
+
+    for token in ("never emit X-Y, N, or Q: placeholders",
+                  "never \"which day does class meet first?\""):
+        assert token in SYSTEM_PROMPT, token
+        assert token in TEACHING_SUFFIX, token

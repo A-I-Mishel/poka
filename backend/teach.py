@@ -167,7 +167,9 @@ TEACHING_SUFFIX = (
     "never an \"Exam importance / Exam trap\" pair on every turn. Numerics use "
     "worked steps: Given -> Solve step-by-step -> Therefore (answer). "
     "Distinguish source from support: \"Your slide states X. Supporting "
-    "explanation: ...\". Cite the slide as \"**Source:** [slide N]\" (ground ONLY "
+    "explanation: ...\". Cite the slide as \"**Source:** [slide N]\" "
+    "(N = the concrete number, e.g. [slide 9] — never emit X-Y, N, or Q: "
+    "placeholders; ground ONLY "
     "in the verified slide above — never cite the web, never invent links. "
     "Never invent test dates, deadlines, class schedules, or slides beyond "
     "verified content; if truncated "
@@ -983,6 +985,17 @@ _TEACHING_FABRICATION_RES = (
 )
 
 
+# Template scaffolding a weak tier copies verbatim instead of filling
+# in ("Slides: 9-Y" from "Slides: X-Y", "[slide N]" from the Source
+# pattern, a bare "Q:" question stub). Concrete numbers only - these
+# never appear in real lesson content.
+_TEACHING_PLACEHOLDER_RES = (
+    re.compile(r"\[(?:slide|page)\s+N\]", re.IGNORECASE),
+    re.compile(r"\bSlides?\s*:\s*\d+\s*[-–]\s*[A-Za-z]\b"),
+    re.compile(r"^[\s*#*]*Q\s*:\s*\S+", re.IGNORECASE | re.MULTILINE),
+)
+
+
 # Opaque upload IDs are tool-input internals (see backend/attachments):
 # the model sees "with upload ID: <hex>" in its hints and sometimes
 # parrots the value into user-visible answers. Download IDs render as
@@ -1167,6 +1180,15 @@ def _validate_teaching_draft(output: str, start: int, end: int,
                 reasons.append("admits guessed slide contents (unverified)")
         except Exception:
             logger.debug("fabrication-res scan failed", exc_info=True)
+        try:
+            if (_TEACHING_PLACEHOLDER_RES[0].search(text)
+                    or _TEACHING_PLACEHOLDER_RES[1].search(text)
+                    or _TEACHING_PLACEHOLDER_RES[2].search(text)):
+                reasons.append(
+                    "template placeholders left in draft "
+                    "(use concrete numbers: Slides: 9-9, [slide 9])")
+        except Exception:
+            logger.debug("placeholder scan failed", exc_info=True)
         concepts = list(_TEACHING_CONCEPT_RE.finditer(text))
         try:
             has_recall_heading = bool(_TEACHING_RECALL_RE.search(text))
@@ -1230,6 +1252,7 @@ def _repair_teaching_draft(
     on_token: Any = None,
     on_reset: Any = None,
     budget: Any = None,
+    on_progress: Any = None,
 ) -> Tuple[str, bool]:
     """One bounded cross-tier repair of a violating teaching draft (never raises).
 
@@ -1282,6 +1305,14 @@ def _repair_teaching_draft(
                 on_reset()
             except Exception:
                 logger.debug("teach repair stream reset failed", exc_info=True)
+        # Narrate the wipe: the draft the learner watched streaming is
+        # about to be replaced, so say why instead of bare dots. The
+        # status event renders as dots + text (never appended content).
+        if callable(on_progress):
+            try:
+                on_progress("Polishing the lesson…")
+            except Exception:
+                logger.debug("teach repair progress note failed", exc_info=True)
         from agent.budget import RequestBudget
 
         repair_budget = budget if budget is not None else RequestBudget()
@@ -1416,6 +1447,7 @@ def _maybe_repair_teaching_turn(
     on_token: Any = None,
     on_reset: Any = None,
     budget: Any = None,
+    on_progress: Any = None,
 ) -> Tuple[str, bool, List[str]]:
     """Validate a teaching-turn answer, repairing once when needed (never raises).
 
@@ -1453,7 +1485,7 @@ def _maybe_repair_teaching_turn(
             return _redact_upload_ids(content), backfilled, reasons
         fixed, repaired = _repair_teaching_draft(
             send_text, content, reasons, tier, on_token, on_reset,
-            budget=budget)
+            budget=budget, on_progress=on_progress)
         if repaired:
             scope2 = _teaching_scope_from_send(send_text)
             left = (_validate_teaching_draft(

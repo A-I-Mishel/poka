@@ -646,7 +646,7 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
     try:
         fixed, repaired, left = _maybe_repair_teaching_turn(
             send_text, str(assistant_msg.get("content", "")), tier,
-            on_token, on_reset, budget=turn_budget)
+            on_token, on_reset, budget=turn_budget, on_progress=on_progress)
         if repaired:
             assistant_msg = dict(assistant_msg)
             assistant_msg["content"] = fixed
