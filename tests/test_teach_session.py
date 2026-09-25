@@ -253,6 +253,36 @@ def test_next_advances_window(tmp_path, monkeypatch):
     assert "L1S1" not in send and "L1S3" not in send
 
 
+def test_deep_session_survives_history_window_slideout(tmp_path, monkeypatch):
+    """Upload turn out of the 10-msg window must resolve via registry.
+
+    Screenshot regression: slide 6 taught, then "files no longer
+    available" even though the vault file is intact. Each round is 2
+    attachment-less messages, so 6 rounds push the upload past
+    _iter_recent_valid_uploads' [-10:] scan — the cursor filename
+    must recover it from the registry instead of failing closed.
+    """
+    from backend.chatflow import _apply_teaching_session
+
+    ctx = _ctx(tmp_path, monkeypatch, "teach-deep")
+    bodies = [[f"L1S{i}"] for i in range(1, 8)]
+    m1 = ctx.file_store.save_upload(_pptx_bytes(bodies), "Lecture_01.pptx")
+    hist = [
+        {"role": "user", "content": "teach me", "attachments": [
+            {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
+    ]
+    for i in range(1, 7):
+        hist.append({"role": "assistant",
+                     "content": f"📘 FILE: Lecture_01.pptx\nSlides: {i}-{i}\n## Concept: G\n"
+                                f"**Source:** [slide {i}]\nWhat is S{i}?"})
+        hist.append({"role": "user", "content": "ok"})
+    assert len(hist) == 13  # upload turn is outside the [-10:] scan
+    send, _, clarify = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
+    assert clarify is None
+    assert "L1S7" in send
+    assert "ONLY slides 7-7" in send
+
+
 def test_exhausted_file_advances(tmp_path, monkeypatch):
     from backend.chatflow import _apply_teaching_session
 

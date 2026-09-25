@@ -76,6 +76,47 @@ def _apply_teaching_session(
             logger.debug("teaching candidate build failed; skipping entry", exc_info=True)
             continue
     candidates.sort(key=lambda e: str(e.get("name", "")).lower())
+    if not candidates and _prior_session:
+        # History-window slide-out: the upload turn fell out of the
+        # recent-attachment window (each round is 2 attachment-less
+        # messages), but the cursor still names the file. Resolve by
+        # name from the vault registry (newest first) with a presence
+        # check — true deletion still fails closed below.
+        try:
+            _cname, _ = _last_teaching_state(history)
+            if _cname:
+                for meta in ctx.file_store.list_uploads():
+                    try:
+                        if str(getattr(meta, "kind", "")) not in ("document", "pdf"):
+                            continue
+                        _mname = str(getattr(meta, "display_name", "") or "")
+                        if not _mname:
+                            continue
+                        if _mname.strip().lower() != _cname.strip().lower():
+                            _mstem = (_mname.rsplit(".", 1)[0].strip().lower()
+                                      if "." in _mname else _mname.strip().lower())
+                            _cstem = (_cname.rsplit(".", 1)[0].strip().lower()
+                                      if "." in _cname else _cname.strip().lower())
+                            if not (_cstem and (_cstem == _mstem
+                                                or _cstem in _mstem or _mstem in _cstem)):
+                                continue
+                        _mid = str(getattr(meta, "id", "") or "")
+                        if not _mid or _mid in seen:
+                            continue
+                        if ctx.file_store.resolve_upload(_mid) is None:
+                            continue
+                        seen.add(_mid)
+                        candidates.append({
+                            "id": _mid,
+                            "kind": str(getattr(meta, "kind", "document")),
+                            "name": _mname,
+                        })
+                        break
+                    except Exception:
+                        logger.debug("teaching registry fallback skipped entry", exc_info=True)
+                        continue
+        except Exception:
+            logger.debug("teaching registry fallback failed", exc_info=True)
     if not candidates:
         if _explicit_request and not _prior_session:
             # Fresh ask with no files: general-knowledge teaching is allowed,
