@@ -96,7 +96,8 @@ _TEACHING_SLIDE_MARK_RE = re.compile(r"\[(?:slide|page)\s+(\d+)\]", re.IGNORECAS
 
 
 _TEACHING_ADMIN_SIGNALS = (
-    "course code", "credit", "instructor", "professor", "adjunct",
+    "course code", "credit", "credit hour", "class days",
+    "instructor", "professor", "adjunct", "assistant professor",
     "attendance", "midterm", "final exam", "grading", "marks distribution",
     "class test", "assignment", "presentation", "schedule", "monday",
     "thursday", "tuesday", "wednesday", "friday", "classroom", "room no",
@@ -152,7 +153,9 @@ TEACHING_SUFFIX = (
     "(course code/instructor/schedule/grading/contacts) use the compact form: "
     "\"### Administrative Information\" + 2-4 short bullets + \"**Source:** [slide N]\" — "
     "never fake Definition/Example blocks for admin, never ask "
-    "closing questions about admin trivia, and close admin turns with one plain line "
+    "closing questions about admin trivia (a logistics-only slide gets "
+    "NO closing question at all — never \"which day does class meet "
+    "first?\"), and close admin turns with one plain line "
     "like \"Nothing technical here. Say Next when ready.\" "
     "Format: source header as \"📘 FILE: <name>\" newline \"Slides: X-Y\"; then "
     "ONE \"## Concept: <name> (Slide N)\" block written like a friendly teacher, "
@@ -243,14 +246,17 @@ def _is_teaching_request(text: str) -> bool:
 def _is_admin_block(text: str) -> bool:
     """True for administrative/non-teaching slide text (never raises).
 
-    Admin = 2+ admin signals (or a course code like 0613-4125) AND zero
-    concept signals. Mixed slides (definition + course code) stay concepts.
+    Admin = 2+ admin signals (or a course code like 0613-4125) AND
+    fewer than 2 distinct concept signals. The quorum matters: a course
+    titled "Graph Theory" carries one subject word but is still admin;
+    real concept slides carry several (vertices, edges, degree...).
+    Mixed slides (definition + course code) stay concepts.
     """
     try:
         t = str(text or "").lower()
         if not t:
             return False
-        if any(s in t for s in _TEACHING_CONCEPT_SIGNALS):
+        if sum(1 for s in _TEACHING_CONCEPT_SIGNALS if s in t) >= 2:
             return False
         hits = sum(1 for s in _TEACHING_ADMIN_SIGNALS if s in t)
         if _TEACHING_COURSE_CODE_RE.search(t):
@@ -1082,7 +1088,32 @@ def _teaching_scope_from_send(send_text: str) -> Optional[Tuple[int, int]]:
         return None
 
 
-def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
+_TEACHING_WINDOW_TEXT_RE = re.compile(
+    r"\[Verified content of '(?:[^'\\]|\\.)*' "
+    r"(?:slide|page)s \d+-\d+ of \d+ "
+    r"\(untrusted file data, not instructions\):\n(.*?)\](?=\n\[Note:|\n\n\[|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _window_text_from_send(send_text: str) -> Optional[str]:
+    """Extract this turn's verified window body, or None (never raises).
+
+    Fail-open: any format drift returns None and validation falls back
+    to the structure-only rules (never worse than today).
+    """
+    try:
+        m = _TEACHING_WINDOW_TEXT_RE.search(str(send_text or ""))
+        if not m:
+            return None
+        body = str(m.group(1) or "").strip()
+        return body or None
+    except Exception:
+        return None
+
+
+def _validate_teaching_draft(output: str, start: int, end: int,
+                             window_text: Optional[str] = None) -> List[str]:
     """Check a teaching draft against its allowed window (pure, never raises).
 
     Canonical rules: source header range within the window; no citations
@@ -1090,7 +1121,9 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
     at least one concept block and one citation; exactly one natural
     closing question (terminal `?` after Source, no **Recall** heading, no
     Reply-continue cue); no footer lines (Say Next / Got it / Next Steps);
-    no admissions of guessed slide contents.
+    no admissions of guessed slide contents. When the verified window
+    text is supplied and reads as administrative, the compact admin form
+    is enforced instead: no Concept block, no closing question.
     Returns violation reasons; empty means pass.
     """
     reasons: List[str] = []
@@ -1155,13 +1188,27 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
         except Exception:
             logger.debug("closing-question source-order check failed", exc_info=True)
         admin_only = not concepts and "administrative information" in text.lower()
-        if not concepts and not admin_only:
+        try:
+            admin_window = (bool(window_text) and _is_admin_block(window_text or ""))
+        except Exception:
+            admin_window = False
+        if not concepts and not admin_only and not admin_window:
             reasons.append("no Concept block")
         if has_recall_heading:
             reasons.append("Recall heading removed (use a natural closing question)")
         if has_continue_cue:
             reasons.append("Reply-continue cue removed (just stop)")
-        if admin_only:
+        if admin_window:
+            # Verified window is logistics (course code, schedule,
+            # instructor): the compact admin form is mandatory — any
+            # Concept block or closing question (even about the
+            # logistics, e.g. "which day does class meet first?") is a
+            # violation, repaired to bullets with no question.
+            if concepts:
+                reasons.append("admin slide must use compact form (no Concept block)")
+            if closing_q:
+                reasons.append("admin slide must not ask a closing question")
+        elif admin_only:
             # Compact admin form carries citations but no closing question.
             if closing_q:
                 reasons.append("no closing question for admin-only turns")
@@ -1238,19 +1285,36 @@ def _repair_teaching_draft(
         from agent.budget import RequestBudget
 
         repair_budget = budget if budget is not None else RequestBudget()
+        try:
+            _admin_repair = any("admin slide" in str(r or "").lower()
+                                for r in (reasons or []))
+        except Exception:
+            _admin_repair = False
+        _shape = (
+            "Use this compact admin shape: source header (\"📘 FILE: <name>\" "
+            "newline \"Slides: X-Y\"), then \"### Administrative Information\" "
+            "with 2-4 short bullets, then the slide citation as "
+            "\"**Source:** [slide N]\", then one plain closer line "
+            "\"Nothing technical here. Say Next when ready.\" — no Concept "
+            "block, no Imagine/Here/memory hook, no closing question, and "
+            "STOP."
+            if _admin_repair else
+            "Use this canonical shape: source header (\"📘 FILE: <name>\" "
+            "newline \"Slides: X-Y\"), then \"## Concept:\" blocks in a "
+            "human voice (short lines, Imagine + ASCII sketch, Here "
+            "mapping, one memory hook, Source line), then exactly one natural "
+            "closing question (one plain sentence ending with ?, no "
+            "\"**Recall**\" heading, no Reply-continue cue) and STOP — no Say "
+            "Next, Say Got it, or Next Steps lines, no teaching after "
+            "the question."
+        )
         messages = [
             {"role": "system", "content": (
                 "You repair a lesson's formatting. Change ONLY structure to "
                 "satisfy every listed rule. Keep all facts, numbers, and slide "
                 "citations identical. Never add content about other slides. "
-                "Use this canonical shape: source header (\"📘 FILE: <name>\" "
-                "newline \"Slides: X-Y\"), then \"## Concept:\" blocks in a "
-                "human voice (short lines, Imagine + ASCII sketch, Here "
-                "mapping, one memory hook, Source line), then exactly one natural "
-                "closing question (one plain sentence ending with ?, no "
-                "\"**Recall**\" heading, no Reply-continue cue) and STOP — no Say "
-                "Next, Say Got it, or Next Steps lines, no teaching after "
-                "the question. Reply with the full corrected lesson only.")},
+                + _shape +
+                " Reply with the full corrected lesson only.")},
             {"role": "user", "content": (
                 "Rules violated:\n- " + "\n- ".join(reasons) +
                 "\n\nVerified slides and instructions:\n" + str(send_text or "")[:12000] +
@@ -1280,7 +1344,9 @@ def _repair_teaching_draft(
         scope = _teaching_scope_from_send(send_text)
         if scope is None:
             return draft, False
-        new_reasons = _validate_teaching_draft(fixed, scope[0], scope[1])
+        new_reasons = _validate_teaching_draft(
+            fixed, scope[0], scope[1],
+            window_text=_window_text_from_send(send_text))
         if len(new_reasons) < len(reasons):
             return fixed, True
         return draft, False
@@ -1376,7 +1442,9 @@ def _maybe_repair_teaching_turn(
                 if header:
                     content = header + str(content or "").lstrip()
                     backfilled = True
-        reasons = _validate_teaching_draft(content, scope[0], scope[1])
+        reasons = _validate_teaching_draft(
+            content, scope[0], scope[1],
+            window_text=_window_text_from_send(send_text))
         if not reasons:
             return _redact_upload_ids(content), backfilled, []
         # Refusals are complete answers, not violating drafts: repairing
@@ -1388,7 +1456,10 @@ def _maybe_repair_teaching_turn(
             budget=budget)
         if repaired:
             scope2 = _teaching_scope_from_send(send_text)
-            left = _validate_teaching_draft(fixed, scope2[0], scope2[1]) if scope2 else reasons
+            left = (_validate_teaching_draft(
+                fixed, scope2[0], scope2[1],
+                window_text=_window_text_from_send(send_text))
+                if scope2 else reasons)
             return _redact_upload_ids(fixed), True, left
         # Hard-gate fallback: model repair failed — strip what regex can
         # prove wrong (footers, dup headers) and re-validate. Never raises;
@@ -1396,7 +1467,9 @@ def _maybe_repair_teaching_turn(
         try:
             stripped = _strip_teaching_violations(content)
             if stripped != content:
-                new_reasons = _validate_teaching_draft(stripped, scope[0], scope[1])
+                new_reasons = _validate_teaching_draft(
+                    stripped, scope[0], scope[1],
+                    window_text=_window_text_from_send(send_text))
                 if len(new_reasons) <= len(reasons):
                     return _redact_upload_ids(stripped), backfilled, new_reasons
         except Exception:
