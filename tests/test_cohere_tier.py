@@ -59,8 +59,8 @@ def test_cascade_position():
     assert names.index("Groq") < names.index("Cohere")
     assert names.index("Cohere") < names.index("OpenRouter Nemotron Ultra")
     assert names.index("OpenRouter Nemotron Ultra") < names.index("Kilo Dots 3 Note")
-    assert names[-3:] == ["OpenRouter Nemotron Ultra", "Kilo Dots 3 Note", "Ollama 7B"]
-    assert names[-1] == "Ollama 7B"
+    assert names[-3:] == ["OpenRouter Nemotron Ultra", "Kilo Dots 3 Note", "Ollama VL 3B"]
+    assert names[-1] == "Ollama VL 3B"
 
 
 def test_synthesis_member_cheap_excluded():

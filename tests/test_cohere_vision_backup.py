@@ -36,7 +36,8 @@ def test_bridge_converter_backup_order():
     assert _CONVERTER_TIERS is VISION_TIER_ORDER
     assert list(_CONVERTER_TIERS) == [
         "Gemini 3.8 Flash", "Gemini 3.7 Flash",
-        "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere"]
+        "Gemini 3.6 Flash", "Gemini 3.5 Flash", "Cohere",
+        "Ollama VL 3B"]
 
 
 def test_runtime_vision_tier_names_mirror():

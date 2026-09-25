@@ -112,16 +112,17 @@ OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 KILO_BASE_URL: str = "https://api.kilo.ai/api/gateway"
 KILO_DOTS_MODEL: str = "dots-studio/dots-3-note-preview:free"
 # Local Ollama tier: whatever model the local Ollama daemon
-# serves via its OpenAI-compatible endpoint. Single slot, default
-# qwen2.5:7b (offline fallback tail of the synthesis tables).
-# Set OLLAMA_ENABLED=false to skip it on machines without Ollama.
-# No API key needed (dummy "ollama" is sent). Text-only by design (the
-# name matches no services.vision.py vision key, so vision lanes never
-# select it). Qwen2.5 has no thinking chains, so no reasoning field
-# arrives (strip_internal_reasoning stays as backup). Same ChatOpenAI
-# client as Groq/Cohere: tool calling works.
+# serves via its OpenAI-compatible endpoint. Single vision-trial slot,
+# default qwen2.5vl:3b (offline vision tail of the synthesis tables).
+# Set OLLAMA_VL_ENABLED=false to skip it on machines without Ollama.
+# No API key needed (dummy "ollama" is sent). Same ChatOpenAI client
+# as Groq/Cohere: tool calling works.
 OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
-OLLAMA_MODEL: str = "qwen2.5:7b"
+# Trial vision slot (local VL fallback tail): qwen2.5vl 3B reads images
+# when cloud vision lanes are down. One resident model at a time on
+# small VRAM.
+OLLAMA_VL_MODEL: str = "qwen2.5vl:3b"
+OLLAMA_VL_ENABLED: str = "true"
 TEMPERATURE: float = 0.7
 
 # Client cache: clients hold only model config + credentials (no user
@@ -576,17 +577,17 @@ def get_tier_kilo_dots_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpe
 # per-lane getters if the trial resumes.
 
 
-def _ollama_enabled() -> bool:
-    """False when the operator opts out (no Ollama on this machine)."""
+def _ollama_vl_enabled() -> bool:
+    """False when the vision trial lane is opted out (independent switch)."""
     try:
-        flag = _get_secret("OLLAMA_ENABLED", "true")
+        flag = _get_secret("OLLAMA_VL_ENABLED", "true")
     except Exception:
         return True
     return (flag or "true").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _get_ollama_llm(
-    tier: str, env_var: str, default: str, temperature: float
+    tier: str, env_var: str, default: str, temperature: float,
 ) -> Optional[ChatOpenAI]:
     """Build the local Ollama client (single-slot helper).
 
@@ -596,7 +597,7 @@ def _get_ollama_llm(
     first invoke fails fast (connection refused) and the cascade cools
     the tier over to cloud — offline-safe by construction.
     """
-    if not _ollama_enabled():
+    if not _ollama_vl_enabled():
         return None
     try:
         base_url = _model_override("OLLAMA_BASE_URL", OLLAMA_BASE_URL)
@@ -624,16 +625,16 @@ def _get_ollama_llm(
         return None
 
 
-def get_tier_ollama_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """Local Ollama slot: qwen2.5:7b (offline fallback tail of synthesis).
+def get_tier_ollama_vl_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """Local Ollama vision trial slot: qwen2.5vl:3b (offline vision tail).
 
-    No key required (Ollama ignores auth; "ollama" is sent as a dummy).
-    Base URL via OLLAMA_BASE_URL, model via OLLAMA_MODEL. The daemon
-    being down is NOT an error here (returns a client anyway): the
-    first invoke fails fast (connection refused) and the cascade cools
-    the tier over to cloud — offline-safe by construction.
+    Trial-gated in services/vision.py (cloud vision stays primary; this
+    lane only sees images when those lanes are down or cooling). Same
+    offline-safe contract as before. One resident model at a time on
+    small VRAM.
     """
-    return _get_ollama_llm("Ollama 7B", "OLLAMA_MODEL", OLLAMA_MODEL, temperature)
+    return _get_ollama_llm("Ollama VL 3B", "OLLAMA_VL_MODEL", OLLAMA_VL_MODEL,
+                           temperature)
 
 
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
@@ -647,11 +648,7 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Cohere": get_tier_cohere_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
     "Kilo Dots 3 Note": get_tier_kilo_dots_llm,
-    "Ollama 7B": get_tier_ollama_llm,
-    # Legacy aliases: single "Ollama" and old "Ollama 8B" names resolve
-    # to the same slot so saved preferences keep working.
-    "Ollama": get_tier_ollama_llm,
-    "Ollama 8B": get_tier_ollama_llm,
+    "Ollama VL 3B": get_tier_ollama_vl_llm,
 }
 
 
@@ -683,7 +680,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("Kilo Dots 3 Note", get_tier_kilo_dots_llm),
-    ("Ollama 7B", get_tier_ollama_llm),
+    ("Ollama VL 3B", get_tier_ollama_vl_llm),
 ]
 
 
@@ -713,7 +710,7 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("Kilo Dots 3 Note", get_tier_kilo_dots_llm),
-    ("Ollama 7B", get_tier_ollama_llm),
+    ("Ollama VL 3B", get_tier_ollama_vl_llm),
 ]
 # Fast-mode answer table (mode-based routing): only these lanes may
 # produce the visible answer when deep_mode is off. Order matches the
@@ -723,7 +720,7 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
 # visible answer tier. When every fast lane is down, fast mode fails
 # honestly (no silent fallback to the full cascade: that would defeat
 # the quota savings this table exists for).
-# NOTE: Ollama 7B stays in SYNTHESIS_TIERS (deep-mode offline
+# NOTE: Ollama VL 3B stays in SYNTHESIS_TIERS (deep-mode offline
 # tail) but is out of FAST_TIERS. Fast answers must never come from the
 # weakest lane: a robotic low-quality answer with a fallback footer is
 # worse than an honest all-fast-lanes error, and it costs an extra

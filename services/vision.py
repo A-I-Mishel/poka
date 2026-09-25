@@ -32,18 +32,20 @@ VISION_EXTS = frozenset({"png", "jpg", "jpeg", "webp", "gif", "bmp"})
 # path sees a lane the others don't. Trial lanes join/leave HERE only.
 VISION_TIER_ORDER = ("Gemini 3.8 Flash", "Gemini 3.7 Flash",
                      "Gemini 3.6 Flash", "Gemini 3.5 Flash",
-                     "Cohere")
+                     "Cohere", "Ollama VL 3B")
 
 # Tier names known to accept image content blocks. Unknown tiers are
 # treated as text-only so we never send images into the void.
 # Cohere is backup-only: it trails the Gemini lanes in cascade order and
 # only sees images when its configured model is vision-capable
 # (COHERE_MODEL=command-a-vision-07-2025); the default Command A is text.
+# "ollama vl" admits ONLY the Ollama VL 3B trial lane — no text-only
+# Ollama slot exists anymore, and unknown tiers stay text-only.
 # NOTE: this predicate intentionally admits any "gemini"-named lane
 # (including Lite lanes) in cascade-filter loops, while VISION_TIER_ORDER
 # above lists only trial-verified lanes for converter/runtime paths.
 # Do NOT "fix" the asymmetry without a vision trial on the added lanes.
-_VISION_TIERS = ("gemini", "cohere")
+_VISION_TIERS = ("gemini", "cohere", "ollama vl")
 
 
 def vision_supported_tier(tier_name: str) -> bool:
