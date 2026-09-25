@@ -269,7 +269,7 @@ def test_teaching_header_backfill(tmp_path, monkeypatch):
         "\n\n[Scope fence: you may teach ONLY slides 4-6 of 10.]"
     )
     body = ("## Concept: Graphs\n**Definition**\nA graph is nodes plus edges.\n"
-            "**Source**\n[slide 4]\n\n**Recall**\nWhat is a vertex?")
+            "**Source**\n[slide 4]\nWhat is a vertex?")
     fixed, repaired, left = teach_mod._maybe_repair_teaching_turn(send, body, "T")
     assert repaired is True
     assert fixed.startswith("📘 FILE: Lecture.pdf\nSlides: 4-6\n\n")

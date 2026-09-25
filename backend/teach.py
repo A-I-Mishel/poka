@@ -132,8 +132,8 @@ TEACHING_SUFFIX = (
     "a concept already taught earlier in this session. Pure-admin slides "
     "(course code/instructor/schedule/grading/contacts) use the compact form: "
     "\"### Administrative Information\" + 2-4 short bullets + \"**Source:** [slide N]\" — "
-    "never fake Definition/Example/Recall blocks for admin, never recall "
-    "questions about admin trivia, and close admin turns with one plain line "
+    "never fake Definition/Example blocks for admin, never ask "
+    "closing questions about admin trivia, and close admin turns with one plain line "
     "like \"Nothing technical here. Let's move on.\" "
     "Format: source header as \"📘 FILE: <name>\" newline \"Slides: X-Y\"; then "
     "ONE \"## Concept: <name> (Slide N)\" block written like a friendly teacher, "
@@ -155,14 +155,14 @@ TEACHING_SUFFIX = (
     "the slide's own example first; "
     "label supporting analogies as supporting; rotate analogy domains across "
     "turns (friends → roads → maps → circuits) without repeating the same one "
-    "twice in a row. Rotate recall types across turns "
-    "(define → apply → compare → why → mistake); never ask the same recall "
-    "type twice consecutively. Open with one short continuity sentence "
+    "twice in a row. Rotate closing-question types across turns "
+    "(define → apply → compare → why → mistake); never ask the same "
+    "closing-question type twice consecutively. Open with one short continuity sentence "
     "connecting the previous turn to the current one. Start with the source header "
-    "\"📘 FILE: <name>\" newline \"Slides: X-Y\". End concept turns with EXACTLY ONE "
-    "terminal \"**Recall**\" section (one question — never its answer or answer key), "
-    "then one navigation line \"Reply **continue** for "
-    "the next concept.\", and STOP — never append Say Next, Say Got it, "
+    "\"📘 FILE: <name>\" newline \"Slides: X-Y\". End concept turns with exactly one "
+    "natural closing question (one plain sentence ending with ? — no **Recall** "
+    "heading, never its answer or answer key), then STOP — never add a Reply "
+    "continue line, never append Say Next, Say Got it, "
     "Next Steps, another question, or further teaching. An explicit \"in "
     "detail\" / \"teach everything\" request keeps the full long form.]"
 )
@@ -315,7 +315,7 @@ def _last_teaching_state(history: List[Dict[str, Any]]) -> Tuple[Optional[str], 
 
 
 def _last_teaching_ends_with_recall(history: List[Dict[str, Any]]) -> bool:
-    """True when the most recent teaching message ends with a Recall checkpoint."""
+    """True when the most recent teaching message ends with a closing question."""
     try:
         for msg in reversed(history or []):
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
@@ -323,15 +323,14 @@ def _last_teaching_ends_with_recall(history: List[Dict[str, Any]]) -> bool:
             content = str(msg.get("content", "") or "")
             if "📘 file:" not in content.lower():
                 return False
-            low = content.lower()
-            return "recall:" in low or "**recall**" in low
+            return _ends_with_closing_question(content)
         return False
     except Exception:
         return False
 
 
 def _is_recall_answer(text: str, history: List[Dict[str, Any]]) -> bool:
-    """True when the user is answering a Recall checkpoint (stays in teaching)."""
+    """True when the user is answering a closing question (stays in teaching)."""
     try:
         t = str(text or "")
         if not t or not t.strip():
@@ -411,7 +410,7 @@ def _is_pace_feedback(text: str, history: List[Dict[str, Any]]) -> bool:
 
 
 def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
-    """True for "Next/continue" follow-ups AND Recall answers in a session.
+    """True for "Next/continue" follow-ups AND closing-question answers in a session.
 
     Requires an explicit `teaching.active` flag in the last 3 messages
     (flag+recency). Old chats without flags fall back to a normalized
@@ -450,7 +449,7 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
             return False
         if len(t.strip()) <= TEACHING_CONTINUATION_MAX_CHARS and _signals(low, CONTINUATION_SIGNALS):
             return True
-        # A short answer to a Recall checkpoint continues the session for
+        # A short answer to a closing question continues the session for
         # evaluation (correct/partial/incorrect) before advancing.
         return _is_recall_answer(t, history)
     except Exception:
@@ -880,7 +879,45 @@ _TEACHING_CITE_RANGE_RE = re.compile(r"\[(?:slides|pages)\s+(\d+)\s*[-–]\s*(\d
 _TEACHING_CONCEPT_RE = re.compile(r"^\s*#{0,3}\s*\*{0,2}concept\*{0,2}\s*:", re.IGNORECASE | re.MULTILINE)
 
 
+# Deprecated: old **Recall** heading contract (clean break — new drafts must
+# NOT emit it). Kept for import compat only; the validator rejects it.
 _TEACHING_RECALL_RE = re.compile(r"^\s*#{0,3}\s*\*{0,2}recall\*{0,2}\s*:?\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+_TEACHING_CONTINUE_CUE_RE = re.compile(
+    r"reply\s+\*{0,2}continue\*{0,2}", re.IGNORECASE)
+
+
+def _terminal_closing_question(text: str) -> str:
+    """Return the terminal closing question or "" (never raises).
+
+    A closing question is the last non-empty line ending with `?`.
+    Headings (**Recall**) do not count — the question sentence itself must
+    end with `?` after the Source line.
+    """
+    try:
+        lines = [ln for ln in str(text or "").splitlines() if ln.strip()]
+        if not lines:
+            return ""
+        last = lines[-1].strip()
+        # Strip trailing quotes/bold markers after `?` (e.g. `...?**`).
+        stripped = re.sub(r"[\s*\"“”'\"]+$", "", last).strip()
+        if stripped.endswith("?"):
+            return lines[-1].strip()
+        # Allow `...?` followed only by closing markup on same line.
+        if re.search(r"\?\s*[*\"“”'\"]*\s*$", last):
+            return lines[-1].strip()
+        return ""
+    except Exception:
+        return ""
+
+
+def _ends_with_closing_question(text: str) -> bool:
+    """True when the draft ends with a natural closing question (never raises)."""
+    try:
+        return bool(_terminal_closing_question(text))
+    except Exception:
+        return False
 
 
 _TEACHING_BANNED_FOOTER_RE = re.compile(
@@ -942,11 +979,11 @@ _REPAIR_TIER_PREFERENCE = (
 def _strip_teaching_violations(text: str) -> str:
     """Deterministically remove fixable teaching violations (never raises).
 
-    Strips banned footer lines (Say Next / Say Got it / Next Steps) and
-    duplicate FILE headers (keeps the first). Citations, Recall count,
-    and Concept presence still need a model repair — this only removes
-    what regex can prove is wrong, so a failed repair still delivers a
-    cleaner draft than the raw weak-tier output.
+    Strips banned footer lines (Say Next / Say Got it / Next Steps), legacy
+    Reply-continue cue lines, and duplicate FILE headers (keeps the first).
+    Citations, closing-question presence, and Concept presence still need a
+    model repair — this only removes what regex can prove is wrong, so a
+    failed repair still delivers a cleaner draft than the raw weak-tier output.
     """
     try:
         cleaned = str(text or "")
@@ -957,6 +994,8 @@ def _strip_teaching_violations(text: str) -> str:
         for line in lines:
             try:
                 if _TEACHING_BANNED_FOOTER_RE.match(line):
+                    continue
+                if _TEACHING_CONTINUE_CUE_RE.search(line):
                     continue
             except Exception:
                 logger.debug("teaching footer scan failed", exc_info=True)
@@ -1003,9 +1042,10 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
 
     Canonical rules: source header range within the window; no citations
     beyond the window end; distinct cited slides within the window span;
-    at least one concept block and one citation; exactly one terminal
-    Recall section after the last concept; no footer lines (Say Next /
-    Say Got it / Next Steps); no admissions of guessed slide contents.
+    at least one concept block and one citation; exactly one natural
+    closing question (terminal `?` after Source, no **Recall** heading, no
+    Reply-continue cue); no footer lines (Say Next / Got it / Next Steps);
+    no admissions of guessed slide contents.
     Returns violation reasons; empty means pass.
     """
     reasons: List[str] = []
@@ -1050,18 +1090,38 @@ def _validate_teaching_draft(output: str, start: int, end: int) -> List[str]:
         except Exception:
             logger.debug("fabrication-res scan failed", exc_info=True)
         concepts = list(_TEACHING_CONCEPT_RE.finditer(text))
-        recalls = list(_TEACHING_RECALL_RE.finditer(text))
+        try:
+            has_recall_heading = bool(_TEACHING_RECALL_RE.search(text))
+        except Exception:
+            has_recall_heading = "**recall**" in text.lower()
+        try:
+            has_continue_cue = bool(_TEACHING_CONTINUE_CUE_RE.search(text))
+        except Exception:
+            has_continue_cue = "reply" in text.lower() and "continue" in text.lower()
+        closing_q = _terminal_closing_question(text)
+        # Source must precede the closing question when both exist.
+        try:
+            low = text.lower()
+            src_pos = low.rfind("source:")
+            if closing_q and src_pos >= 0:
+                q_pos = text.rfind(closing_q)
+                if q_pos < src_pos:
+                    closing_q = ""
+        except Exception:
+            logger.debug("closing-question source-order check failed", exc_info=True)
         admin_only = not concepts and "administrative information" in text.lower()
         if not concepts and not admin_only:
             reasons.append("no Concept block")
+        if has_recall_heading:
+            reasons.append("Recall heading removed (use a natural closing question)")
+        if has_continue_cue:
+            reasons.append("Reply-continue cue removed (just stop)")
         if admin_only:
-            # Compact admin form carries citations but no Recall checkpoint.
-            if recalls:
-                reasons.append("no Recall for admin-only turns")
-        elif len(recalls) != 1:
-            reasons.append(f"{len(recalls)} Recall sections (need exactly 1)")
-        elif concepts and recalls[0].start() < concepts[-1].start():
-            reasons.append("Recall must come after the last Concept (no teaching after Recall)")
+            # Compact admin form carries citations but no closing question.
+            if closing_q:
+                reasons.append("no closing question for admin-only turns")
+        elif not closing_q:
+            reasons.append("missing closing question (one terminal ? after Source)")
         banned = _TEACHING_BANNED_FOOTER_RE.findall(text)
         if banned:
             reasons.append("banned footer line (no Say Next / Got it / Next Steps)")
@@ -1141,10 +1201,11 @@ def _repair_teaching_draft(
                 "Use this canonical shape: source header (\"📘 FILE: <name>\" "
                 "newline \"Slides: X-Y\"), then \"## Concept:\" blocks in a "
                 "human voice (short lines, Imagine + ASCII sketch, Here "
-                "mapping, one memory hook, Source line), then EXACTLY ONE terminal "
-                "\"**Recall**\" section with one question and STOP — no Say "
+                "mapping, one memory hook, Source line), then exactly one natural "
+                "closing question (one plain sentence ending with ?, no "
+                "\"**Recall**\" heading, no Reply-continue cue) and STOP — no Say "
                 "Next, Say Got it, or Next Steps lines, no teaching after "
-                "Recall. Reply with the full corrected lesson only.")},
+                "the question. Reply with the full corrected lesson only.")},
             {"role": "user", "content": (
                 "Rules violated:\n- " + "\n- ".join(reasons) +
                 "\n\nVerified slides and instructions:\n" + str(send_text or "")[:12000] +
@@ -1312,16 +1373,13 @@ _TEACHING_IMPORTANCE_RE = re.compile(r"\b(MUST KNOW|HIGH|MEDIUM|LOW)\b", re.IGNO
 
 
 def _classify_recall_type(output: str) -> str:
-    """Guess the recall-question type from its wording (never raises).
+    """Guess the closing-question type from its wording (never raises).
 
     Returns one of define/apply/compare/why/mistake/unknown. Metadata
-    only — used to measure recall rotation over time.
+    only — used to measure closing-question rotation over time.
     """
     try:
-        matches = list(_TEACHING_RECALL_RE.finditer(str(output or "")))
-        if len(matches) != 1:
-            return "unknown"
-        question = str(output or "")[matches[0].end():matches[0].end() + 400].lower()
+        question = _terminal_closing_question(str(output or "")).lower()
         if not question.strip():
             return "unknown"
         if any(w in question for w in ("mistake", "wrong", "error", "incorrect", "find the")):
@@ -1344,9 +1402,9 @@ def _log_teaching_format(send_text: str, output: str, tier: str,
     """Log teaching format compliance as metadata only (never raises).
 
     Records which §37 blocks a teaching answer carried (header/concept/
-    recall/source) so tier compliance can be measured over time. Also
+    closing-question/source) so tier compliance can be measured over time. Also
     records section presence, the stated importance level, and the
-    recall-question type so texture variation can be measured. No content,
+    closing-question type so texture variation can be measured. No content,
     IDs, or prompts are logged — tier + booleans/labels only. Never
     modifies output.
     """
@@ -1356,9 +1414,9 @@ def _log_teaching_format(send_text: str, output: str, tier: str,
         text = str(output or "")
         low = text.lower()
         try:
-            n_recalls = len(_TEACHING_RECALL_RE.findall(text))
+            has_closing_q = _ends_with_closing_question(text)
         except Exception:
-            n_recalls = 0
+            has_closing_q = False
         try:
             sections = {name: bool(rx.search(text))
                         for name, rx in _TEACHING_SECTION_RES.items()}
@@ -1374,7 +1432,7 @@ def _log_teaching_format(send_text: str, output: str, tier: str,
             exam_mode=("EXAM MODE" in str(send_text or "")),
             has_header=("📘 file:" in low),
             has_concept=("concept:" in low),
-            has_recall=(n_recalls == 1),
+            has_recall=bool(has_closing_q),
             has_source=("source:" in low),
             repaired=bool(repaired),
             violations=int(violations or 0),

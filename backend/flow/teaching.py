@@ -358,7 +358,7 @@ def _apply_teaching_session(
             send_text += _teaching_scope_line(start, end, total)
     except Exception:
         logger.debug("teaching scope fence failed", exc_info=True)
-    # Recall-answer mode: evaluate the student's answer before the next window.
+    # Closing-question-answer mode: evaluate the student's answer before the next window.
     try:
         from agent.attachment_gate import CONTINUATION_SIGNALS
         from agent.router import _signals as _gate_signals
@@ -369,7 +369,7 @@ def _apply_teaching_session(
     try:
         if not _is_next and _is_recall_answer(str(gate_text or ""), history):
             send_text += (
-                "\n\n[The user just answered your Recall checkpoint above. First "
+                "\n\n[The user just answered your closing question above. First "
                 "evaluate in 3-5 lines: if correct confirm the key idea and "
                 "optionally refine wording; if partial name the missing piece; "
                 "if incorrect name the misconception, explain why simply, and "

@@ -34,8 +34,7 @@ def _demo_draft() -> str:
         "⭐ MUST MEMORIZE\n"
         "Vertex = object/node; Edge = connection/relationship.\n"
         "**Source:** [slide 1]\n"
-        "**Recall**\nWhat is the difference between a vertex and an edge?\n"
-        "Reply **continue** for the next concept."
+        "What is the difference between a vertex and an edge?"
     )
 
 
@@ -49,8 +48,21 @@ def test_demo_draft_has_no_robotic_template():
     draft = _demo_draft()
     assert "Exam trap" not in draft
     assert "Exam importance" not in draft
-    assert draft.count("**Recall**") == 1
+    assert "**Recall**" not in draft
+    assert "Reply **continue**" not in draft
+    assert draft.strip().endswith("?")
     assert "Imagine:" in draft and "Here:" in draft
+
+
+def test_recall_heading_and_continue_cue_rejected():
+    from backend.teach import _validate_teaching_draft
+
+    legacy = _demo_draft() + "\n**Recall**\nExtra?"
+    assert any("Recall heading removed" in r for r in _validate_teaching_draft(legacy, 1, 1))
+    with_cue = _demo_draft() + "\nReply **continue** for the next concept."
+    assert any("Reply-continue cue removed" in r for r in _validate_teaching_draft(with_cue, 1, 1))
+    no_question = _demo_draft().rsplit("?", 1)[0].rstrip() + "."
+    assert any("missing closing question" in r for r in _validate_teaching_draft(no_question, 1, 1))
 
 
 def test_admin_compact_passes_without_recall():
