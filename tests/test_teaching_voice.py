@@ -86,6 +86,105 @@ def test_fast_tiers_exclude_weakest_lane():
     assert set(fast) < set(synth)
 
 
+def _teaching_input(extra: str = "") -> str:
+    return (
+        "teach me\n\n[Teaching mode: warm human tutor]\n"
+        "[Verified content of 'L.pptx' slides 1-1 of 5:\n[slide 1]\nBody]\n"
+        + extra
+    )
+
+
+def test_clean_window_unbinds_fetch_tools():
+    from agent.toolrun import filter_tools_for_hint
+
+    names = {getattr(t, "name", "") for t in filter_tools_for_hint(_teaching_input())}
+    assert "read_document" not in names
+    assert "read_pdf" not in names
+    assert "read_pdf_page" not in names
+
+
+def test_thin_window_keeps_fetch_tools():
+    from agent.toolrun import filter_tools_for_hint
+
+    hint = _teaching_input(
+        "[Note: this window is title-only (12 chars of body text). "
+        "Call read_pdf_page for pages 1-1 first.]")
+    names = {getattr(t, "name", "") for t in filter_tools_for_hint(hint)}
+    assert "read_pdf_page" in names
+
+
+def test_truncated_window_keeps_fetch_tools():
+    from agent.toolrun import filter_tools_for_hint
+
+    hint = _teaching_input("[Note: window text truncated to fit context.]")
+    names = {getattr(t, "name", "") for t in filter_tools_for_hint(hint)}
+    assert "read_document" in names
+
+
+def test_non_teaching_hints_unaffected():
+    from agent.toolrun import filter_tools_for_hint
+
+    names = {getattr(t, "name", "") for t in filter_tools_for_hint("read this document please")}
+    assert "read_document" in names
+
+
+def test_execution_drop_keeps_other_calls():
+    from agent.toolrun import _drop_teaching_refetch_calls
+
+    calls = [
+        {"name": "read_document", "args": {"upload_id": "abc"}},
+        {"name": "web_search", "args": {"query": "graphs"}},
+    ]
+    kept, dropped = _drop_teaching_refetch_calls(calls, _teaching_input())
+    assert dropped == 1
+    assert [c["name"] for c in kept] == ["web_search"]
+    # Non-teaching input: nothing dropped.
+    kept2, dropped2 = _drop_teaching_refetch_calls(calls, "plain question")
+    assert dropped2 == 0 and len(kept2) == 2
+
+
+def test_teaching_pointer_is_fetch_neutral():
+    from backend.attachments import attachment_hint
+
+    uid = "a" * 16
+    neutral = attachment_hint("document", uid, "L.pptx", 1, 1, teaching=True)
+    assert uid in neutral
+    assert "To read it, call" not in neutral
+    assert "do not re-fetch" in neutral
+    classic = attachment_hint("document", uid, "L.pptx", 1, 1)
+    assert "To read it, call read_document" in classic
+
+
+def test_thin_turn_keeps_fetch_pointer(tmp_path, monkeypatch):
+    """Thin/diagram windows keep the classic fetch pointer (diagrams stay reachable)."""
+    from backend.chatflow import _apply_teaching_session
+    from backend.deps import UserContext
+    from services.files import FileStore
+    from services.storage import UserStore
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    ctx = UserContext(user_id="thin-ptr", user_store=UserStore("thin-ptr"),
+                      file_store=FileStore("thin-ptr"), limit_key="thin-ptr", source="env")
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(1))
+    box.text_frame.text = "Diagrams"
+    import io as _io
+
+    buf = _io.BytesIO()
+    prs.save(buf)
+    meta = ctx.file_store.save_upload(buf.getvalue(), "Thin.pptx")
+    atts = [{"id": meta.id, "kind": "document", "name": "Thin.pptx"}]
+    send, _, _ = _apply_teaching_session(ctx, "teach me", [], atts, [], "teach me")
+    assert "title-only" in send
+    assert "To read it, call" in send
+    assert "do not re-fetch" not in send
+
+
 def test_doc_inline_html_renders_and_escapes():
     import html as _html
 

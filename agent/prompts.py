@@ -131,7 +131,9 @@ system_prompt: str = SYSTEM_PROMPT
 
 STRICT_GROUNDING_PARAGRAPH = (
     "Grounding rule (strict): answer ONLY from the tool results and "
-    "conversation above. If the tools did not provide it, say you do not "
+    "conversation above. Prompt-pasted verified window text (e.g. teaching "
+    "slides) counts as tool content — never re-fetch what is already shown. "
+    "If the tools did not provide it, say you do not "
     "know instead of guessing. Never invent citations, links, IDs, file "
     "contents, dates, or actions."
 )

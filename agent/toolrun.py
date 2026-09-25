@@ -458,7 +458,83 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None,
         out = _apply_lesson_order(out, task_type)
     except Exception:
         logger.debug("lesson reorder failed", exc_info=True)
+    # Teaching no-refetch enforcement: clean verified windows arrive
+    # inline, so bound file-fetch tools only invite a wasted re-fetch
+    # (models obey the attachment pointer over the advisory note).
+    # Overflow/title-only/truncated windows keep fetch behavior.
+    try:
+        if _is_clean_teaching_window(hint):
+            out = [t for t in out
+                   if getattr(t, "name", "") not in _TEACHING_FETCH_TOOLS]
+    except Exception:
+        logger.debug("teaching fetch-tool unbind failed", exc_info=True)
     return out if out else list(tools)
+
+
+_TEACHING_FETCH_TOOLS = ("read_document", "read_pdf", "read_pdf_page")
+
+
+def _teaching_window_needs_fetch(hint: str) -> bool:
+    """True when teaching hints name content needing a real fetch (never raises).
+
+    Clean verified windows arrive inline and must be taught directly;
+    only overflow (>5MB), title-only/diagram, and truncated windows keep
+    fetch behavior. Matched case-insensitively against the exact note
+    wordings in backend/teach.py so a reword there fails open (fetch
+    allowed) rather than starving the model.
+    """
+    try:
+        low = str(hint or "").lower()
+    except Exception:
+        return True
+    try:
+        return (
+            "title-only" in low
+            or "truncated to fit context" in low
+            or "exceeds the inline window" in low
+            or "call read_pdf_page" in low
+            or "use read_document/read_pdf tools" in low
+        )
+    except Exception:
+        return True
+
+
+def _is_clean_teaching_window(hint: str) -> bool:
+    """True when this is a teaching turn whose window needs no fetch."""
+    try:
+        return "[Teaching mode:" in str(hint or "") and not _teaching_window_needs_fetch(hint)
+    except Exception:
+        return False
+
+
+def _drop_teaching_refetch_calls(tool_calls: List[Any], hint: str) -> Tuple[List[Any], int]:
+    """Drop file re-fetch calls on clean teaching windows (never raises).
+
+    Returns (kept_calls, dropped_count). Handles both langchain ToolCall
+    objects and fallback dicts. A non-empty model text then answers
+    directly from the verified window instead of burning a round trip.
+    """
+    try:
+        if not _is_clean_teaching_window(hint) or not tool_calls:
+            return tool_calls, 0
+        kept: List[Any] = []
+        dropped = 0
+        for tc in tool_calls:
+            try:
+                if isinstance(tc, dict):
+                    name = str(tc.get("name", "") or "")
+                else:
+                    name = str(getattr(tc, "name", "") or "")
+            except Exception:
+                name = ""
+            if name in _TEACHING_FETCH_TOOLS:
+                dropped += 1
+            else:
+                kept.append(tc)
+        return kept, dropped
+    except Exception:
+        logger.debug("teaching refetch drop failed", exc_info=True)
+        return tool_calls, 0
 
 
 def _apply_lesson_order(bound: List[Any], task_type: Optional[str]) -> List[Any]:
@@ -982,11 +1058,25 @@ def run_tool_loop(
             try:
                 fb = _fallback_tool_calls_from_text(text)
                 if fb:
-                    tool_calls = fb  # type: ignore[assignment]
-                    # JSON was the tool call, not an answer to show
-                    last_text = ""
+                    # Teaching no-refetch enforcement: narration like
+                    # "[Tool call: read_document(...)]" parses into real
+                    # calls even when the tools are unbound, so drop file
+                    # re-fetches on clean windows and keep the model's
+                    # text as the answer instead of executing.
+                    fb, _dropped = _drop_teaching_refetch_calls(fb, user_input)
+                    if fb:
+                        tool_calls = fb  # type: ignore[assignment]
+                        # JSON was the tool call, not an answer to show
+                        last_text = ""
             except Exception:
                 logger.debug("fallback tool-call parse failed", exc_info=True)
+        # Structured tool_calls on clean teaching windows: same drop —
+        # the verified window already carries the content. A non-empty
+        # text then answers directly below.
+        try:
+            tool_calls, _dropped = _drop_teaching_refetch_calls(tool_calls, user_input)
+        except Exception:
+            logger.debug("teaching refetch drop failed", exc_info=True)
         if on_progress is not None and tool_calls:
             try:
                 names: List[str] = []

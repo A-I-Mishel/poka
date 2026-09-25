@@ -28,12 +28,28 @@ def _escape_name(text: str) -> str:
     return _escape_hint(text)[:MAX_DISPLAY_NAME_CHARS]
 
 
-def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int) -> str:
-    """Tool hint for one staged attachment (ID-only, never paths)."""
+def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int,
+                     teaching: bool = False) -> str:
+    """Tool hint for one staged attachment (ID-only, never paths).
+
+    teaching=True renders a fetch-neutral pointer for slide-by-slide
+    turns: the current slide arrives as verified window text, so the
+    hint must NOT command a fetch ("To read it, call ...") — models
+    obey the pointer over the no-refetch note. The upload ID stays so
+    diagram/overflow pages named by later notes remain fetchable.
+    """
     safe_name = _escape_name(name)
     safe_upload_id = _escape_hint(upload_id)
     tag: str = "" if total <= 1 else f" {index}/{total}"
     if kind == "pdf":
+        if teaching:
+            return (
+                f"\n\n[Attached PDF{tag} '{safe_name}' with upload ID: {safe_upload_id}. "
+                "The current slide's content appears in the verified window "
+                "below — teach from that text and do not re-fetch. Only fetch "
+                "pages explicitly named by a later note (diagram/overflow). "
+                "Never use any other path or ID.]"
+            )
         return (
             f"\n\n[Attached PDF{tag} '{safe_name}' with upload ID: {safe_upload_id}. "
             "To read it, call read_pdf(upload_id=\""
@@ -48,6 +64,14 @@ def attachment_hint(kind: str, upload_id: str, name: str, index: int, total: int
             "\"). Never use any other path or ID.]"
         )
     if kind == "document":
+        if teaching:
+            return (
+                f"\n\n[Attached document{tag} '{safe_name}' with upload ID: {safe_upload_id}. "
+                "The current slide's content appears in the verified window "
+                "below — teach from that text and do not re-fetch. Only fetch "
+                "content explicitly named by a later note (diagram/overflow). "
+                "Never use any other path or ID.]"
+            )
         return (
             f"\n\n[Attached document{tag} '{safe_name}' with upload ID: {safe_upload_id}. "
             "To read it, call read_document(upload_id=\""

@@ -228,11 +228,10 @@ def _apply_teaching_session(
             return send_text, vision_ids, None
     except Exception:
         logger.debug("exam mode assembly failed", exc_info=True)
-    # Single-file hint (no multi-file overview: never mix files in one batch).
-    try:
-        send_text += attachment_hint(active["kind"], active["id"], active["name"], 1, 1)
-    except Exception:
-        logger.debug("single-file hint attach failed", exc_info=True)
+    # Window first: the pointer below is fetch-neutral only on clean
+    # windows (verified text inline — must not command a re-fetch).
+    # Thin/truncated/overflow windows keep the classic fetch pointer so
+    # the model can still reach diagram/overflow pages.
     window_hint, start, end, total, status = _teaching_window_hint(ctx, active, last_end)
     if (status != "OK" and TEACHING_INLINE_OVERFLOW not in window_hint
             and last_end <= 0 and not _explicit_file):
@@ -261,6 +260,22 @@ def _apply_teaching_session(
             "accessible .pptx/.pdf (export scanned slides with OCR text first), "
             "then say Next to continue."
         )
+    # Single-file hint (no multi-file overview: never mix files in one
+    # batch). Fetch-neutral only on clean windows — the same predicate as
+    # the no-refetch note below and agent.toolrun's unbind/drop guards
+    # (keep the three in sync). Thin/truncated/overflow windows keep the
+    # classic fetch pointer so diagrams stay reachable.
+    try:
+        _teaching_clean = (
+            status == "OK"
+            and TEACHING_INLINE_OVERFLOW not in window_hint
+            and "title-only" not in window_hint
+            and "truncated to fit context" not in window_hint
+        )
+        send_text += attachment_hint(active["kind"], active["id"], active["name"], 1, 1,
+                                     teaching=_teaching_clean)
+    except Exception:
+        logger.debug("single-file hint attach failed", exc_info=True)
     send_text += window_hint
     # No-refetch note: when the verified window is complete inline (OK
     # status, full-bodied, untruncated), teach from the text above instead
