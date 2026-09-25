@@ -237,3 +237,29 @@ def test_classifier_parses_intent():
     finally:
         agent_mod._invoke_bounded = orig
     assert (intent, conf) == ("vision", 0.9)
+
+
+def test_explicit_new_task_signals():
+    """Intent-first gate: creation/export verbs are new tasks, not continuations."""
+    from agent.attachment_gate import explicit_new_task
+
+    for text in ("convert the full conversation into a docx file",
+                 "create a pdf of these slides",
+                 "download this as docx",
+                 "export the chat",
+                 "generate a presentation about dogs"):
+        assert explicit_new_task(text) is True, text
+    for text in ("Next", "ok", "A vertex is a node", "summarize this slide",
+                 "a graph is created from vertices and edges", ""):
+        assert explicit_new_task(text) is False, text
+
+
+def test_image_followup_yields_to_explicit_task():
+    """Image threads obey the same intent-first rule as teaching."""
+    from agent.attachment_gate import is_image_followup
+
+    hist = [{"role": "user", "content": "x",
+             "attachments": [{"id": "a" * 16, "kind": "image", "name": "s.png"}]},
+            {"role": "assistant", "content": "option a is a cat"}]
+    assert is_image_followup("convert this chart to pdf", hist) is None
+    assert is_image_followup("are you sure?", hist) == "a" * 16

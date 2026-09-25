@@ -360,13 +360,21 @@ def _is_recall_answer(text: str, history: List[Dict[str, Any]]) -> bool:
             return False
         low = t.lower()
         try:
-            from agent.attachment_gate import NEW_INTENT_SIGNALS
+            from agent.attachment_gate import NEW_INTENT_SIGNALS, explicit_new_task
             from agent.router import _signals
         except Exception:
             return False
-        # A clearly different task still exits teaching.
+        # NEW_INTENT always wins: "next song" exits teaching.
         if _signals(low, NEW_INTENT_SIGNALS):
             return False
+        # Intent-first: an explicit new task ("convert ... to docx") is
+        # never a quiz answer, no matter how short. Each message is
+        # evaluated on its own; the topic never assumes continuation.
+        try:
+            if explicit_new_task(t):
+                return False
+        except Exception:
+            logger.debug("explicit-task check failed", exc_info=True)
         return True
     except Exception:
         return False
@@ -437,7 +445,10 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
     Bare acknowledgments ("ok", "go", "yes") advance an active session —
     admin turns end without a closing question, so acks are the only way
     forward there. "teach A → unrelated Q → continue" can resume A within
-    the window; NEW_INTENT ("next song") always exits instead. Never raises.
+    the window; NEW_INTENT ("next song") always exits instead. An explicit
+    new task ("convert ... to docx") always exits: each message is
+    evaluated on its own and the topic never assumes continuation.
+    Never raises.
     """
     try:
         t = str(text or "")
@@ -462,13 +473,20 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
             return False
         low = t.lower()
         try:
-            from agent.attachment_gate import CONTINUATION_SIGNALS, NEW_INTENT_SIGNALS
+            from agent.attachment_gate import CONTINUATION_SIGNALS, NEW_INTENT_SIGNALS, explicit_new_task
             from agent.router import _signals
         except Exception:
             return False
         # NEW_INTENT always wins: "next song" exits teaching.
         if _signals(low, NEW_INTENT_SIGNALS):
             return False
+        # Intent-first: explicit new tasks exit before any continuation
+        # fast-path runs (ack/continuation/recall checks below).
+        try:
+            if explicit_new_task(t):
+                return False
+        except Exception:
+            logger.debug("explicit-task check failed", exc_info=True)
         if len(t.strip()) <= TEACHING_CONTINUATION_MAX_CHARS and _signals(low, CONTINUATION_SIGNALS):
             return True
         # Bare acknowledgments advance an active session (admin turns have

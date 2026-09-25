@@ -73,6 +73,38 @@ CONTINUATION_SIGNALS = (
     "continu*", "next", "proceed", "go on", "go ahead",
     "keep going", "carry on", "remain*", "finish*", "complet*",
 )
+# Explicit new-task verbs: the user is asking for something else, not
+# continuing the current thread. Checked BEFORE any sticky continuation
+# (teaching recall-answers, image follow-ups): "convert the full
+# conversation into a docx file" mid-teaching is a new task, not a quiz
+# answer. Phrase-anchored on purpose: bare verbs ("create") fuzzy-match
+# ordinary answer words ("created"), so only verb+object shapes
+# ("create a", "convert ... into") and unambiguous nouns (docx/pdf/
+# download/export) count. "summarize" stays out on purpose — "summarize
+# this slide" mid-teaching is a teaching follow-up, not an exit.
+EXPLICIT_TASK_SIGNALS = (
+    "create a", "create me", "convert to", "convert into",
+    "convert the full", "generate a", "make a",
+    "into a docx", "into pdf", "as docx", "as pdf",
+    "docx", "pdf", "download", "export",
+)
+
+
+def explicit_new_task(text: str) -> bool:
+    """True when the message carries an explicit new-task verb (never raises).
+
+    Intent-first gate: sticky continuations (teaching sessions, image
+    threads) must never hijack a message that asks for something else.
+    Each new user message is evaluated on its own; the topic never
+    assumes continuation.
+    """
+    try:
+        t = str(text or "").lower().strip()
+        if not t:
+            return False
+        return bool(_signals(t, EXPLICIT_TASK_SIGNALS))
+    except Exception:
+        return False
 _PRONOUNS = ("this", "that", "it", "isme", "usme", "ispe", "yeh", "ye")
 _SLIDE_RE = re.compile(r"\bslides?\s*\d+")
 _PAGE_RE = re.compile(r"\bpages?\s*\d+")
@@ -140,6 +172,8 @@ def is_image_followup(text: str, history: Sequence[Dict[str, Any]]) -> Optional[
         if not t or len(t) > _IMAGE_FOLLOWUP_MAX_CHARS:
             return None
         if _signals(t, NEW_INTENT_SIGNALS):
+            return None
+        if explicit_new_task(t):
             return None
         option_ref = _IMAGE_FOLLOWUP_OPTION_RE.search(t) is not None
         dispute = _signals(t, _IMAGE_FOLLOWUP_DISPUTE)

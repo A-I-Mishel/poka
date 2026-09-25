@@ -137,6 +137,28 @@ def test_next_recovers_after_generic_fallback():
     assert _is_teaching_continuation("Next", hist2) is True
 
 
+def test_explicit_new_task_exits_teaching():
+    """Screenshot regression: docx request mid-teaching is a new task.
+
+    Intent-first: each message is evaluated on its own — a short
+    explicit task ("convert ... into a docx file") must not be read
+    as a quiz answer just because the last turn ended with a question.
+    """
+    from backend.chatflow import _is_recall_answer, _is_teaching_continuation
+
+    concept_hist = [{"role": "assistant",
+                     "content": "📘 FILE: Lecture_01\nSlides: 4-4\n## Concept: Applications\n"
+                                "**Source:** [slide 4]\n"
+                                "What does the degree of a vertex represent?"}]
+    task = "convert the full conversation into a docx file"
+    assert _is_recall_answer(task, concept_hist) is False
+    assert _is_teaching_continuation(task, concept_hist) is False
+    # Genuine continuations still work on the same history.
+    assert _is_teaching_continuation("Next", concept_hist) is True
+    assert _is_teaching_continuation("ok", concept_hist) is True
+    assert _is_recall_answer("It counts connected edges", concept_hist) is True
+
+
 def test_admin_block_detection():
     from backend.chatflow import _is_admin_block
 
