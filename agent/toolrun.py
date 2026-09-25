@@ -44,6 +44,7 @@ from tools.search_tool import extract_cited_sources
 from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled, remaining_seconds
 from agent.executor import ExecutorBusyError
 from agent.cascade import (
+    NO_TOOLS_TIERS,
     _record_tier_failure,
     _record_tier_success,
     classify_provider_error,
@@ -1016,6 +1017,13 @@ def run_tool_loop(
                 # (or raise when nothing was produced at all).
                 provider_error = e
                 break
+            if tier_name in NO_TOOLS_TIERS:
+                # A tools-bound round can never succeed here (local VL
+                # models 400 on any tools payload) â€” skip without the
+                # network call or the failure record so the tier stays
+                # live for tool-free vision use. Failover continues on
+                # the next capable tier.
+                continue
             try:
                 try:
                     bound = round_llm.bind_tools(

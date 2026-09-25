@@ -37,6 +37,14 @@ _TIER_FAILS: Dict[str, int] = {}
 _TIER_TIMEOUTS: Dict[str, int] = {}
 _TIER_SKIP_UNTIL: Dict[str, float] = {}
 
+# Tiers that cannot take tools-bound calls (local VL models served over
+# an OpenAI-compatible endpoint). Tool rounds skip them without a
+# network call, and a "does not support tools" 400 classifies as
+# capability (recorded for honest footers, never cooled: it is a
+# permanent capability, not an outage — cooling it would also block
+# its tool-free vision use for an hour).
+NO_TOOLS_TIERS = ("Ollama VL 3B",)
+
 # Last failure per tier: (kind, truncated detail, timestamp). Lets callers
 # explain a fallback ("Big Pickle rate-limited") for ANY tier without
 # changing cascade signatures. Bounded (one entry per known tier) and
@@ -59,6 +67,7 @@ def _friendly_reason(kind: str) -> str:
         "timeout": "timed out",
         "auth": "unavailable (auth)",
         "invalid": "unavailable (rejected)",
+        "capability": "does not support tools",
         "server": "temporarily unavailable",
         "capacity": "capacity-limited",
         "network": "unreachable",
@@ -201,6 +210,14 @@ def classify_provider_error(error: Any) -> Tuple[str, bool]:
         or ("reasoning" in lowered and "signature" in lowered)
     ):
         return ("unknown", True)
+    # No-tools capability (local VL models over OpenAI-compatible
+    # endpoints): a tools-bound call 400s, but the tier is healthy for
+    # tool-free calls (direct answers, vision). Must precede the
+    # 400/invalid branch below — same gateway-400 pattern as above —
+    # or one tool round would ban the tier (and its vision use) for an
+    # hour.
+    if "does not support tools" in lowered:
+        return ("capability", True)
     # Structured provider evidence first: a quota or capacity reason in
     # the payload outranks substring guessing (a 503 body quoting quota
     # is quota exhaustion; "overloaded" alone is outage, never quota).
@@ -346,6 +363,11 @@ def _record_tier_failure(name: str, kind: str = "unknown", error: Any = None) ->
                 _TIER_LAST_ERROR[name] = (kind, _redact_detail(raw), time.time())
         except Exception:
             logger.debug("tier last-error record failed", exc_info=True)
+        if kind == "capability":
+            # Not an outage: the tier is healthy for tool-free calls.
+            # Never cool, never count — a tools 400 must not ban the
+            # tier's vision use for an hour.
+            return
         if kind == "timeout":
             streak: int = _TIER_TIMEOUTS.get(name, 0) + 1
             _TIER_TIMEOUTS[name] = streak

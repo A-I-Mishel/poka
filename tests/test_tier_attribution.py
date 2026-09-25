@@ -94,6 +94,40 @@ def test_no_provider_leaves_box_for_caller():
     assert box == []
 
 
+def test_no_tools_tier_skipped_without_call_or_cool():
+    """Screenshot regression: VL 400s tools-bound calls, so tool rounds
+    skip it fast — no network call, no failure record, no cooldown.
+    The tier stays live for tool-free vision use."""
+    import agent as agent_mod
+
+    vl_calls = {"n": 0}
+
+    class VL(ScriptLLM):
+        def invoke(self, messages):
+            vl_calls["n"] += 1
+            raise AssertionError("no-tools tier must not be invoked")
+
+    order = ["Ollama VL 3B", "good"]
+    states = {"Ollama VL 3B": VL(["unused"]), "good": ScriptLLM([("done", [])])}
+    calls = {"n": 0}
+
+    def provider():
+        calls["n"] += 1
+        name = order[calls["n"] - 1]
+        return name, states[name]
+
+    box, trace = [], []
+    out = run_tool_loop(
+        ScriptLLM(["unused"]), "hi", [],
+        llm_provider=provider, tier_trace=trace, final_tier=box,
+    )
+    assert "done" in out
+    assert box == ["good"]
+    assert vl_calls["n"] == 0
+    assert agent_mod._TIER_SKIP_UNTIL.get("Ollama VL 3B") is None
+    assert agent_mod._TIER_FAILS.get("Ollama VL 3B") is None
+
+
 def _research_answer(monkeypatch, reflect=None):
     import agent.answer as answer_mod
     import agent.runtime as runtime

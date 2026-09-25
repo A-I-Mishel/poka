@@ -16,11 +16,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import agent
 from agent.cascade import (
+    NO_TOOLS_TIERS,
+    _friendly_reason,
     _record_tier_failure,
     _record_tier_success,
     _tier_skipped,
     _usable_tiers,
     classify_provider_error,
+    last_tier_error,
 )
 from services.limits import (
     TIER_COOLDOWN_CAPACITY_SECONDS,
@@ -144,6 +147,29 @@ def test_classify_uses_status_code_attribute():
 def test_classify_usage_limit_phrases():
     assert classify_provider_error(Exception("daily usage limit reached for model"))[0] == "rate_limit"
     assert classify_provider_error(Exception("usagelimit: exceeded budget"))[0] == "rate_limit"
+
+
+def test_classify_no_tools_capability():
+    # Screenshot regression: qwen2.5vl:3b 400s any tools-bound call.
+    # Must precede the 400/invalid branch (gateways report HTTP 400).
+    err = Exception("Error code: 400 - {'message': "
+                    "'registry.ollama.ai/library/qwen2.5vl:3b "
+                    "does not support tools'}")
+    kind, retryable = classify_provider_error(err)
+    assert kind == "capability"
+    assert retryable is True
+    assert _friendly_reason(kind) == "does not support tools"
+    assert "Ollama VL 3B" in NO_TOOLS_TIERS
+
+
+def test_capability_never_cools_and_stays_explained():
+    err = Exception("does not support tools")
+    _record_tier_failure("vl", "capability", err)
+    _record_tier_failure("vl", "capability", err)
+    assert _tier_skipped("vl") is False
+    assert agent._TIER_FAILS.get("vl") is None
+    kind, _detail = last_tier_error("vl")
+    assert kind == "capability"
 
 
 def test_rate_limit_honors_retry_after():
