@@ -42,7 +42,7 @@ def test_thin_pdf_window_points_at_read_pdf_page(tmp_path, monkeypatch):
         teach_mod, "_extract_teaching_blocks", lambda c, a: (thin, 138, "OK"))
     hint, start, end, total, status = teach_mod._teaching_window_hint(ctx, attach, 3)
     assert status == "OK"
-    assert (start, end, total) == (4, 6, 138)
+    assert (start, end, total) == (4, 4, 138)
     assert "read_pdf_page" in hint
     assert "abc123" in hint
     assert "re-upload" in hint  # last resort only

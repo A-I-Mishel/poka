@@ -144,7 +144,10 @@ def create_pptx(topic: str, content: str) -> str:
         return f"STATUS=FAILED tool=create_pptx: {str(e)}"
 
 
-_PPTX_MAX_SLIDES: int = 20
+# Aligned with the global deck cap (services.limits.MAX_PPTX_SLIDES = 50):
+# the old local 20 silently cut decks before the documented 50-limit
+# message could fire. Single source of truth, no silent truncation.
+_PPTX_MAX_SLIDES: int = MAX_PPTX_SLIDES
 # ponytail: reuse limits single source of truth — local aliases kept for
 # backward compat within this file
 _PPTX_MAX_BULLETS: int = PPTX_BUILD_MAX_BULLETS_PER_CHUNK
@@ -256,6 +259,17 @@ def build_presentation(spec_json: str) -> str:
     overflow_notes: List[str] = []
     try:
         prs: Presentation = Presentation()
+        # Branded deck theme (no new deps): 16:9 widescreen + readable
+        # default body font so decks stop looking stock-white. Every
+        # styling call below is best-effort — a theme failure must
+        # never fail the build.
+        try:
+            prs.slide_width = Inches(13.333)
+            prs.slide_height = Inches(7.5)
+            _theme_accent = RGBColor(0x63, 0x66, 0xF1)
+        except Exception:
+            logger.debug("pptx theme setup failed", exc_info=True)
+            _theme_accent = None
         built = 0
 
         def _new_content_slide(slide_title: str) -> Any:

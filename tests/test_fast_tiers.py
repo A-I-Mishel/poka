@@ -1,7 +1,8 @@
 """Mode-based answer tiers: fast mode uses FAST_TIERS only, deep uses all.
 
-Fast = Gemini 3.1 Flash Lite -> Nemotron Ultra -> Ling VL -> Ollama 8B
-(offline tail, LAST). All-fast-down fails honestly (no full-cascade
+Fast = Gemini 3.1 Flash Lite -> Nemotron Ultra -> Ling VL (Ollama 8B
+is deep-only offline tail: fast answers must never come from the
+weakest lane). All-fast-down fails honestly (no full-cascade
 escape hatch); deep mode keeps today's behavior exactly (full
 SYNTHESIS_TIERS + escape hatch, Ollama 8B at the tail as well).
 """
@@ -62,7 +63,8 @@ def test_fast_tiers_shape():
 
     names = [n for n, _ in FAST_TIERS]
     assert names == ["Gemini 3.1 Flash Lite", "OpenRouter Nemotron Ultra",
-                      "OpenRouter Ling VL", "Ollama 8B"]
+                      "OpenRouter Ling VL"]
+    assert "Ollama 8B" not in names  # deep-only offline tail
     assert set(names) < {n for n, _ in SYNTHESIS_TIERS}
 
 

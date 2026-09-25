@@ -104,9 +104,8 @@ def test_concept_format_in_prompt_and_suffix():
     from agent.prompts import SYSTEM_PROMPT
     from backend.chatflow import TEACHING_SUFFIX
 
-    for token in ("## Concept:", "**Definition**", "**Simple intuition**",
-                  "**How it works**", "**Why it matters**", "**Example**",
-                  "**Exam importance**", "**Exam trap**", "**Recall**", "**Source**"):
+    for token in ("## Concept:", "Imagine:", "\"Here:\"",
+                  "memory hook", "**Recall**", "**Source:** [slide N]"):
         assert token in SYSTEM_PROMPT
         assert token in TEACHING_SUFFIX
     assert "wait for the learner" in SYSTEM_PROMPT.lower()
@@ -121,14 +120,11 @@ def test_texture_sentences_verbatim_in_both_prompts():
     from backend.chatflow import TEACHING_SUFFIX
 
     example_sentence = (
-        "Never reuse the same conceptual example domain in consecutive turns. "
-        "Rotate across genuinely different domains such as social networks → "
-        "roads → circuits → food webs → databases, rather than merely changing "
-        "names or surface details."
+        "rotate analogy domains across turns (friends → roads → maps → "
+        "circuits) without repeating the same one twice in a row."
     )
     depth_sentence = (
-        "omit any section that adds no meaningful information — do not "
-        "artificially fill the canonical structure"
+        "never pad to fill a template"
     )
     recall_sentence = "never ask the same recall type twice consecutively"
     for sentence in (example_sentence, depth_sentence, recall_sentence):
@@ -186,8 +182,8 @@ def test_teaching_picks_one_file_window(tmp_path, monkeypatch):
     # may name both files with counts, but must not leak L2 slide content).
     assert "Lecture_01" in send
     assert "L2S1" not in send
-    assert "L1S1" in send and "L1S3" in send
-    assert "L1S4" not in send  # window is 3 slides
+    assert "L1S1" in send
+    assert "L1S2" not in send  # window is 1 slide
     assert "Teaching mode" in send
     assert "Verified content" in send
 
@@ -201,11 +197,11 @@ def test_next_advances_window(tmp_path, monkeypatch):
     hist = [
         {"role": "user", "content": "teach me", "attachments": [
             {"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]},
-        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-3\nbla"},
+        {"role": "assistant", "content": "📘 FILE: Lecture_01.pptx\nSlides: 1-1\nbla"},
     ]
     send, _, _ = _apply_teaching_session(ctx, "Next", hist, [], [], "Next")
-    assert "L1S4" in send and "L1S5" in send
-    assert "L1S1" not in send
+    assert "L1S2" in send
+    assert "L1S1" not in send and "L1S3" not in send
 
 
 def test_exhausted_file_advances(tmp_path, monkeypatch):
@@ -357,7 +353,7 @@ def test_last_window_section_review(tmp_path, monkeypatch):
     from backend.chatflow import _apply_teaching_session
 
     ctx = _ctx(tmp_path, monkeypatch, "teach-review")
-    b1 = _pptx_bytes([["Graph vertex edge"], ["Walk repeats"]])
+    b1 = _pptx_bytes([["Graph vertex edge"]])
     m1 = ctx.file_store.save_upload(b1, "Lecture_01.pptx")
     atts = [{"id": m1.id, "kind": "document", "name": "Lecture_01.pptx"}]
     send, _, _ = _apply_teaching_session(ctx, "teach me slides", [], atts, [], "teach me slides")
@@ -727,7 +723,7 @@ def test_scope_fence_in_session_output(tmp_path, monkeypatch):
     send, _, clarify = _apply_teaching_session(
         ctx, "teach me slides", [], atts, [], "teach me slides")
     assert clarify is None
-    assert "Scope fence" in send and "ONLY slides 1-3" in send
+    assert "Scope fence" in send and "ONLY slides 1-1" in send
 
 
 def _picture_deck_bytes():

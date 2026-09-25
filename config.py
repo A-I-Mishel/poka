@@ -641,11 +641,15 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
 # visible answer tier. When every fast lane is down, fast mode fails
 # honestly (no silent fallback to the full cascade: that would defeat
 # the quota savings this table exists for).
+# NOTE (Oct 2026): Ollama 8B stays in SYNTHESIS_TIERS (deep-mode offline
+# tail) but is out of FAST_TIERS. Fast answers must never come from the
+# weakest lane: a robotic low-quality answer with a fallback footer is
+# worse than an honest all-fast-lanes error, and it costs an extra
+# synthesis + reflect + repair call set plus a 120s tail latency.
 FAST_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.1 Flash Lite", get_tier_gemini31_lite_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
-    ("Ollama 8B", get_tier_ollama_llm),
 ]
 CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),

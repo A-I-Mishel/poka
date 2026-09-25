@@ -46,6 +46,17 @@ def _strip_inline(text: str) -> str:
     return text.replace("`", "")
 
 
+def _inline_html(text: str) -> str:
+    """Render **bold**/*italic*/`code` as HTML (Word-compatible output).
+
+    Call on ALREADY-escaped text: markers contain no HTML specials so
+    they survive escaping, and user input can never inject tags.
+    """
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"\*([^*\n]+?)\*", r"<i>\1</i>", text)
+    return re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+
+
 def _parse_blocks(markdown_text: str) -> List[Tuple[str, Any]]:
     """Parse lightweight markdown into (kind, payload) blocks.
 
@@ -154,7 +165,12 @@ _PDF_WINANSI_MAP = {
     "\u2014": "--", "\u2013": "-", "\u2018": "'",
     "\u2019": "'", "\u201c": '"', "\u201d": '"',
     "\u2022": "-", "\u2026": "...", "\u00a0": " ",
-    "\u2192": "->", "\u00d7": "x", "\u2713": "v",
+    "\u2192": "->", "\u2190": "<-", "\u21d2": "=>",
+    "\u00d7": "x", "\u00f7": "/", "\u2713": "v",
+    "\u2264": "<=", "\u2265": ">=", "\u2260": "!=",
+    "\u03b1": "alpha", "\u03b2": "beta", "\u03c0": "pi",
+    "\u03b4": "delta", "\u03bb": "lambda", "\u03a3": "Sigma",
+    "\u2211": "sum", "\u221e": "inf", "\u00b0": "deg",
 }
 
 _PDF_PAGE_W = 595.0
@@ -423,21 +439,21 @@ def _blocks_to_word_html(title: str, blocks: List[Tuple[str, Any]]) -> str:
             parts.append('<br clear="all" style="page-break-before:always">')
         elif kind in ("h1", "h2", "h3"):
             tag = {"h1": "h2", "h2": "h2", "h3": "h3"}[kind]
-            parts.append(f"<{tag}>{esc(_strip_inline(str(payload))[:500])}</{tag}>")
+            parts.append(f"<{tag}>{_inline_html(esc(str(payload))[:500])}</{tag}>")
         elif kind == "para":
-            parts.append(f"<p>{esc(_strip_inline(str(payload))[:3000])}</p>")
+            parts.append(f"<p>{_inline_html(esc(str(payload))[:3000])}</p>")
         elif kind == "bullet":
             parts.append("<ul>")
             for item in payload[:50]:
-                parts.append(f"<li>{esc(_strip_inline(str(item))[:1000])}</li>")
+                parts.append(f"<li>{_inline_html(esc(str(item))[:1000])}</li>")
             parts.append("</ul>")
         elif kind == "numbered":
             parts.append("<ol>")
             for item in payload[:50]:
-                parts.append(f"<li>{esc(_strip_inline(str(item))[:1000])}</li>")
+                parts.append(f"<li>{_inline_html(esc(str(item))[:1000])}</li>")
             parts.append("</ol>")
         elif kind == "quote":
-            parts.append(f"<blockquote><p><i>{esc(_strip_inline(str(payload))[:2000])}</i></p></blockquote>")
+            parts.append(f"<blockquote><p><i>{_inline_html(esc(str(payload))[:2000])}</i></p></blockquote>")
         elif kind == "code":
             parts.append(f"<pre>{esc(str(payload)[:4000])}</pre>")
         elif kind == "table":

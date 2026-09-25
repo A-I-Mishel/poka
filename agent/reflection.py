@@ -44,6 +44,14 @@ def should_reflect(
     """Decide whether self-critique is worth an extra model call."""
     if not REFLECTION_ENABLED:
         return False
+    # Teaching turns skip reflection: the deterministic validator +
+    # cross-tier repair already guards fidelity, so a critique call
+    # would only burn quota and sand the human voice back to template.
+    try:
+        if "[Teaching mode:" in str(user_input or ""):
+            return False
+    except Exception:  # noqa: S110 -- best-effort marker scan, fail open
+        pass
     if not deep_mode:
         # Fast mode: substantial creative/research drafts earn one
         # cheap-tier critique (runs on CHEAP_TIERS, never the answer tier).

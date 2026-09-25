@@ -979,10 +979,22 @@ def answer_with_fallback(
                     task_type=task_type,
                 )
             else:
+                try:
+                    _is_teaching_turn = "[Teaching mode:" in str(user_input or "")
+                except Exception:
+                    _is_teaching_turn = False
+                # Teaching turns carry their verified window inline
+                # (no-refetch): 2 rounds are plenty; the default 4 would
+                # only fund runaway re-fetches and extra synthesis calls.
+                _tooled_rounds = (
+                    min(MAX_DEEP_TOOL_ROUNDS if deep_mode else MAX_TOOL_ROUNDS, 2)
+                    if _is_teaching_turn
+                    else (MAX_DEEP_TOOL_ROUNDS if deep_mode else MAX_TOOL_ROUNDS)
+                )
                 draft = run_tool_loop(
                     llm, user_input, langchain_history, combined_notes,
                     relevant_context, force_web_search,
-                    MAX_DEEP_TOOL_ROUNDS if deep_mode else MAX_TOOL_ROUNDS,
+                    _tooled_rounds,
                     budget, used_tools, used_sources,
                     project_context, provider, tooled_tiers, live, on_reset,
                     final_tier, on_progress, request_id, cancel,
@@ -1011,9 +1023,15 @@ def answer_with_fallback(
                     reflected_box[:] = [True]
             elif not final_tier:
                 final_tier[:] = [tier_name]
-            if task_type == "research":
+            try:
+                _skip_verify = "[Teaching mode:" in str(user_input or "")
+            except Exception:
+                _skip_verify = False
+            if task_type == "research" and not _skip_verify:
                 # Grounded-link check: one cheap call only when the answer
-                # links pages absent from retrieved sources.
+                # links pages absent from retrieved sources. Teaching
+                # turns are slides-only by construction (never the web),
+                # so the check would only burn quota.
                 draft = _verify_citations(
                     draft, used_sources, budget,
                     cheap_tiers=(CHEAP_TIERS if tiers is None else None))

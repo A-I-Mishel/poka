@@ -81,11 +81,12 @@ def test_tail_is_last():
     synth = [name for name, _ in config.SYNTHESIS_TIERS]
     fast = [name for name, _ in config.FAST_TIERS]
     cheap = [name for name, _ in config.CHEAP_TIERS]
-    # Single local slot sits LAST in both tables: cloud quality first,
-    # offline fallback only. Fast stays a subset of synthesis
-    # (architectural invariant, see test_fast_tiers).
+    # Single local slot sits LAST in synthesis (deep offline tail):
+    # cloud quality first, offline fallback only. Fast stays a subset
+    # of synthesis (architectural invariant, see test_fast_tiers) but
+    # excludes the weakest lane: fast answers must never be robotic.
     assert synth[-1] == "Ollama 8B"
-    assert fast[-1] == "Ollama 8B"
+    assert "Ollama 8B" not in fast
     assert "Ollama 8B" not in cheap
     assert "Ollama 4B" not in synth
     assert "Ollama 4B" not in fast

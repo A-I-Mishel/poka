@@ -18,7 +18,7 @@ from backend.attachments import (_escape_hint)
 
 logger = logging.getLogger(__name__)
 
-TEACHING_WINDOW_SLIDES: int = 3
+TEACHING_WINDOW_SLIDES: int = 1
 
 
 TEACHING_WINDOW_CHARS: int = 6000
@@ -27,8 +27,9 @@ TEACHING_WINDOW_CHARS: int = 6000
 # A window whose bodies total fewer chars than this is title-only
 # (diagram/scanned pages: titles extract, bodies live in images).
 # The hint then directs the model to read_pdf_page first instead of
-# refusing outright.
-TEACHING_THIN_WINDOW_CHARS: int = 200
+# refusing outright. Calibrated for 1-slide windows: a real content
+# slide carries well over 80 chars; anything below is titles only.
+TEACHING_THIN_WINDOW_CHARS: int = 80
 
 
 TEACHING_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
@@ -125,48 +126,45 @@ _TEACHING_DEEP_SIGNALS = ("in detail", "detailed", "deep dive", "thoroughly",
 
 
 TEACHING_SUFFIX = (
-    "\n\n[Teaching mode: exam-focused, concept-first. Teach ONLY the verified "
-    "slides above from ONE file, in order, keeping the turn under ~300 words: "
-    "teach concepts in order until the budget is spent, then finish the current "
-    "concept and STOP and wait for the learner's recall answer. Never re-teach "
+    "\n\n[Teaching mode: warm human tutor, exam-focused. Teach ONLY the verified "
+    "slide above from ONE file — ONE slide per turn, keeping the turn under "
+    "~300 words, then STOP and wait for the learner. Never re-teach "
     "a concept already taught earlier in this session. Pure-admin slides "
     "(course code/instructor/schedule/grading/contacts) use the compact form: "
-    "\"### Administrative Information\" + bullets + \"**Source:** [slide N]\" — "
+    "\"### Administrative Information\" + 2-4 short bullets + \"**Source:** [slide N]\" — "
     "never fake Definition/Example/Recall blocks for admin, never recall "
-    "questions about admin trivia. Group slides that explain one concept. "
+    "questions about admin trivia, and close admin turns with one plain line "
+    "like \"Nothing technical here. Let's move on.\" "
     "Format: source header as \"📘 FILE: <name>\" newline \"Slides: X-Y\"; then "
-    "for EACH concept \"## Concept: <name>\" with **Definition** / "
-    "**Simple intuition** / **How it works** / **Why it matters** / **Example** / "
-    "**Exam importance** (MUST KNOW/HIGH/MEDIUM/LOW) / **Exam trap** (or N/A) / "
-    "**Source** [slide N]; omit a section only when it adds no value, never "
-    "invent filler. Numerics add Given -> Formula -> Solve -> Answer. "
+    "ONE \"## Concept: <name> (Slide N)\" block written like a friendly teacher, "
+    "not a form: 2-4 short plain-word lines saying what the slide means, then "
+    "an \"Imagine:\" line with a tiny ASCII sketch in a code block, then a "
+    "\"Here:\" bullet mapping (each symbol = what it is), then EXACTLY ONE "
+    "memory hook chosen to fit — \"Remember this\", \"⭐ MUST MEMORIZE\", "
+    "\"Easy way to remember\", or \"Key difference\" — never all of them and "
+    "never an \"Exam importance / Exam trap\" pair on every turn. Numerics use "
+    "worked steps: Given -> Solve step-by-step -> Therefore (answer). "
     "Distinguish source from support: \"Your slide states X. Supporting "
-    "explanation: ...\". Start with the source header \"📘 FILE: <name>\" "
-    "newline \"Slides: X-Y\". End with EXACTLY ONE terminal \"**Recall**\" "
-    "section (one question — never its answer or answer key), then one "
-    "navigation line \"Reply **continue** for "
-    "the next concept.\", and STOP — never append Say Next, Say Got it, "
-    "Next Steps, another question, or further teaching. An explicit \"in "
-    "detail\" / \"teach everything\" request keeps the full long form. "
-    "Never invent test dates, deadlines, class schedules, or assignment "
-    "details; state only logistics the slides actually contain. "
-    "Never invent "
-    "slides beyond verified content; if truncated or empty, say so and ask "
-    "to re-upload. Vary depth by importance: MUST KNOW/HIGH get full "
-    "treatment; MEDIUM gets compact treatment (merge How+Why into ≤3 lines "
-    "when both are useful; omit any section that adds no meaningful "
-    "information — do not artificially fill the canonical structure); LOW "
-    "gets 1-2 lines and is excluded from recall weight. Never reuse the "
-    "same conceptual example domain in consecutive turns. Rotate across "
-    "genuinely different domains such as social networks → roads → "
-    "circuits → food webs → databases, rather than merely changing names "
-    "or surface details. Prefer the slide's own example first; label "
-    "supporting analogies as supporting. Rotate recall types across turns "
+    "explanation: ...\". Cite the slide as \"**Source:** [slide N]\" (ground ONLY "
+    "in the verified slide above — never cite the web, never invent links. "
+    "Never invent test dates, deadlines, class schedules, or slides beyond "
+    "verified content; if truncated "
+    "or empty, say so and ask to re-upload). Vary depth by importance: MUST KNOW "
+    "ideas get the full Imagine+Here+hook treatment; small ideas get 2-3 lines "
+    "and are excluded from recall weight — never pad to fill a template. Prefer "
+    "the slide's own example first; "
+    "label supporting analogies as supporting; rotate analogy domains across "
+    "turns (friends → roads → maps → circuits) without repeating the same one "
+    "twice in a row. Rotate recall types across turns "
     "(define → apply → compare → why → mistake); never ask the same recall "
     "type twice consecutively. Open with one short continuity sentence "
-    "connecting the previous turn to the current one. Sections may reorder "
-    "or merge when conceptually useful; canonical headings and Source "
-    "attachment are always preserved.]"
+    "connecting the previous turn to the current one. Start with the source header "
+    "\"📘 FILE: <name>\" newline \"Slides: X-Y\". End concept turns with EXACTLY ONE "
+    "terminal \"**Recall**\" section (one question — never its answer or answer key), "
+    "then one navigation line \"Reply **continue** for "
+    "the next concept.\", and STOP — never append Say Next, Say Got it, "
+    "Next Steps, another question, or further teaching. An explicit \"in "
+    "detail\" / \"teach everything\" request keeps the full long form.]"
 )
 
 
@@ -1141,8 +1139,9 @@ def _repair_teaching_draft(
                 "satisfy every listed rule. Keep all facts, numbers, and slide "
                 "citations identical. Never add content about other slides. "
                 "Use this canonical shape: source header (\"📘 FILE: <name>\" "
-                "newline \"Slides: X-Y\"), then \"## Concept:\" blocks each "
-                "ending with a Source line, then EXACTLY ONE terminal "
+                "newline \"Slides: X-Y\"), then \"## Concept:\" blocks in a "
+                "human voice (short lines, Imagine + ASCII sketch, Here "
+                "mapping, one memory hook, Source line), then EXACTLY ONE terminal "
                 "\"**Recall**\" section with one question and STOP — no Say "
                 "Next, Say Got it, or Next Steps lines, no teaching after "
                 "Recall. Reply with the full corrected lesson only.")},
