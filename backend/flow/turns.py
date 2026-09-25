@@ -113,6 +113,17 @@ def _teaching_meta_for_turn(send_text: str, output: str) -> Optional[Dict[str, A
             _cursor = max(0, int(end))
         except Exception:
             _cursor = 0
+        # Quoted lesson, not a teaching turn: this answer merely mentions
+        # a header (transcripts, exports) while the request took the
+        # normal path. Stamp inactive so neither the session cursor nor
+        # the UI hint treats it as teaching.
+        try:
+            _st = str(send_text or "")
+            _is_teaching_turn = ("[Teaching mode:" in _st or "EXAM MODE" in _st)
+        except Exception:
+            _is_teaching_turn = False
+        if not _is_teaching_turn:
+            return {"active": False}
         return {
             "active": True,
             "file": str(name or "")[:120],
@@ -627,6 +638,24 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             bool(deep_mode), bool(force_search))
         if tier == "identity":
             fallback = None
+        # Fabricated-file backstop: a fake truncated-base64 payload with
+        # decode instructions and a phantom attachment is never persisted
+        # (or taught/repaired further) — serve the honest Export pointer.
+        try:
+            from backend.flow.stages import (
+                _FAKE_FILE_FALLBACK as _fake_fallback,
+            )
+            from backend.flow.stages import _is_fabricated_file as _is_fake
+        except Exception:
+            _is_fake = None  # type: ignore[assignment]
+            _fake_fallback = ""
+        try:
+            if (_is_fake is not None
+                    and _is_fake(str(assistant_msg.get("content", "") or ""))):
+                assistant_msg = dict(assistant_msg)
+                assistant_msg["content"] = _fake_fallback
+        except Exception:
+            logger.debug("fabricated-file backstop failed", exc_info=True)
     except TurnCancelled:
         # Client went away: nobody left to read a marker. Re-raise
         # untouched (never persisted, never cooled, never salvaged).
@@ -712,6 +741,16 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             })
     except Exception:
         logger.debug("repeat-cache store failed", exc_info=True)
+    # Quoted-lesson stamp: output carries a FILE header but this turn
+    # was not teaching (no flag above) — mark inactive so the UI
+    # continuation hint renders only on genuine teaching turns.
+    try:
+        if ("teaching" not in assistant_msg
+                and "📘 FILE:" in str(assistant_msg.get("content", "") or "")):
+            assistant_msg = dict(assistant_msg)
+            assistant_msg["teaching"] = {"active": False}
+    except Exception:
+        logger.debug("teaching inactive stamp failed", exc_info=True)
     _append_turn_atomic(store, user_msg, assistant_msg)
     return {
         "message": assistant_msg,

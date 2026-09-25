@@ -221,10 +221,16 @@ function msgEl(m, idx) {
       }
       body.appendChild(fb);
     }
-    /* Teaching turns (source header present): hint the continuation cue.
-     * textContent-only like the notes above; model output stays cue-free. */
+    /* Teaching turns only: hint the continuation cue. Gated on the
+     * persisted teaching flag (not substring match) so messages that
+     * merely quote a lesson (transcripts, exports) never carry it.
+     * Pre-flag history falls back to the header substring. */
     try {
-      if (String((m && m.content) || "").indexOf("\uD83D\uDCD8 FILE:") !== -1) {
+      var _isTeachTurn = !!(m && m.teaching && m.teaching.active);
+      if (!_isTeachTurn && m && !("teaching" in m)) {
+        _isTeachTurn = String(m.content || "").indexOf("\uD83D\uDCD8 FILE:") !== -1;
+      }
+      if (_isTeachTurn) {
         var th = document.createElement("div");
         th.className = "fb-note";
         th.textContent = "Say Next (or ok) to continue to the next slide.";

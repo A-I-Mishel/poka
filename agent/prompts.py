@@ -33,7 +33,13 @@ checks (no imports). Never invent file contents, test results, or tool output.
 
 Use tools when they materially improve accuracy or complete the task. When the
 user names a file format (PDF, docx, doc, markdown), call exactly that creation
-tool — never substitute another format. Use a
+tool — never substitute another format. When the user asks for a file
+deliverable no available tool can build (such as exporting this whole
+conversation — the chat's own Export PDF download covers that, not the
+model), say so in one line and point at the real affordance instead.
+Never paste base64 blobs, "TRUNCATED FOR BREVITY" placeholders, or
+decode-yourself instructions as a file, and never reference an
+attachment that was never created. Use a
 document or attachment when the current user request explicitly refers to it
 (such as a filename, "this image", "the PDF", "slide 3", "page 5") or the
 current conversational context clearly identifies it as the subject; never
@@ -496,7 +502,7 @@ _PASS_LINE_RE = re.compile(r"^[ \t]*\[PASS\].*$", re.IGNORECASE)
 
 
 def _contains_critique_scaffold(text: str) -> bool:
-    """True when a critique+improved heading pair exists in order."""
+    """True when a critique+improved heading pair exists in either order."""
     try:
         lines = str(text or "").splitlines()
         crit = next(
@@ -504,10 +510,14 @@ def _contains_critique_scaffold(text: str) -> bool:
              if any(rx.match(line) for rx in _CRITIQUE_RES)),
             None,
         )
-        if crit is None:
+        improved = next(
+            (i for i, line in enumerate(lines)
+             if any(rx.match(line) for rx in _IMPROVED_RES)),
+            None,
+        )
+        if crit is None or improved is None:
             return False
-        return any(rx.match(line) for line in lines[crit + 1:]
-                   for rx in _IMPROVED_RES)
+        return crit != improved
     except Exception:
         return False
 
@@ -541,7 +551,17 @@ def _strip_critique_scaffold(text: str) -> str:
             None,
         )
         if improved is None:
-            return text
+            # Inverted order (rewrite first, critique table second):
+            # only when a rewrite heading actually leads the text —
+            # a lone critique with no rewrite stays untouched.
+            leads = any(
+                any(rx.match(line) for rx in _IMPROVED_RES)
+                for line in lines[:crit]
+            )
+            if not leads:
+                return text
+            return _strip_inverted_critique(text, lines, crit)
+        same_line = ""
         same_line = ""
         colon = lines[improved].find(":")
         if colon >= 0:
@@ -558,6 +578,72 @@ def _strip_critique_scaffold(text: str) -> str:
         return result if result else text
     except Exception:
         logger.debug("critique scaffold strip failed", exc_info=True)
+        return text
+
+
+_CONCLUSION_RE = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*{0,2}[ \t]*)?conclusion\b",
+    re.IGNORECASE,
+)
+
+_TABLE_LINE_RE = re.compile(r"^[ \t]*\|.*\|\s*$")
+_SEPARATOR_LINE_RE = re.compile(r"^[ \t]*[-*_]{3,}[ \t]*$")
+
+
+def _strip_inverted_critique(text: str, lines: List[str], crit: int) -> str:
+    """Remove a critique block embedded after the rewrite (never raises).
+
+    Weak tiers sometimes narrate the rewrite first ("Improved response -
+    ...") and dump the self-critique table after it. The table, its
+    verdict paragraph ("Conclusion: ..."), and the improved-framing
+    heading are critic voice; everything else is kept so the honest
+    answer attempt survives for the fabrication rules to judge.
+    With no salvageable text, the original is returned unchanged.
+    """
+    try:
+        head = lines[:crit]
+        # Drop a leading improved-framing heading (keep same-line content
+        # after ":", mirroring the forward path).
+        kept_head: List[str] = []
+        for line in head:
+            if any(rx.match(line) for rx in _IMPROVED_RES):
+                colon = line.find(":")
+                same = line[colon + 1:].strip(" *\t") if colon >= 0 else ""
+                if same:
+                    kept_head.append(same)
+                continue
+            kept_head.append(line)
+        # Skip the critic block: heading, table/separator lines, then an
+        # optional Conclusion verdict paragraph. Stop at the first line
+        # that reads as resumed answer content.
+        i = crit + 1
+        while i < len(lines) and (
+            not lines[i].strip()
+            or _SEPARATOR_LINE_RE.match(lines[i])
+            or _TABLE_LINE_RE.match(lines[i])
+        ):
+            i += 1
+        if i < len(lines) and _CONCLUSION_RE.match(lines[i]):
+            i += 1
+            while i < len(lines) and lines[i].strip():
+                i += 1
+        while i < len(lines) and (
+            not lines[i].strip()
+            or _SEPARATOR_LINE_RE.match(lines[i])
+        ):
+            i += 1
+        tail = "\n".join(lines[i:]).strip()
+        tail = "\n".join(
+            line for line in tail.splitlines()
+            if not _PASS_LINE_RE.match(line)
+        ).strip()
+        result = "\n\n".join(
+            part for part in ("\n".join(kept_head).strip(), tail)
+            if part
+        ).strip()
+        return result if result else text
+    except Exception:
+        logger.debug("inverted critique strip failed", exc_info=True)
         return text
 
 

@@ -5,6 +5,8 @@ backend.flow.turns, the teaching stage in backend.flow.teaching).
 """
 
 from typing import (Any, Dict, List, Optional, Tuple)
+
+import re
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from services.obs import event as obs_event
 from services.ratelimit import get_rate_limiter
@@ -117,6 +119,39 @@ def _greetings_enabled() -> bool:
             "0", "false", "no", "off")
     except Exception:
         return True
+
+
+# Fabricated-file backstop: a weak tier asked for a file deliverable
+# may paste a fake truncated base64 blob with decode-it-yourself
+# instructions and a phantom-attachment reference instead of using a
+# file tool. All three markers must match (conjunction), and a real
+# download ID exempts the turn — ordinary code answers containing
+# base64 never trip it.
+_FAKE_FILE_RES = (
+    re.compile(r"truncated for brevity", re.IGNORECASE),
+    re.compile(r"base64(?:\s|$|[.\-])|base64\s*-d|b64decode",
+               re.IGNORECASE),
+    re.compile(r"attach", re.IGNORECASE),
+)
+_REAL_DOWNLOAD_RE = re.compile(r"\(file ID:\s*[0-9a-f]{8,}\)", re.IGNORECASE)
+
+_FAKE_FILE_FALLBACK = (
+    "I can't assemble that file here — use the Export PDF download "
+    "in this chat for the full transcript."
+)
+
+
+def _is_fabricated_file(text: Any) -> bool:
+    """True for fake-file payloads (never raises)."""
+    try:
+        body = str(text or "")
+        if not body or len(body) < 200:
+            return False
+        if _REAL_DOWNLOAD_RE.search(body):
+            return False
+        return all(rx.search(body) for rx in _FAKE_FILE_RES)
+    except Exception:
+        return False
 
 
 # Exact-repeat cache (opt-in): identical questions answered twice in a

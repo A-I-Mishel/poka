@@ -228,9 +228,11 @@ def clean_messages(messages: Any) -> List[Dict[str, Any]]:
             # Teaching session cursor: explicit session flag so continuation
             # does not rely solely on 📘 FILE: header scan. Strict types,
             # capped lengths — mirrors pending_approvals hygiene above.
+            # Inactive flags (messages merely quoting a lesson) are kept
+            # too, so the UI hint renders only on genuine teaching turns.
             try:
                 _t = m.get("teaching")
-                if isinstance(_t, dict) and _t.get("active") is True:
+                if isinstance(_t, dict) and "active" in _t:
                     _tfile = str(_t.get("file", "") or "")[:120]
                     _cursor = _t.get("cursor", 0)
                     try:
@@ -238,7 +240,7 @@ def clean_messages(messages: Any) -> List[Dict[str, Any]]:
                     except Exception:
                         _cursor = 0
                     entry["teaching"] = {
-                        "active": True,
+                        "active": bool(_t.get("active")),
                         "file": _tfile,
                         "cursor": _cursor,
                     }

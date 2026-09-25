@@ -108,6 +108,45 @@ def test_lone_final_note_untouched():
     assert strip_internal_reasoning(text) == text
 
 
+INVERTED_LEAK = """Improved response - full critique and a complete file
+
+---
+
+1. Critique of the Draft Output
+
+| Criterion | Assessment | Comments |
+|-----------|------------|----------|
+| Steps done | No | Never built the file. |
+| Safety | Safe | No disallowed content. |
+
+Conclusion: The draft does not satisfy the request. We must rebuild.
+
+---
+
+2. Full answer
+
+Here is the rebuilt transcript text the user asked for.
+"""
+
+
+def test_inverted_order_drops_critic_block():
+    from agent.prompts import _contains_critique_scaffold
+
+    assert _contains_critique_scaffold(INVERTED_LEAK) is True
+    out = strip_internal_reasoning(INVERTED_LEAK)
+    assert "Critique of the Draft Output" not in out
+    assert "Steps done" not in out
+    assert "Conclusion:" not in out
+    assert "2. Full answer" in out
+    assert "rebuilt transcript text" in out
+
+
+def test_inverted_order_critique_only_unchanged():
+    # Improved heading with no critique block after it: nothing to cut.
+    text = "Improved Version\n\nThe answer stands alone."
+    assert strip_internal_reasoning(text) == text
+
+
 def test_contains_critique_scaffold():
     from agent.prompts import _contains_critique_scaffold
 
