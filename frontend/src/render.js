@@ -584,6 +584,13 @@ function setActiveTier(tier, fromServer, reason) {
     setPref("model", tier);
     _lastFallbackKey = "";
   } else if (fromServer && tier) {
+    if (TIERS.indexOf(tier) < 0) {
+      /* Routing states (clarify/identity/vision-unavailable) are not
+         models: no model was attempted, so there is no preference to
+         adopt and no "unavailable" toast to show. Badge keeps the
+         saved model untouched. */
+      return;
+    }
     /* Header must show what actually answered (server truth), not the
        stale preference — e.g. preferred Gemma down, Groq answered, the
        badge must read Groq. The per-message "time · tier" label and

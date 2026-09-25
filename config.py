@@ -3,13 +3,14 @@
 Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
 same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
 (fresh per-model quota pools) -> Groq 120B (strong fallback, cheap-backup
-included) -> Cohere -> Nemotron 3 Ultra -> Qwen 3.8 27B
+included) -> Cohere -> Nemotron 3 Ultra
 -> Ling 3.0 Flash VL (vision-capable, emergency pool tail).
 
 RETIRED_LANES (Sep 2026, re-add pointers live inline where each lane
 was removed): GitHub Models + NVIDIA (dead); Groq Fast 20B / Mistral /
 OpenRouter Free Router (superseded by the local cheap tier); GLM 5.2
-(failed trial — upstream rate limits); TokenHarbor MiMo 2.6 Flash +
+(failed trial — upstream rate limits); Qwen 3.8 27B (trial ended —
+removed per user request); TokenHarbor MiMo 2.6 Flash +
 DeepSeek V4.1 Flash (trial ended); OpenCode Zen free lanes
 (MissingSessionID — free tier only works inside OpenCode; paid Zen
 models remain usable via https://opencode.ai/zen/v1 if billing is added).
@@ -88,20 +89,31 @@ COHERE_BASE_URL: str = "https://api.cohere.com/compatibility/v1"
 COHERE_MODEL: str = "command-a-03-2025"
 # OpenRouter via its OpenAI-compatible endpoint (same ChatOpenAI client).
 # Emergency pool: one curated strong lane (Nemotron 3 Ultra, user pick)
-# ahead of the trial lanes (Qwen 3.8 27B dense all-rounder, Ling 3.0
-# Flash VL vision-capable MoE) as the emergency pool tail. Other curated
-# free-model lanes (Gemma/Super/3.5/26B/Ling-Fin/Laguna) stay removed —
-# promos rotate. Free Router removed Sep 2026 (local tier takes the
-# fallback role); GLM 5.2 removed Sep 2026 (failed trial — rate-limited).
+# ahead of the trial lane (Ling 3.0 Flash VL vision-capable MoE) as the
+# emergency pool tail. Other curated free-model lanes (Gemma/Super/
+# 3.5/26B/Ling-Fin/Laguna) stay removed — promos rotate. Free Router
+# removed Sep 2026 (local tier takes the fallback role); GLM 5.2 removed
+# Sep 2026 (failed trial — rate-limited).
 # Trial lanes: keep while stable, delete on repeated bans/flakes — one
 # constant + its list entries each.
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
-OPENROUTER_QWEN_MODEL: str = "qwen/qwen3.8-27b:free"
 OPENROUTER_LING_VL_MODEL: str = "inclusionai/ling-3.0-flash-vl:free"
 # TokenHarbor lanes removed (trial ended): MiMo 2.6 Flash +
 # DeepSeek V4.1 Flash deleted along with their getters and table
 # entries. Re-add via https://tokenharbor.ai/v1 if the trial resumes.
+# Local Ollama tier (Oct 2026): whatever model the local Ollama daemon
+# serves via its OpenAI-compatible endpoint. Single slot, default
+# qwen3:8b (offline fallback tail of the synthesis tables).
+# Set OLLAMA_ENABLED=false to skip it on machines without Ollama.
+# No API key needed (dummy "ollama" is sent). Text-only by design (the
+# name matches no services.vision.py vision key, so vision lanes never
+# select it). Thinking stays ON via this client — Ollama's OpenAI
+# endpoint ignores think:false, and reasoning arrives in a separate
+# field, so answer content stays clean (plus strip_internal_reasoning
+# backup). Same ChatOpenAI client as Groq/Cohere: tool calling works.
+OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+OLLAMA_MODEL: str = "qwen3:8b"
 TEMPERATURE: float = 0.7
 
 # Client cache: clients hold only model config + credentials (no user
@@ -152,7 +164,7 @@ def _clear_client_cache() -> None:
         _CLIENT_CACHE.clear()
 
 
-def _get_secret(name: str) -> Optional[str]:
+def _get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Read a secret from env/.env.
 
     Thin wrapper over the central services.secrets seam (kept for
@@ -160,11 +172,12 @@ def _get_secret(name: str) -> Optional[str]:
 
     Args:
         name: Secret name, e.g. "GEMINI_API_KEY".
+        default: Value when the secret is set nowhere.
 
     Returns:
-        The secret value, or None if not set anywhere.
+        The secret value, or default if not set anywhere.
     """
-    return get_secret(name)
+    return get_secret(name, default)
 
 
 # OpenCode Zen free lanes removed Sep 2026: provider returns
@@ -453,13 +466,9 @@ def get_tier_openrouter_ultra_llm(temperature: float = TEMPERATURE) -> Optional[
     return _get_openrouter_llm("OpenRouter Nemotron Ultra", OPENROUTER_ULTRA_MODEL, temperature)
 
 
-def get_tier_openrouter_qwen_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
-    """OpenRouter trial (Sep 2026): Qwen 3.8 27B dense all-rounder (free tier)."""
-    return _get_openrouter_llm(
-        "OpenRouter Qwen 27B",
-        _model_override("OPENROUTER_QWEN_MODEL", OPENROUTER_QWEN_MODEL),
-        temperature,
-    )
+# Qwen 3.8 27B removed (trial ended, per user request). Re-add
+# get_tier_openrouter_qwen_llm + OPENROUTER_QWEN_MODEL
+# ("qwen/qwen3.8-27b:free") if the lane is ever needed again.
 
 
 # GLM 5.2 removed Sep 2026 (failed trial — persistent upstream rate
@@ -487,6 +496,66 @@ def get_tier_openrouter_ling_vl_llm(temperature: float = TEMPERATURE) -> Optiona
 # per-lane getters if the trial resumes.
 
 
+def _ollama_enabled() -> bool:
+    """False when the operator opts out (no Ollama on this machine)."""
+    try:
+        flag = _get_secret("OLLAMA_ENABLED", "true")
+    except Exception:
+        return True
+    return (flag or "true").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _get_ollama_llm(
+    tier: str, env_var: str, default: str, temperature: float
+) -> Optional[ChatOpenAI]:
+    """Build the local Ollama client (single-slot helper).
+
+    No key required (Ollama ignores auth; "ollama" is sent as a dummy).
+    Base URL via OLLAMA_BASE_URL, model via env_var/default. The daemon
+    being down is NOT an error here (returns a client anyway): the
+    first invoke fails fast (connection refused) and the cascade cools
+    the tier over to cloud — offline-safe by construction.
+    """
+    if not _ollama_enabled():
+        return None
+    try:
+        base_url = _model_override("OLLAMA_BASE_URL", OLLAMA_BASE_URL)
+        model = _model_override(env_var, default)
+        if not model.strip():
+            return None
+        return _cached_client(
+            tier,
+            temperature,
+            "ollama",
+            model,
+            lambda: ChatOpenAI(
+                model=model,
+                api_key="ollama",
+                base_url=base_url,
+                temperature=temperature,
+                request_timeout=MODEL_TIMEOUT_SECONDS,
+                max_tokens=MODEL_MAX_TOKENS,
+                # Fail fast into the cascade (see _make_gemini).
+                max_retries=0,
+            ),
+        )
+    except Exception as e:
+        _tier_init_failed(tier, e)
+        return None
+
+
+def get_tier_ollama_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """Local Ollama slot: qwen3:8b (offline fallback tail of synthesis).
+
+    No key required (Ollama ignores auth; "ollama" is sent as a dummy).
+    Base URL via OLLAMA_BASE_URL, model via OLLAMA_MODEL. The daemon
+    being down is NOT an error here (returns a client anyway): the
+    first invoke fails fast (connection refused) and the cascade cools
+    the tier over to cloud — offline-safe by construction.
+    """
+    return _get_ollama_llm("Ollama 8B", "OLLAMA_MODEL", OLLAMA_MODEL, temperature)
+
+
 _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Gemini 3.8 Flash": get_tier_gemini38_llm,
     "Gemini 3.7 Flash": get_tier_gemini37_llm,
@@ -497,8 +566,10 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Groq": get_tier_groq_llm,
     "Cohere": get_tier_cohere_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
-    "OpenRouter Qwen 27B": get_tier_openrouter_qwen_llm,
     "OpenRouter Ling VL": get_tier_openrouter_ling_vl_llm,
+    "Ollama 8B": get_tier_ollama_llm,
+    # Legacy alias: single "Ollama" name resolves to the same slot.
+    "Ollama": get_tier_ollama_llm,
 }
 
 
@@ -529,8 +600,8 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
+    ("Ollama 8B", get_tier_ollama_llm),
 ]
 
 
@@ -542,7 +613,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
 # remains the escape hatch when synthesis is down. Tables hold (name,
 # getter) pairs like TIER_GETTERS.
 # Gemini leads; Groq 120B is the strong fallback; Cohere -> Nemotron
-# Ultra -> Qwen 27B -> Ling VL is the emergency pool. Groq's
+# Ultra -> Ling VL is the emergency pool. Groq's
 # free pool absorbs cheap traffic; Gemini's per-model pool is spent on
 # quality final answers + vision.
 # Weak/strict tier sets removed Sep 2026 with their only members (Groq
@@ -559,8 +630,8 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
+    ("Ollama 8B", get_tier_ollama_llm),
 ]
 # Fast-mode answer table (mode-based routing): only these lanes may
 # produce the visible answer when deep_mode is off. Order matches the
@@ -573,8 +644,8 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
 FAST_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Gemini 3.1 Flash Lite", get_tier_gemini31_lite_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
-    ("OpenRouter Qwen 27B", get_tier_openrouter_qwen_llm),
     ("OpenRouter Ling VL", get_tier_openrouter_ling_vl_llm),
+    ("Ollama 8B", get_tier_ollama_llm),
 ]
 CHEAP_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),

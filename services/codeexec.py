@@ -426,9 +426,9 @@ def _exec_in_child(source: str) -> Dict[str, Any]:
     # exec, so pin the repo root via PYTHONPATH explicitly.
     try:
         _repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-        _child_env = dict(_os.environ)
-        _existing_py = _child_env.get("PYTHONPATH", "")
-        _child_env["PYTHONPATH"] = _repo_root + (_os.pathsep + _existing_py if _existing_py else "")
+        from services.env import sandbox_child_env as _sandbox_child_env
+
+        _child_env = _sandbox_child_env(_repo_root)
     except Exception:
         _child_env = None
     try:

@@ -159,6 +159,11 @@ MODEL_MAX_TOKENS: int = 1800
 MODEL_MAX_TOKENS_DEEP: int = 3000
 # ponytail: OpenRouter free lanes queue longer — 20s first-token vs 12s for Groq/Gemini
 FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS: float = 20.0
+# ponytail: local Ollama needs much longer — a cold model (or a VRAM
+# swap between two local models on one GPU) loads multi-GB weights
+# plus thinking chains before the first token; 12s false-timed-out
+# every cold start and cooled a healthy tier.
+FIRST_TOKEN_TIMEOUT_OLLAMA_SECONDS: float = 120.0
 
 # Request budgets (per single user message)
 MAX_LLM_CALLS_PER_REQUEST: int = 12

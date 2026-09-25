@@ -31,7 +31,7 @@ from typing import Any, Callable, Iterator, List, Optional
 from langchain_core.language_models.base import BaseLanguageModel
 
 from agent.prompts import _as_text, sanitize_messages_for_provider
-from services.limits import FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS, FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
+from services.limits import FIRST_TOKEN_TIMEOUT_OLLAMA_SECONDS, FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS, FIRST_TOKEN_TIMEOUT_SECONDS, MODEL_TIMEOUT_SECONDS
 from services.obs import event as obs_event
 
 from agent.budget import BudgetExhausted, RequestBudget
@@ -192,7 +192,13 @@ def _first_token_timeout() -> float:
 
 
 def _first_token_timeout_for_tier(tier: Optional[str]) -> float:
-    """Per-tier first-token deadline: OpenRouter free lanes need longer queue."""
+    """Per-tier first-token deadline.
+
+    OpenRouter free lanes queue longer; local Ollama needs longer still
+    (cold model load / VRAM swap of multi-GB weights + thinking chains
+    before the first token). Env overrides: PLUTO_FIRST_TOKEN_TIMEOUT,
+    PLUTO_FIRST_TOKEN_TIMEOUT_OPENROUTER, PLUTO_FIRST_TOKEN_TIMEOUT_OLLAMA.
+    """
     if tier and str(tier).lower().startswith("openrouter"):
         try:
             return max(
@@ -206,6 +212,19 @@ def _first_token_timeout_for_tier(tier: Optional[str]) -> float:
             )
         except (TypeError, ValueError):
             return FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS
+    if tier and str(tier).lower().startswith("ollama"):
+        try:
+            return max(
+                0.0,
+                float(
+                    os.environ.get(
+                        "PLUTO_FIRST_TOKEN_TIMEOUT_OLLAMA",
+                        str(FIRST_TOKEN_TIMEOUT_OLLAMA_SECONDS),
+                    )
+                ),
+            )
+        except (TypeError, ValueError):
+            return FIRST_TOKEN_TIMEOUT_OLLAMA_SECONDS
     return _first_token_timeout()
 
 

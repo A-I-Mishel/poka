@@ -69,3 +69,19 @@ def safe_env() -> Dict[str, str]:
         if any(h in k.lower() for h in _SECRET_HINTS):
             env.pop(k, None)
     return env
+
+
+def sandbox_child_env(repo_root: str) -> Dict[str, str]:
+    """Safe env for the codeexec sandbox child plus repo-root PYTHONPATH.
+
+    Centralizes the one legitimate PYTHONPATH read so callers never touch
+    os.environ directly (keeps the secrets-seam guardrail green). Never
+    copies the full parent env — secrets stay out of the child.
+    """
+    import os as _os
+
+    env = safe_env()
+    existing = _os.environ.get("PYTHONPATH", "")
+    sep = _os.pathsep
+    env["PYTHONPATH"] = repo_root + (sep + existing if existing else "")
+    return env

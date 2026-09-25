@@ -37,7 +37,7 @@ def test_openai_compatible_tiers_fail_fast(monkeypatch):
     try:
         assert _fresh_client(config_mod.get_tier_groq_llm, "x").max_retries == 0
         assert _fresh_client(
-            config_mod.get_tier_openrouter_qwen_llm, "x").max_retries == 0
+            config_mod.get_tier_openrouter_ultra_llm, "x").max_retries == 0
         assert _fresh_client(
             config_mod.get_tier_openrouter_ling_vl_llm, "x").max_retries == 0
     finally:

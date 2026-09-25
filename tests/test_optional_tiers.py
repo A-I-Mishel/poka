@@ -102,8 +102,8 @@ def test_cascade_position_gemini_led():
         "Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash",
         "Gemini 3.5 Flash", "Gemini 3.5 Flash Lite",
         "Gemini 3.1 Flash Lite", "Groq", "Cohere",
-        "OpenRouter Nemotron Ultra", "OpenRouter Qwen 27B",
-        "OpenRouter Ling VL",
+        "OpenRouter Nemotron Ultra",
+        "OpenRouter Ling VL", "Ollama 8B",
     ]
 
 
