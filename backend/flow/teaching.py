@@ -190,6 +190,35 @@ def _apply_teaching_session(
                 last_end = 0
     except Exception:
         logger.debug("teaching cursor file-switch check failed", exc_info=True)
+    # Don't-know hold: the learner could not answer the closing
+    # question — re-serve the SAME window instead of advancing. Repeat
+    # holds on one window escalate (rebuild the prerequisite, offer to
+    # park it). Computed before the exhaustion/exam probes so a held
+    # final slide reteaches instead of flipping to EXAM MODE.
+    _teach_hold = False
+    _teach_hold_repeat = False
+    try:
+        from backend.teach import _is_dont_know as _dont_know
+
+        _teach_hold = bool(_dont_know(str(gate_text or ""), history))
+        if _teach_hold:
+            # Repeat = the previous user turn was also a non-answer
+            # (current text isn't in history yet, so pair it explicitly).
+            _prior_user = [
+                str(m.get("content", "") or "")
+                for m in (history or [])
+                if isinstance(m, dict) and m.get("role") == "user"
+            ][-1:]
+            if (len(_prior_user) == 1
+                    and _dont_know(_prior_user[0], history)
+                    and _dont_know(str(gate_text or ""), history)):
+                _teach_hold_repeat = True
+    except Exception:
+        logger.debug("teaching hold check failed", exc_info=True)
+        _teach_hold = False
+        _teach_hold_repeat = False
+    if _teach_hold and last_end > 0:
+        last_end = max(0, last_end - TEACHING_WINDOW_SLIDES)
     # If the active file is exhausted, advance to the next sorted file.
     # If every file is covered, switch to EXAM MODE instead of restarting.
     try:
@@ -400,6 +429,7 @@ def _apply_teaching_session(
     except Exception:
         logger.debug("teaching scope fence failed", exc_info=True)
     # Closing-question-answer mode: evaluate the student's answer before the next window.
+    # A don't-know hold replaces it: reteach the SAME window, never advance.
     try:
         from agent.attachment_gate import CONTINUATION_SIGNALS
         from agent.router import _signals as _gate_signals
@@ -408,7 +438,23 @@ def _apply_teaching_session(
     except Exception:
         _is_next = False
     try:
-        if not _is_next and _is_recall_answer(str(gate_text or ""), history):
+        if _teach_hold and _teach_hold_repeat:
+            send_text += (
+                "\n\n[The learner could not answer again on this same concept. "
+                "First rebuild the missing prerequisite in 2-3 simple lines, "
+                "then reteach the concept simply with a smaller example, then "
+                "ask one easy check question. Tell them they may say Next to "
+                "park it and move on. Do not advance unless they say so.]"
+            )
+        elif _teach_hold:
+            send_text += (
+                "\n\n[The user just answered your closing question above with "
+                "an explicit non-answer (they could not answer it). Do NOT "
+                "advance to new slides — the same window is served again "
+                "below. Reteach THIS concept in 3-4 simpler lines with a "
+                "smaller example, then ask one easier check question.]"
+            )
+        elif not _is_next and _is_recall_answer(str(gate_text or ""), history):
             send_text += (
                 "\n\n[The user just answered your closing question above. First "
                 "evaluate in 3-5 lines: if correct confirm the key idea and "

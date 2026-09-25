@@ -444,6 +444,60 @@ def _is_pace_feedback(text: str, history: List[Dict[str, Any]]) -> bool:
         return False
 
 
+# Explicit "I can't answer" class: the learner states they cannot answer
+# the closing question (not an attempt). Word-boundary match on short
+# text only ("still cant think" counts) — a "?" hazarding a guess
+# ("not sure, is it X?") stays a normal (attempted) answer. Bare "skip"
+# stays pace-fast; only "skip this…" counts here.
+_TEACHING_DONT_KNOW_PHRASES = (
+    "i dont know",
+    "i don't know",
+    "do not know",
+    "dont know",
+    "idk",
+    "nope",
+    "i cant",
+    "i can't",
+    "cant think",
+    "can't think",
+    "cannot think",
+    "no idea",
+    "no clue",
+    "not sure",
+    "skip this",
+)
+
+
+def _is_dont_know(text: str, history: List[Dict[str, Any]]) -> bool:
+    """True for an explicit non-answer to a closing question (never raises).
+
+    Strict subset of recall answers: short text matching the dont-know
+    class while the last teaching turn ends with a closing question.
+    Anything else (attempts, questions, long text) returns False and
+    takes the normal evaluate-then-advance path.
+    """
+    try:
+        t = str(text or "")
+        if not t or not t.strip():
+            return False
+        if "?" in t:
+            # A question mark hazarding a guess ("not sure, is it X?")
+            # is an attempt, not a non-answer.
+            return False
+        normalized = re.sub(r"[!?.\u2026,]+", " ", t.lower())
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if not normalized or len(normalized) > 60:
+            return False
+        if not any(
+            re.search(r"\b" + re.escape(p) + r"\b", normalized)
+            for p in _TEACHING_DONT_KNOW_PHRASES
+        ):
+            return False
+        return _is_recall_answer(text, history)
+    except Exception:
+        return False
+
+
 def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
     """True for "Next/continue" follow-ups, bare acks, AND closing-question answers.
 
