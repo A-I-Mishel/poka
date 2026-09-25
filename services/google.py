@@ -1,29 +1,23 @@
 """Shared Google OAuth scopes (single place, never scattered).
 
-Both Gmail and Calendar use the same Desktop-app client; requesting
-all scopes at once means one consent covers every integration.
+Calendar uses the Desktop-app client; requesting its scopes at once
+means one consent covers the integration.
 """
 
 from typing import Any, List, Optional
-
-GMAIL_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.compose",
-]
 
 CALENDAR_SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
 ]
 
-ALL_SCOPES = GMAIL_SCOPES + CALENDAR_SCOPES
+ALL_SCOPES = list(CALENDAR_SCOPES)
 
 
 def google_credentials(scopes: List[str]) -> Optional[Any]:
     """OAuth credentials from env refresh token, or None when unconfigured.
 
-    Single builder for Gmail + Calendar so client-id/secret/refresh
-    handling cannot drift. Never raises, never logs secrets.
+    Single builder so client-id/secret/refresh handling cannot drift.
+    Never raises, never logs secrets.
     """
     try:
         from google.oauth2.credentials import Credentials

@@ -16,18 +16,12 @@ from services import approvals as approvals_svc
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
-_APPROVAL_EXECUTORS = ("send_gmail", "delete_calendar_event",
+_APPROVAL_EXECUTORS = ("delete_calendar_event",
                        "import_csv_table", "execute_sql")
 
 
 def _execute_stored(user_id: Any, tool: str, args: Dict[str, Any]) -> str:
     """Run a consumed approval's stored action (server-side only)."""
-    if tool == "send_gmail":
-        from tools.gmail_tool import _execute_send_gmail
-
-        return _execute_send_gmail(str(args.get("to", "")),
-                                   str(args.get("subject", "")),
-                                   str(args.get("body", "")))
     if tool == "delete_calendar_event":
         from tools.calendar_tool import _execute_delete_calendar_event
 

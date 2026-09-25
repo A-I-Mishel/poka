@@ -1,4 +1,4 @@
-"""Get a Google OAuth refresh token for Pluto's Gmail integration.
+"""Get a Google OAuth refresh token for Pluto's Calendar integration.
 
 One-time interactive setup (opens your browser for Google consent):
 
@@ -12,7 +12,7 @@ GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
 
 The client ID/secret come from Google Cloud Console:
 APIs & Services > Credentials > Create Credentials > OAuth client ID
-(type: Desktop app), with the Gmail API enabled for the project.
+(type: Desktop app), with the Google Calendar API enabled for the project.
 """
 
 import argparse

@@ -1,6 +1,6 @@
 """Google Calendar integration: list, create, and delete events.
 
-Same Desktop-app OAuth client as Gmail (GOOGLE_CLIENT_ID / SECRET /
+Desktop-app OAuth client (GOOGLE_CLIENT_ID / SECRET /
 REFRESH_TOKEN); the refresh token must carry the calendar scope
 (re-consent after adding it). Unconfigured -> degraded markers, never
 raises into the agent. Deletion is gated at the tool layer.

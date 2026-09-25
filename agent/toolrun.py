@@ -38,7 +38,7 @@ from services.obs import (
 )
 from services.storage import MAX_SOURCES, clean_source_record
 from services.tokens import count_tokens, truncate_tokens
-from tools import web_search, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool
+from tools import web_search, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic, search_documents, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool
 from tools.search_tool import extract_cited_sources
 
 from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled, remaining_seconds
@@ -57,13 +57,13 @@ from services.normalize import normalize_text as _normalize_hint
 
 logger = logging.getLogger(__name__)
 
-tools: List[Any] = [web_search, search_documents, search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic]
+tools: List[Any] = [web_search, search_documents, list_calendar_events, create_calendar_event, delete_calendar_event, list_tables, describe_table, query_database, import_csv_table, execute_sql, run_python, workspace_list, workspace_read, workspace_write, workspace_delete, run_code, list_mcp_tools, call_mcp_tool, create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output, read_pdf, read_pdf_page, read_document, analyze_csv, csv_inspect, check_logic]
 TOOL_MAP: Dict[str, Any] = {t.name: t for t in tools}
 
 # Tool classification: read-only tools can run in parallel; mutating tools must run serially.
 # Read-only: no vault writes, no external side effects, idempotent reads.
 _READ_ONLY_TOOLS = frozenset({
-    "web_search", "search_documents", "search_gmail", "read_gmail",
+    "web_search", "search_documents",
     "list_calendar_events", "list_tables", "describe_table", "query_database",
     "workspace_list", "workspace_read", "read_output", "read_pdf",
     "read_pdf_page", "read_document", "analyze_csv", "csv_inspect",
@@ -72,7 +72,7 @@ _READ_ONLY_TOOLS = frozenset({
 
 # Mutating tools: vault writes, external side effects, non-idempotent.
 _MUTATING_TOOLS = frozenset({
-    "create_gmail_draft", "send_gmail", "create_calendar_event", "delete_calendar_event",
+    "create_calendar_event", "delete_calendar_event",
     "import_csv_table", "execute_sql", "run_python", "workspace_write",
     "workspace_delete", "run_code", "call_mcp_tool",
     "create_pptx", "build_presentation", "create_docx", "build_document",
@@ -406,9 +406,9 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None,
              "script", "program", "function",
              "execute")):
         base += [workspace_write, workspace_delete, run_code, run_python, list_mcp_tools, call_mcp_tool]
-    if _any(("gmail", "email", "mail", "calendar",
+    if _any(("email", "mail", "calendar",
              "event", "meeting", "invite")):
-        base += [search_gmail, read_gmail, create_gmail_draft, send_gmail, list_calendar_events, create_calendar_event, delete_calendar_event]
+        base += [list_calendar_events, create_calendar_event, delete_calendar_event]
     # dedupe
     seen = set()
     out: List[Any] = []

@@ -7,15 +7,16 @@ input, owner-supplied) and `{{steps.N.output}}` (an EARLIER step's
 reported output, untrusted tool DATA).
 
 Security rules (enforced here, so every entry point inherits them):
-- `send_gmail` is blocked entirely: pipelines run non-interactively,
-  and email exfiltrates off-device silently.
+- No email tool exists, so pipelines cannot exfiltrate off-device
+  silently (the removed Gmail lane used to be blocked here for
+  exactly that reason).
 - Code/identifier args (`code`, `sql`, `table`, `upload_id`, `server`,
   `tool`, `event_id`, `message_id`, `to`, `draft_id`) must be static:
   no `{{steps.N.output}}` templates (`{{input}}` is allowed — it is
   owner-supplied at run time, like the chat box). This closes
   template-driven code/SQL injection and identifier confusion
-  (e.g. untrusted step output becoming a Gmail recipient or a
-  calendar-delete target) from untrusted step output.
+  (e.g. untrusted step output becoming a calendar-delete target)
+  from untrusted step output.
 - `confirm`/`approval_token` args are rejected outright: approvals are
   interactive-only and saved runs cannot approve, so pipelines can never
   authorize destructive actions.
@@ -39,8 +40,10 @@ _TEMPLATE_RE = re.compile(r"\{\{\s*(input|steps\.(\d+)\.output)\s*\}\}")
 # Any {{...}} at all (used to reject unknown shapes).
 _ANY_TEMPLATE_RE = re.compile(r"\{\{.*?\}\}")
 
-# Tools that may never appear in a pipeline (see module docstring).
-BLOCKED_PIPELINE_TOOLS = frozenset({"send_gmail"})
+# Tools that may never appear in a pipeline (none currently — the
+# removed Gmail lane used to live here; the check below stays so a
+# future exfiltrating tool can be blocked in one place).
+BLOCKED_PIPELINE_TOOLS = frozenset()
 
 # Table identifiers: single SQLite table, no schema qualification or
 # quoting — single file per user, ATTACH rejected at exec. Rejects

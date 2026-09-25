@@ -101,7 +101,7 @@ def test_fallback_parsers_skip_mutating_tools():
 
     leaked = '{"tool": "execute_sql", "sql": "DROP TABLE t"}'
     assert _fallback_tool_calls_from_text(leaked) == []
-    assert _fallback_tool_calls_from_text('[Tool call: send_gmail(to="a@b.c")]') == []
+    assert _fallback_tool_calls_from_text('[Tool call: delete_calendar_event(event_id="x")]') == []
     ok = _fallback_tool_calls_from_text('{"tool": "read_document", "upload_id": "ab12"}')
     assert [c["name"] for c in ok] == ["read_document"]
 

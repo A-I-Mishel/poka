@@ -159,7 +159,7 @@ var SECTIONS = {
           '<button class="row-btn" data-wfdel="' + escapeAttr(w.id) + '" title="Delete">✕</button></div>';
       }).join("");
       if (!list.length) rows = '<div class="sub" style="margin-top:16px">No workflows yet. Save a fixed tool sequence below and run it anytime.</div>';
-      return "<h2>Workflows</h2><div class=\"sub\">Saved tool pipelines. Steps are JSON with {{input}} and {{steps.N.output}} templates; send_gmail is blocked.</div>" +
+      return "<h2>Workflows</h2><div class=\"sub\">Saved tool pipelines. Steps are JSON with {{input}} and {{steps.N.output}} templates; unknown tools are rejected.</div>" +
         '<div class="cards" id="wfList">' + rows + "</div>" +
         '<h2 style="margin-top:22px" id="wfFormTitle">New workflow</h2>' +
         '<input class="input panel-input" id="wfName" type="text" placeholder="Name">' +

@@ -49,7 +49,7 @@ def _ctx(tmp_path, monkeypatch):
     rl.configure_rate_limiter(old)
 
 
-KNOWN = {"_wf_echo", "list_tables", "send_gmail"}
+KNOWN = {"_wf_echo", "list_tables", "delete_calendar_event"}
 
 
 def _step(tool, args=None):
@@ -86,7 +86,7 @@ def test_unknown_tool_rejected():
         wf_svc.validate_workflow("x", [_step("nope")], "", KNOWN)
 
 
-def test_send_gmail_blocked():
+def test_removed_gmail_tool_rejected_as_unknown():
     with pytest.raises(ValueError):
         wf_svc.validate_workflow("x", [_step("send_gmail", {"to": "a"})], "", KNOWN)
 

@@ -92,9 +92,9 @@ python -m pytest tests/ -q
 | `PLUTO_ALLOW_MEMORY_LIMITER` | no (`false`) | Opt into per-process limits with `UVICORN_WORKERS>1` and no `REDIS_URL` |
 | `VITE_API_URL` | on Vercel | Public URL of the API (empty = same origin) |
 | `PLUTO_KB_EMBED_MODEL` | no | Embedding model for document search (default `models/gemini-embedding-001`) |
-| `GOOGLE_CLIENT_ID` | for Gmail | Google OAuth client ID (Desktop app) |
-| `GOOGLE_CLIENT_SECRET` | for Gmail | Google OAuth client secret |
-| `GOOGLE_REFRESH_TOKEN` | for Gmail | Refresh token from `scripts/get_google_refresh_token.py` |
+| `GOOGLE_CLIENT_ID` | for Calendar | Google OAuth client ID (Desktop app) |
+| `GOOGLE_CLIENT_SECRET` | for Calendar | Google OAuth client secret |
+| `GOOGLE_REFRESH_TOKEN` | for Calendar | Refresh token from `scripts/get_google_refresh_token.py` |
 | `PLUTO_MCP_SERVERS` | no | JSON list of MCP servers (stdio and/or remote URLs) |
 | `PLUTO_MCP_ALLOW_TOOLS` | with MCP servers | Comma globs like `github.*,docs.search` (default deny) |
 | `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | for free-tier durability | Snapshot backend credentials (R2 or Supabase Storage S3 keys) |
@@ -230,19 +230,12 @@ truncation notes and documents are validated by reopening before
 delivery. Standalone web pages (`.html`, full document or fragment)
 are saved as downloadable artifacts that open in any browser.
 
-Gmail (`search_gmail`, `read_gmail`, `create_gmail_draft`,
-`send_gmail`): one configured account via Google OAuth (Desktop app
-client + `scripts/get_google_refresh_token.py` for the refresh
-token). Mail is untrusted DATA; sending is irreversible, so
-`send_gmail` runs only after the user approves a server-minted,
-single-use approval token in the UI (`/api/approvals`) — drafts are
-the safe default. Without credentials the tools report unconfigured
-instead of failing.
-
 Calendar (`list_calendar_events`, `create_calendar_event`,
-`delete_calendar_event`): same Google OAuth client (refresh token
-must carry the calendar scope — re-run the helper after adding it).
-Creating is low-risk; deletion needs a UI approval token.
+`delete_calendar_event`): one configured account via Google OAuth
+(Desktop app client + `scripts/get_google_refresh_token.py` for the
+refresh token, which must carry the calendar scope). Creating is
+low-risk; deletion needs a UI approval token. Without credentials
+the tools report unconfigured instead of failing.
 
 Database (`list_tables`, `describe_table`, `query_database`,
 `import_csv_table`, `execute_sql`): per-user SQLite vault file, zero
@@ -281,7 +274,7 @@ owner-saved tool sequences run deterministically with no LLM planning
 — steps execute in order through the normal tool funnel (budgets,
 timeouts, STATUS markers). String args may embed `{{input}}`
 (run-time input) and `{{steps.N.output}}` (earlier steps' reported
-output); the first non-OK step stops the run. `send_gmail` is blocked,
+output); the first non-OK step stops the run. No email tool exists,
 and code/SQL/identifiers accept no step-output templates, so templated
 tool output cannot become code injection or silent exfiltration.
 

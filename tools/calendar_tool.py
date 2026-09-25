@@ -6,8 +6,8 @@ token from the authenticated UI — never a model-supplied flag.
 
 Single-account note: the host configures ONE Google calendar via
 GOOGLE_* env vars. Every app user would share it, so these tools are
-private-mode only (PLUTO_AUTH_MODE=private), like Gmail — open mode
-is denied outright.
+private-mode only (PLUTO_AUTH_MODE=private) — open mode is denied
+outright.
 """
 
 import logging

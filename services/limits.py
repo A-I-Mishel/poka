@@ -218,7 +218,6 @@ RATE_LIMITS: dict = {
     "generate": (60, 3600.0),
     "deep": (60, 3600.0),
     "kb_search": (60, 3600.0),
-    "gmail": (30, 3600.0),
     "calendar": (30, 3600.0),
     "database": (30, 3600.0),
     "code": (20, 3600.0),
