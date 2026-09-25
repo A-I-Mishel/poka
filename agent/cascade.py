@@ -6,7 +6,10 @@ never selected here. BudgetExhausted is never swallowed and never cools
 a tier (it is our limit, not theirs).
 """
 
+import datetime as _datetime
+import json as _json
 import logging
+import os as _os
 import re
 import threading
 import time
@@ -51,11 +54,24 @@ NO_TOOLS_TIERS = ("Ollama VL 3B",)
 # metadata-only (truncated like _friendly_cascade_error, never prompts).
 _TIER_LAST_ERROR: Dict[str, tuple] = {}
 
+# Cross-restart durability: cooldowns + per-tier daily call counters
+# persist to a small JSON file under PLUTO_DATA_DIR so a restart stops
+# re-walking dead lanes (each re-walk burns quota re-learning a 429).
+# Lazy-loaded once per process on first state access; every load/save
+# is best-effort and never raises. Tests stay hermetic: they point
+# PLUTO_DATA_DIR at tmp dirs, and direct dict clears bypass the file.
+_CASCADE_STATE_FILENAME = "cascade_cooldowns.json"
+_STATE_LOADED = False
+_TIER_CALLS_TODAY: Dict[str, int] = {}
+_TIER_CALLS_DATE: str = ""
+
 # Concurrency: tier state is shared across the bounded daemon pool, so
 # every read-modify-write on the _TIER_* dicts goes through ONE lock
 # (mirrors services.ratelimit). Misses here are benign (two callers
 # cooling the same tier) but serializing keeps streak counting exact.
-_STATE_LOCK = threading.Lock()
+# RLock (not Lock): durability saves run inside failure recording,
+# which already holds the lock — a plain Lock would deadlock there.
+_STATE_LOCK = threading.RLock()
 
 logger = logging.getLogger(__name__)
 
@@ -284,8 +300,119 @@ def _is_shed_load(error: Any) -> bool:
     return type(error).__name__ == "ExecutorBusyError"
 
 
+def _cascade_state_path() -> str:
+    """Durability file for cooldowns + daily counters (never raises)."""
+    try:
+        root = str(_os.getenv("PLUTO_DATA_DIR", "") or "").strip() or "data"
+        return _os.path.join(root, _CASCADE_STATE_FILENAME)
+    except Exception:
+        return _CASCADE_STATE_FILENAME
+
+
+def _today_key() -> str:
+    try:
+        return _datetime.date.today().isoformat()
+    except Exception:
+        return ""
+
+
+def _load_cascade_state() -> None:
+    """One-time per-process restore of skips + today's counters (never raises)."""
+    global _STATE_LOADED, _TIER_CALLS_DATE
+    try:
+        if _STATE_LOADED:
+            return
+        _STATE_LOADED = True
+        with open(_cascade_state_path(), "r", encoding="utf-8") as fh:
+            raw = _json.load(fh)
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        skips = raw.get("skip_until")
+        if isinstance(skips, dict):
+            with _STATE_LOCK:
+                for name, until in skips.items():
+                    try:
+                        ts = float(until)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(name, str) and name and ts > now:
+                        _TIER_SKIP_UNTIL[name] = ts
+        calls = raw.get("calls")
+        today = _today_key()
+        if isinstance(calls, dict) and raw.get("date") == today and today:
+            with _STATE_LOCK:
+                for name, count in calls.items():
+                    try:
+                        n = int(count)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(name, str) and name and n > 0:
+                        _TIER_CALLS_TODAY[name] = n
+            _TIER_CALLS_DATE = today
+    except Exception:
+        logger.debug("cascade state load failed", exc_info=True)
+
+
+def _save_cascade_state() -> None:
+    """Persist skips + today's counters (never raises)."""
+    try:
+        today = _today_key()
+        with _STATE_LOCK:
+            payload = {
+                "date": today,
+                "skip_until": dict(_TIER_SKIP_UNTIL),
+                "calls": dict(_TIER_CALLS_TODAY)
+                if _TIER_CALLS_DATE == today else {},
+            }
+        path = _cascade_state_path()
+        try:
+            parent = _os.path.dirname(path)
+            if parent:
+                _os.makedirs(parent, exist_ok=True)
+        except Exception:
+            logger.debug("cascade state dir failed", exc_info=True)
+            return
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            _json.dump(payload, fh)
+        _os.replace(tmp, path)
+    except Exception:
+        logger.debug("cascade state save failed", exc_info=True)
+
+
+def _count_tier_call(name: str) -> None:
+    """Record one provider call attempt for today's per-tier counters."""
+    global _TIER_CALLS_DATE
+    try:
+        if not isinstance(name, str) or not name:
+            return
+        today = _today_key()
+        with _STATE_LOCK:
+            if _TIER_CALLS_DATE != today:
+                _TIER_CALLS_TODAY.clear()
+                _TIER_CALLS_DATE = today
+            _TIER_CALLS_TODAY[name] = int(_TIER_CALLS_TODAY.get(name, 0) or 0) + 1
+    except Exception:
+        logger.debug("tier call count failed", exc_info=True)
+
+
+def _calls_today(name: str) -> int:
+    """Calls attempted on a tier since UTC midnight (never raises)."""
+    try:
+        _load_cascade_state()
+        today = _today_key()
+        with _STATE_LOCK:
+            if _TIER_CALLS_DATE != today:
+                return 0
+            return int(_TIER_CALLS_TODAY.get(name, 0) or 0)
+    except Exception:
+        return 0
+
+
 def _tier_skipped(name: str) -> bool:
     """Check whether a tier is currently in its cool-down window."""
+    _load_cascade_state()
     with _STATE_LOCK:
         return time.time() < _TIER_SKIP_UNTIL.get(name, 0.0)
 
@@ -373,12 +500,17 @@ def _record_tier_failure(name: str, kind: str = "unknown", error: Any = None) ->
             _TIER_TIMEOUTS[name] = streak
             if streak >= TIMEOUT_STRIKES_BEFORE_COOL:
                 _TIER_SKIP_UNTIL[name] = time.time() + TIER_COOLDOWN_TIMEOUT_SECONDS
+                _save_cascade_state()
             return
         _TIER_TIMEOUTS.pop(name, None)
         fails: int = _TIER_FAILS.get(name, 0) + 1
         _TIER_FAILS[name] = fails
         if fails >= SKIP_AFTER_FAILS:
             _TIER_SKIP_UNTIL[name] = time.time() + _cooldown_for_kind(kind, error)
+    # A newly set cooldown must survive restarts. Runs under the
+    # reentrant state lock; the write is one tiny JSON file, and the
+    # saver itself never raises.
+    _save_cascade_state()
 
 
 def _friendly_cascade_error(last_error: Any) -> str:
@@ -500,6 +632,10 @@ def tier_status_snapshot(
             entry["cooldown_remaining_s"] = round(max(0.0, skip_until - now), 1)
             entry["fail_streak"] = fails
             entry["timeout_streak"] = timeouts
+            try:
+                entry["calls_today"] = _calls_today(name)
+            except Exception:
+                entry["calls_today"] = 0
             if last is not None:
                 entry["last_error_kind"] = str(last[0])
                 entry["last_error"] = _redact_detail(str(last[1]))[:200]
@@ -531,6 +667,7 @@ def reset_tier_state(name: Optional[str] = None) -> int:
                         cleared += 1
     except Exception:
         logger.debug("tier state reset failed", exc_info=True)
+    _save_cascade_state()
     return cleared
 
 
@@ -600,6 +737,7 @@ def _run_cascade_step(
         if llm_instance is None:
             continue
         try:
+            _count_tier_call(name)
             result = fn(name, llm_instance)
             _record_tier_success(name)
             if first_attempt is not None and name != first_attempt:
