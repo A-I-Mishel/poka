@@ -58,7 +58,8 @@ def test_cascade_position():
     names = [name for name, _ in config.TIER_GETTERS]
     assert names.index("Groq") < names.index("Cohere")
     assert names.index("Cohere") < names.index("OpenRouter Nemotron Ultra")
-    assert names[-2:] == ["OpenRouter Nemotron Ultra", "Ollama 8B"]
+    assert names.index("OpenRouter Nemotron Ultra") < names.index("Kilo Dots 3 Note")
+    assert names[-3:] == ["OpenRouter Nemotron Ultra", "Kilo Dots 3 Note", "Ollama 8B"]
     assert names[-1] == "Ollama 8B"
 
 

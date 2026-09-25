@@ -194,10 +194,11 @@ def _first_token_timeout() -> float:
 def _first_token_timeout_for_tier(tier: Optional[str]) -> float:
     """Per-tier first-token deadline.
 
-    OpenRouter free lanes queue longer; local Ollama needs longer still
-    (cold model load / VRAM swap of multi-GB weights + thinking chains
+    OpenRouter and Kilo free lanes queue longer; local Ollama needs longer
+    still (cold model load / VRAM swap of multi-GB weights + thinking chains
     before the first token). Env overrides: PLUTO_FIRST_TOKEN_TIMEOUT,
-    PLUTO_FIRST_TOKEN_TIMEOUT_OPENROUTER, PLUTO_FIRST_TOKEN_TIMEOUT_OLLAMA.
+    PLUTO_FIRST_TOKEN_TIMEOUT_OPENROUTER, PLUTO_FIRST_TOKEN_TIMEOUT_KILO,
+    PLUTO_FIRST_TOKEN_TIMEOUT_OLLAMA.
     """
     if tier and str(tier).lower().startswith("openrouter"):
         try:
@@ -206,6 +207,19 @@ def _first_token_timeout_for_tier(tier: Optional[str]) -> float:
                 float(
                     os.environ.get(
                         "PLUTO_FIRST_TOKEN_TIMEOUT_OPENROUTER",
+                        str(FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS),
+                    )
+                ),
+            )
+        except (TypeError, ValueError):
+            return FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS
+    if tier and str(tier).lower().startswith("kilo"):
+        try:
+            return max(
+                0.0,
+                float(
+                    os.environ.get(
+                        "PLUTO_FIRST_TOKEN_TIMEOUT_KILO",
                         str(FIRST_TOKEN_TIMEOUT_OPENROUTER_SECONDS),
                     )
                 ),
@@ -435,7 +449,7 @@ def _invoke_bounded(
             time.monotonic() - started)
     except TimeoutError:
         if budget is not None:
-            budget.timeouts += 1
+            budget.record_timeout()
         obs_event("llm.invoke", status="timeout", provider=str(provider), timeout_s=timeout)
         raise
     except Exception:

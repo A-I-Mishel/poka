@@ -3,7 +3,8 @@
 Cascade order (user preference): Gemini 3.8 / 3.7 / 3.6 Flash (main,
 same GEMINI_API_KEY) + 3.5 backup + 3.5 Flash Lite + 3.1 Flash Lite
 (fresh per-model quota pools) -> Groq 120B (strong fallback, cheap-backup
-included) -> Cohere -> Nemotron 3 Ultra (emergency pool).
+included) -> Cohere -> Nemotron 3 Ultra + Kilo Dots 3 Note (emergency pool,
+both free; Kilo is keyless).
 
 RETIRED_LANES (Sep 2026, re-add pointers live inline where each lane
 was removed): GitHub Models + NVIDIA (dead); Groq Fast 20B / Mistral /
@@ -24,6 +25,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
+from openai import OpenAI as OpenAIClient
 from services.limits import MODEL_MAX_TOKENS, MODEL_TIMEOUT_SECONDS
 from services.secrets import get_secret
 
@@ -101,6 +103,13 @@ OPENROUTER_ULTRA_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 # TokenHarbor lanes removed (trial ended): MiMo 2.6 Flash +
 # DeepSeek V4.1 Flash deleted along with their getters and table
 # entries. Re-add via https://tokenharbor.ai/v1 if the trial resumes.
+# Kilo Gateway via its OpenAI-compatible endpoint (same ChatOpenAI
+# client). Keyless lane: :free models need no API key (anonymous,
+# 200 req/hr per IP) so a dummy key is sent. Dots 3 Note Preview
+# (MoE 16B active/280B, 512K ctx) sits in the emergency pool behind
+# Nemotron Ultra. Override the model with KILO_DOTS_MODEL if needed.
+KILO_BASE_URL: str = "https://api.kilo.ai/api/gateway"
+KILO_DOTS_MODEL: str = "dots-studio/dots-3-note-preview:free"
 # Local Ollama tier (Oct 2026): whatever model the local Ollama daemon
 # serves via its OpenAI-compatible endpoint. Single slot, default
 # qwen3:8b (offline fallback tail of the synthesis tables).
@@ -465,6 +474,87 @@ def get_tier_openrouter_ultra_llm(temperature: float = TEMPERATURE) -> Optional[
     return _get_openrouter_llm("OpenRouter Nemotron Ultra", OPENROUTER_ULTRA_MODEL, temperature)
 
 
+class _KeylessOpenAI(OpenAIClient):
+    """OpenAI client that sends no Authorization header (never raises).
+
+    Kilo Gateway :free models accept anonymous requests; any Bearer
+    (even a dummy) is rejected with INVALID_TOKEN, while an empty key
+    fails client construction. Overriding both emission points (the
+    `_auth_headers` pipeline used per request plus the legacy
+    `auth_headers`) and validation keeps anonymous calls working
+    through the standard surface.
+    """
+
+    @property
+    def _bearer_auth(self) -> Dict[str, str]:
+        return {}
+
+    def _auth_headers(self, security: Any) -> Dict[str, str]:
+        return {}
+
+    @property
+    def auth_headers(self) -> Dict[str, str]:
+        return {}
+
+    def _validate_headers(
+        self, headers: Dict[str, str], custom_headers: Dict[str, str]
+    ) -> None:
+        return None
+
+
+def _get_kilo_llm(tier: str, model: str, temperature: float) -> Optional[ChatOpenAI]:
+    """Build a Kilo Gateway client for one model (shared factory).
+
+    Keyless by design: :free models accept anonymous requests (IP-based
+    rate limits), so NO Authorization header is sent at all — a dummy
+    Bearer is rejected with INVALID_TOKEN, and an empty key fails client
+    construction. _KeylessOpenAI strips auth headers while keeping the
+    standard ChatOpenAI surface (stream/invoke). A failed build still
+    returns None (tier skipped, cascade continues).
+    """
+    try:
+        model = _model_override("KILO_DOTS_MODEL", model)
+        if not model.strip():
+            return None
+
+        def _build() -> ChatOpenAI:
+            underlying = _KeylessOpenAI(
+                api_key="kilo-keyless",
+                base_url=KILO_BASE_URL,
+                timeout=MODEL_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
+            return ChatOpenAI(
+                model=model,
+                api_key="kilo-keyless",
+                base_url=KILO_BASE_URL,
+                temperature=temperature,
+                # Native HTTP timeout: truly aborts hung provider calls.
+                request_timeout=MODEL_TIMEOUT_SECONDS,
+                max_tokens=MODEL_MAX_TOKENS,
+                # Fail fast into the cascade (see _make_gemini).
+                max_retries=0,
+                root_client=underlying,
+                client=underlying.chat.completions,
+            )
+
+        return _cached_client(
+            tier,
+            temperature,
+            "kilo-keyless",
+            model,
+            _build,
+        )
+    except Exception as e:
+        _tier_init_failed(tier, e)
+        return None
+
+
+def get_tier_kilo_dots_llm(temperature: float = TEMPERATURE) -> Optional[ChatOpenAI]:
+    """Kilo Gateway fallback: Dots 3 Note Preview (free, keyless, user pick)."""
+    return _get_kilo_llm("Kilo Dots 3 Note", KILO_DOTS_MODEL, temperature)
+
+
 # Qwen 3.8 27B removed (trial ended, per user request). Re-add
 # get_tier_openrouter_qwen_llm + OPENROUTER_QWEN_MODEL
 # ("qwen/qwen3.8-27b:free") if the lane is ever needed again.
@@ -556,6 +646,7 @@ _GETTERS_BY_NAME: Dict[str, Callable[..., Optional[Any]]] = {
     "Groq": get_tier_groq_llm,
     "Cohere": get_tier_cohere_llm,
     "OpenRouter Nemotron Ultra": get_tier_openrouter_ultra_llm,
+    "Kilo Dots 3 Note": get_tier_kilo_dots_llm,
     "Ollama 8B": get_tier_ollama_llm,
     # Legacy alias: single "Ollama" name resolves to the same slot.
     "Ollama": get_tier_ollama_llm,
@@ -589,6 +680,7 @@ TIER_GETTERS: list[tuple[str, Callable[[], Optional[Union[ChatOpenAI, ChatGoogle
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
+    ("Kilo Dots 3 Note", get_tier_kilo_dots_llm),
     ("Ollama 8B", get_tier_ollama_llm),
 ]
 
@@ -618,6 +710,7 @@ SYNTHESIS_TIERS: list[tuple[str, Callable[..., Optional[Any]]]] = [
     ("Groq", get_tier_groq_llm),
     ("Cohere", get_tier_cohere_llm),
     ("OpenRouter Nemotron Ultra", get_tier_openrouter_ultra_llm),
+    ("Kilo Dots 3 Note", get_tier_kilo_dots_llm),
     ("Ollama 8B", get_tier_ollama_llm),
 ]
 # Fast-mode answer table (mode-based routing): only these lanes may

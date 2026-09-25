@@ -94,15 +94,17 @@ def test_tail_is_last():
 
 
 def test_first_token_timeout_per_tier(monkeypatch):
-    """Cold Ollama loads get 120s; OpenRouter 20s; default 12s."""
+    """Cold Ollama loads get 120s; OpenRouter/Kilo 20s; default 12s."""
     from agent.executor import _first_token_timeout_for_tier
 
     monkeypatch.delenv("PLUTO_FIRST_TOKEN_TIMEOUT_OLLAMA", raising=False)
     monkeypatch.delenv("PLUTO_FIRST_TOKEN_TIMEOUT_OPENROUTER", raising=False)
+    monkeypatch.delenv("PLUTO_FIRST_TOKEN_TIMEOUT_KILO", raising=False)
     monkeypatch.delenv("PLUTO_FIRST_TOKEN_TIMEOUT", raising=False)
     assert _first_token_timeout_for_tier("Ollama 8B") == 120.0
     assert _first_token_timeout_for_tier("Ollama") == 120.0
     assert _first_token_timeout_for_tier("OpenRouter Nemotron Ultra") == 20.0
+    assert _first_token_timeout_for_tier("Kilo Dots 3 Note") == 20.0
     assert _first_token_timeout_for_tier("Groq") == 12.0
     assert _first_token_timeout_for_tier(None) == 12.0
 

@@ -166,7 +166,8 @@ lanes remain to answer degraded):
 7. Groq 120B (strong fallback; model via `GROQ_MODEL`)
 8. Cohere Command (`COHERE_MODEL`; vision backup via `command-a-vision-07-2025`)
 9. OpenRouter Nemotron 3 Ultra 550B (`nvidia/nemotron-3-ultra-550b-a55b:free`; reasoning lane)
-10. Ollama qwen3:8b (local offline fallback tail, deep-mode only; `OLLAMA_MODEL`, disable via `OLLAMA_ENABLED=false`)
+10. Kilo Dots 3 Note Preview (`dots-studio/dots-3-note-preview:free`; keyless free lane via Kilo Gateway, model via `KILO_DOTS_MODEL`)
+11. Ollama qwen3:8b (local offline fallback tail, deep-mode only; `OLLAMA_MODEL`, disable via `OLLAMA_ENABLED=false`)
 
 Fast mode answers use only lanes 6 + 9 (Gemini 3.1 Flash Lite,
 Nemotron Ultra) and fail honestly when both are down; Deep Mode uses
