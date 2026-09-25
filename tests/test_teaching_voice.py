@@ -73,7 +73,7 @@ def test_admin_compact_passes_without_recall():
         "### Administrative Information\n"
         "- Course: Graph Theory (CSE 0613-4125)\n- Credit: 3.00\n"
         "**Source:** [slide 1]\n"
-        "Nothing technical here. Let's move on."
+        "Nothing technical here. Say Next when ready."
     )
     assert _validate_teaching_draft(admin, 1, 1) == []
 

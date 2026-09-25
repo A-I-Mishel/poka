@@ -221,6 +221,16 @@ function msgEl(m, idx) {
       }
       body.appendChild(fb);
     }
+    /* Teaching turns (source header present): hint the continuation cue.
+     * textContent-only like the notes above; model output stays cue-free. */
+    try {
+      if (String((m && m.content) || "").indexOf("\uD83D\uDCD8 FILE:") !== -1) {
+        var th = document.createElement("div");
+        th.className = "fb-note";
+        th.textContent = "Say Next (or ok) to continue to the next slide.";
+        body.appendChild(th);
+      }
+    } catch (e) { /* never break rendering for a hint */ }
     /* Typo corrections ("craeate" -> "create"): textContent-only so
      * user-derived strings can never inject HTML. Backend caps pairs. */
     if (m && m.corrections && m.corrections.length) {

@@ -90,6 +90,53 @@ def test_recall_answer_continues_session():
     assert _is_teaching_continuation("A vertex is a node", hist2) is False
 
 
+def test_bare_ack_advances_active_session():
+    """Screenshot regression: ok/go after an admin slide must continue.
+
+    Admin turns end without a closing question, so short acks are the
+    only way forward. Non-teaching chats and new intents stay out.
+    """
+    from backend.chatflow import _is_teaching_continuation
+
+    admin_hist = [{"role": "assistant",
+                   "content": "📘 FILE: Lecture_01\nSlides: 1-1\n### Administrative Information\n"
+                              "- Course CSE\n**Source:** [slide 1]\n"
+                              "Nothing technical here. Say Next when ready."}]
+    for ack in ("ok", "OK", "go", "yes", "yeah", "got it", "done"):
+        assert _is_teaching_continuation(ack, admin_hist) is True, ack
+    # Concept turns keep working too.
+    concept_hist = [{"role": "assistant",
+                     "content": "📘 FILE: Lecture_01\nSlides: 1-3\n## Concept: Graph\n"
+                                "**Source:** [slide 1]\nWhat is a vertex?"}]
+    assert _is_teaching_continuation("ok", concept_hist) is True
+    # Guards: no session, new intent, or long qualified ack.
+    assert _is_teaching_continuation("ok", []) is False
+    assert _is_teaching_continuation("next song", admin_hist) is False
+    assert _is_teaching_continuation("ok, but explain that proof again in detail please?", admin_hist) is False
+
+
+def test_next_recovers_after_generic_fallback():
+    """One generic fallback must not kill the session for Next."""
+    from backend.chatflow import _is_teaching_continuation
+
+    hist = [
+        {"role": "user", "content": "teach me"},
+        {"role": "assistant",
+         "content": "📘 FILE: Lecture_01\nSlides: 1-1\n### Administrative Information\n- C\n"
+                    "**Source:** [slide 1]\nNothing technical here. Say Next when ready."},
+        {"role": "user", "content": "ok"},
+        {"role": "assistant", "content": "Whenever you're ready, send the next slide!"},
+    ]
+    assert _is_teaching_continuation("Next", hist) is True
+    # Two fallbacks push the header out of the old window=3 but the
+    # session still recovers inside the aligned window=10.
+    hist2 = hist + [
+        {"role": "user", "content": "hello?"},
+        {"role": "assistant", "content": "Hi there! How can I help?"},
+    ]
+    assert _is_teaching_continuation("Next", hist2) is True
+
+
 def test_admin_block_detection():
     from backend.chatflow import _is_admin_block
 

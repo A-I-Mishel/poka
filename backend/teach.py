@@ -38,6 +38,25 @@ TEACHING_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
 TEACHING_CONTINUATION_MAX_CHARS: int = 80
 
 
+# Bare acknowledgments that advance an active teaching session ("ok" after
+# an admin slide, which ends without a closing question). Teaching-scoped
+# only — the global CONTINUATION_SIGNALS stay untouched so image/doc
+# file-reuse behavior is unchanged. Checked with a tight length guard in
+# _is_teaching_continuation; NEW_INTENT still wins.
+_TEACHING_ACK_SIGNALS = (
+    "ok",
+    "okay",
+    "yes",
+    "yeah",
+    "yep",
+    "yup",
+    "done",
+    "go",
+    "got it",
+    "understood",
+)
+
+
 _TEACHING_FILE_RE_NEW = re.compile(
     r"📘\s*FILE:\s*(.+?)\s*\n\s*Slides?\s*:\s*(\d+)(?:\s*[-–]\s*(\d+))?",
     re.IGNORECASE,
@@ -134,7 +153,7 @@ TEACHING_SUFFIX = (
     "\"### Administrative Information\" + 2-4 short bullets + \"**Source:** [slide N]\" — "
     "never fake Definition/Example blocks for admin, never ask "
     "closing questions about admin trivia, and close admin turns with one plain line "
-    "like \"Nothing technical here. Let's move on.\" "
+    "like \"Nothing technical here. Say Next when ready.\" "
     "Format: source header as \"📘 FILE: <name>\" newline \"Slides: X-Y\"; then "
     "ONE \"## Concept: <name> (Slide N)\" block written like a friendly teacher, "
     "not a form: 2-4 short plain-word lines saying what the slide means, then "
@@ -410,21 +429,24 @@ def _is_pace_feedback(text: str, history: List[Dict[str, Any]]) -> bool:
 
 
 def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
-    """True for "Next/continue" follow-ups AND closing-question answers in a session.
+    """True for "Next/continue" follow-ups, bare acks, AND closing-question answers.
 
-    Requires an explicit `teaching.active` flag in the last 3 messages
-    (flag+recency). Old chats without flags fall back to a normalized
-    header scan in the last 3. This prevents "teach A → unrelated Q →
-    continue" incorrectly resuming A. Never raises.
+    Requires an explicit `teaching.active` flag in the last 10 messages
+    (flag+recency, same window as `_apply_teaching_session`). Old chats
+    without flags fall back to a normalized header scan in the last 10.
+    Bare acknowledgments ("ok", "go", "yes") advance an active session —
+    admin turns end without a closing question, so acks are the only way
+    forward there. "teach A → unrelated Q → continue" can resume A within
+    the window; NEW_INTENT ("next song") always exits instead. Never raises.
     """
     try:
         t = str(text or "")
         if not t:
             return False
-        # Active session requires explicit flag in last 3; old chats use
-        # normalized header scan in last 3 (not last 10) for same recency.
+        # Active session requires explicit flag in last 10; old chats use
+        # normalized header scan in last 10 (same recency as the stage).
         try:
-            _flag = _teaching_flag_in_recent(history, window=3)
+            _flag = _teaching_flag_in_recent(history, window=10)
             if _flag is not None:
                 has_teaching = True
             else:
@@ -433,7 +455,7 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
                 if _any_flag is not None:
                     has_teaching = False
                 else:
-                    has_teaching = _has_teaching_header_in_recent(history, window=3)
+                    has_teaching = _has_teaching_header_in_recent(history, window=10)
         except Exception:
             has_teaching = False
         if not has_teaching:
@@ -448,6 +470,11 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
         if _signals(low, NEW_INTENT_SIGNALS):
             return False
         if len(t.strip()) <= TEACHING_CONTINUATION_MAX_CHARS and _signals(low, CONTINUATION_SIGNALS):
+            return True
+        # Bare acknowledgments advance an active session (admin turns have
+        # no closing question; short acks are the only way forward there).
+        # Tight length guard so "ok, but explain X again" routes normally.
+        if len(t.strip()) <= 20 and _signals(low, _TEACHING_ACK_SIGNALS):
             return True
         # A short answer to a closing question continues the session for
         # evaluation (correct/partial/incorrect) before advancing.
