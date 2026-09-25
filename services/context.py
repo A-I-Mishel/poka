@@ -15,6 +15,10 @@ _limit_key: ContextVar[Optional[str]] = ContextVar(
     "pluto_limit_key", default=None
 )
 
+_preferred_vision_tier: ContextVar[Optional[str]] = ContextVar(
+    "pluto_preferred_vision_tier", default=None
+)
+
 
 def set_current_user_id(user_id: Optional[str]) -> None:
     """Bind a user ID to the current request context."""
@@ -38,3 +42,20 @@ def set_limit_key(key: Optional[str]) -> None:
 def get_limit_key() -> Optional[str]:
     """Return the rate-limit identity bound to the current request, if any."""
     return _limit_key.get()
+
+
+def set_preferred_vision_tier(tier: Optional[str]) -> None:
+    """Bind the request's pinned tier for vision-OCR preference.
+
+    Document picture transcription (pdf_tool/document_tool) runs inside
+    pool-worker threads that never inherit this binding — callers must
+    re-bind it there like the user ID (see _run_tool_with_context).
+    Vision helpers only honor it when the tier is vision-capable;
+    otherwise cascade order applies unchanged.
+    """
+    _preferred_vision_tier.set(tier)
+
+
+def get_preferred_vision_tier() -> Optional[str]:
+    """Return the pinned tier bound for vision-OCR preference, if any."""
+    return _preferred_vision_tier.get()

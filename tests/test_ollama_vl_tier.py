@@ -101,3 +101,57 @@ def test_first_token_timeout_ollama_override(monkeypatch):
     monkeypatch.setenv("PLUTO_FIRST_TOKEN_TIMEOUT_OLLAMA", "30")
     assert _first_token_timeout_for_tier("Ollama VL 3B") == 30.0
     assert _first_token_timeout_for_tier("Groq") == 12.0
+
+
+def test_preferred_vision_tier_defaults_unset():
+    from services.context import get_preferred_vision_tier, set_preferred_vision_tier
+
+    assert get_preferred_vision_tier() is None
+    set_preferred_vision_tier("Ollama VL 3B")
+    assert get_preferred_vision_tier() == "Ollama VL 3B"
+    set_preferred_vision_tier(None)
+    assert get_preferred_vision_tier() is None
+
+
+def test_ocr_prefers_pinned_vision_tier(monkeypatch):
+    """Pinned VL tier transcribes first; text-only pins are skipped."""
+    from types import SimpleNamespace
+
+    import agent.vision as vision_mod
+    from services.context import set_preferred_vision_tier
+
+    seen = []
+
+    def _vl():
+        seen.append("vl")
+        return object()
+
+    def _groq():
+        seen.append("groq")
+        raise AssertionError("text-only pinned tier must be skipped")
+
+    def _fake_usable(first, tiers):
+        order = [("Groq", _groq), ("Ollama VL 3B", _vl)]
+        if first == "Ollama VL 3B":
+            order.reverse()
+        return order
+
+    def _boom(llm, messages, **kwargs):
+        return SimpleNamespace(content="transcribed text")
+
+    import agent as agent_mod
+
+    monkeypatch.setattr(vision_mod, "_usable_tiers", _fake_usable)
+    monkeypatch.setattr(agent_mod, "_invoke_bounded", _boom)
+    monkeypatch.setattr(vision_mod, "encode_image_bytes",
+                        lambda blob: ("data:image/png;base64,AAA", None))
+    try:
+        set_preferred_vision_tier("Ollama VL 3B")
+        assert vision_mod.vision_ocr_bytes(b"fake-image-bytes") == "transcribed text"
+        assert seen == ["vl"]
+        seen.clear()
+        set_preferred_vision_tier("Groq")
+        assert vision_mod.vision_ocr_bytes(b"fake-image-bytes") == "transcribed text"
+        assert seen == ["vl"]
+    finally:
+        set_preferred_vision_tier(None)

@@ -28,6 +28,28 @@ import agent  # package-attr routing: test doubles on agent._invoke_bounded stay
 from agent.executor import TokenStream
 from agent.prompts import _as_text, strip_internal_reasoning
 
+
+def _preferred_vision_first() -> Optional[str]:
+    """Pinned tier for vision-OCR preference, or None (never raises).
+
+    Honors the request's picker selection when it names a vision-capable
+    tier (e.g. Ollama VL 3B): document picture transcription then starts
+    there instead of at the cascade head. Anything else (unset, unknown,
+    text-only) yields None and cascade order applies unchanged.
+    """
+    try:
+        from services.context import get_preferred_vision_tier
+
+        first = get_preferred_vision_tier()
+    except Exception:
+        return None
+    try:
+        if first and vision_supported_tier(str(first)):
+            return str(first)
+    except Exception:
+        return None
+    return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +75,8 @@ def vision_ocr_bytes(blob: bytes, budget: Optional[RequestBudget] = None) -> str
             "Return only the transcription, no commentary."
         )
         payload = build_vision_messages(prompt, [url])
-        for name, getter in _usable_tiers(None, None):
+        first = _preferred_vision_first()
+        for name, getter in _usable_tiers(first, None):
             if not vision_supported_tier(name):
                 continue
             try:
@@ -115,7 +138,8 @@ def vision_ocr_many(blobs: Sequence[bytes], budget: Optional[RequestBudget] = No
         for i in live:
             parts.append({"type": "image_url", "image_url": {"url": urls[i]}})
         payload = parts  # type: ignore[assignment]
-        for name, getter in _usable_tiers(None, None):
+        first = _preferred_vision_first()
+        for name, getter in _usable_tiers(first, None):
             if not vision_supported_tier(name):
                 continue
             try:
@@ -176,12 +200,15 @@ def _try_vision_answer(
     passed as on_token is shared (never re-wrapped).
     """
     data_urls: List[str] = []
+    total_images = len(image_upload_ids or [])
     for ref in (image_upload_ids or [])[:3]:
         url, err = prepare_image_data_url(ref)
         if url:
             data_urls.append(url)
         else:
             logger.info("req=%s vision skipped upload %s: %s", request_id, ref, err)
+    if total_images > 3:
+        logger.info("req=%s vision capped at 3 of %d images", request_id, total_images)
     # Legacy staged paths (pre-ID attachments) resolve through the vault too.
     if not data_urls:
         for ref in (image_upload_ids or [])[:3]:
@@ -221,6 +248,9 @@ def _try_vision_answer(
             if not text:
                 continue
             logger.info("req=%s tier=%s vision ok", request_id, name)
+            if total_images > 3:
+                text = (text.rstrip() + f"\n\n[Note: answered from the first 3 of "
+                        f"{total_images} images; mention the others to continue.]")
             return {
                 "output": text,
                 "active_tier": name,

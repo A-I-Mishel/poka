@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from services.context import get_current_user_id, get_limit_key, set_limit_key, set_current_user_id
+from services.context import get_current_user_id, get_limit_key, get_preferred_vision_tier, set_limit_key, set_current_user_id, set_preferred_vision_tier
 from services.context_budget import CTX_HISTORY_TOKENS, CTX_MEMORY_TOKENS, fit_history, fit_text
 from services.limits import (
     MAX_EXTERNAL_TOKENS,
@@ -188,18 +188,22 @@ def _fallback_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
     return (found + candidates)[:4]
 
 
-def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_key: Any = None) -> Any:
+def _run_tool_with_context(user_id: Any, tool: Any, args: Dict[str, Any], limit_key: Any = None, vision_tier: Any = None) -> Any:
     """Invoke a tool with the submitting request's user bound.
 
     Worker threads do not inherit contextvars, so the user ID (and the
     rate-limit identity) captured on the calling thread are explicitly
     restored here. Without this, every tool would see "no user" and
     deny vault access, and limits would fall back to per-tool-call keys.
+    The vision-tier preference rides the same path so document picture
+    transcription prefers the pinned tier.
     """
     if user_id is not None:
         set_current_user_id(user_id)
     if limit_key is not None:
         set_limit_key(limit_key)
+    if vision_tier is not None:
+        set_preferred_vision_tier(vision_tier)
     return tool.invoke(args)
 
 
@@ -236,9 +240,10 @@ def _execute_tool_call(tool_call: Any, budget: Optional[RequestBudget] = None) -
     try:
         user_id = get_current_user_id()
         limit_key = get_limit_key()
+        vision_tier = get_preferred_vision_tier()
         with obs_timed(f"tool.{name}") as rec:
             out = _call_bounded(
-                lambda: _run_tool_with_context(user_id, tool, args, limit_key),
+                lambda: _run_tool_with_context(user_id, tool, args, limit_key, vision_tier),
                 TOOL_TIMEOUT_SECONDS,
                 f"Tool {name}",
             )
@@ -307,12 +312,15 @@ def _execute_tool_calls_parallel(
         # and every user-scoped read tool denies with "no user context".
         caller_user_id = get_current_user_id()
         caller_limit_key = get_limit_key()
+        caller_vision_tier = get_preferred_vision_tier()
 
         def _call_with_caller_context(tc: Any) -> str:
             if caller_user_id is not None:
                 set_current_user_id(caller_user_id)
             if caller_limit_key is not None:
                 set_limit_key(caller_limit_key)
+            if caller_vision_tier is not None:
+                set_preferred_vision_tier(caller_vision_tier)
             return _execute_tool_call(tc, budget)
 
         with ThreadPoolExecutor(max_workers=min(max_workers, len(read_only))) as executor:

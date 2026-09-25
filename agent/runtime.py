@@ -472,6 +472,16 @@ def answer_with_fallback(
     request_id: str = uuid.uuid4().hex[:8]
     started_at: float = time.time()
     user_id = get_current_user_id()
+    # Vision-OCR preference follows the pinned tier: document picture
+    # transcription prefers it (when vision-capable) instead of always
+    # starting at the cascade head. Workers re-bind it explicitly
+    # (pool threads never inherit contextvars).
+    try:
+        from services.context import set_preferred_vision_tier as _set_vt
+
+        _set_vt(first)
+    except Exception:
+        logger.debug("vision-tier preference bind failed", exc_info=True)
     budget = RequestBudget()
     try:
         if cancel is not None and cancel():

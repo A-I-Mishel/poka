@@ -182,6 +182,39 @@ async def _lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         _prewarm_tokenizer()
     except Exception:
         logger.warning("tokenizer prewarm failed", exc_info=True)
+    # Pre-warm the local Ollama vision model (cold VRAM load moves out
+    # of the first real question). Daemon thread, best-effort: never
+    # blocks or fails startup. Skipped when the VL lane is disabled or
+    # PLUTO_OLLAMA_WARMUP=0.
+    try:
+        import threading as _th
+
+        def _warm_ollama_vl() -> None:
+            try:
+                import config as _cfg
+
+                if not _cfg._ollama_vl_enabled():
+                    return
+                import httpx as _httpx
+
+                _httpx.post(
+                    "http://localhost:11434/api/generate",
+                    json={"model": _cfg.OLLAMA_VL_MODEL, "prompt": "hi",
+                          "stream": False},
+                    timeout=180.0,
+                )
+                logger.info("ollama VL model pre-warmed")
+            except Exception:
+                logger.debug("ollama VL prewarm skipped", exc_info=True)
+
+        try:
+            _warm_opt = (get_secret("PLUTO_OLLAMA_WARMUP", "1") or "1")
+        except Exception:
+            _warm_opt = "1"
+        if str(_warm_opt).strip().lower() not in ("0", "false", "no", "off"):
+            _th.Thread(target=_warm_ollama_vl, daemon=True).start()
+    except Exception:
+        logger.debug("ollama prewarm thread failed", exc_info=True)
     # Auto-configure Redis rate limiter if REDIS_URL is set.
     # In private mode a configured-but-unreachable Redis fails fast
     # (fail-closed for abuse/billing); in open mode we fall back to
