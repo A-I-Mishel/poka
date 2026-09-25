@@ -164,7 +164,6 @@ svg{display:block;flex-shrink:0}
 .menu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 8px;border-radius:6px;color:var(--t2);font-size:12.5px;text-align:left}
 .menu button:hover{background:var(--s2);color:var(--tx)}
 .menu button svg{color:var(--t3)}
-.menu small{margin-left:auto;font-size:10.5px;color:var(--t3)}
 .ctx{position:fixed;min-width:150px;background:var(--surface);border:1px solid var(--bd2);border-radius:9px;padding:4px;box-shadow:0 10px 28px rgba(0,0,0,.35);z-index:60}
 .ctx button{display:flex;width:100%;padding:7px 9px;border-radius:6px;font-size:12.5px;color:var(--t2);text-align:left}
 .ctx button:hover{background:var(--s2);color:var(--tx)}
@@ -302,7 +301,6 @@ svg{display:block;flex-shrink:0}
   .seg{flex-shrink:0}
   .send{width:34px;height:32px;flex-shrink:0}
   .attach-wrap .menu{left:auto;right:0;max-width:calc(100vw - 32px)}
-  .attach-wrap .menu small{white-space:normal;text-align:right;max-width:45vw;line-height:1.4}
   .bubble{max-width:100%;border-radius:12px}
   .msg.ai{gap:8px}
   .mark-p{display:none}
