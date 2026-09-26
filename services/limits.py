@@ -28,6 +28,7 @@ ALLOWED_UPLOAD_EXTS: frozenset = frozenset({
 MAX_UPLOADS_PER_USER: int = 100
 MAX_USER_BYTES: int = 1024 * 1024 * 1024
 MAX_OUTPUT_AGE_DAYS: int = 30
+MAX_MSGS_PER_CHAT: int = 100
 
 # CSV parse guards (all checked BEFORE pandas runs).
 MAX_CSV_COLUMNS: int = 1000

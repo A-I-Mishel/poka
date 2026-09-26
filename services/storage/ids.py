@@ -9,7 +9,6 @@ import uuid
 from typing import Any, Dict
 
 MAX_STORED_CHATS: int = 50
-MAX_MSGS_PER_CHAT: int = 100
 # Attachment kinds that survive clean_messages. Must cover every kind
 # services.files.kind_for_ext() can produce (pdf/csv/image/document) —
 # anything missing here is silently stripped from history on every save,

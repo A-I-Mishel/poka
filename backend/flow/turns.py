@@ -11,7 +11,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 import agent
 from agent.budget import BudgetExhausted, RequestBudget, TurnCancelled
 from agent.executor import ExecutorBusyError
-from services.limits import MAX_CHAT_TITLE_CHARS, MAX_DISPLAY_NAME_CHARS
+from services.limits import MAX_CHAT_TITLE_CHARS, MAX_DISPLAY_NAME_CHARS, MAX_MSGS_PER_CHAT
 from services.storage import (is_valid_id, new_conversation_id)
 from services.timeutil import utcnow_iso
 from services.storage.io import path_lock as _chats_path_lock
@@ -971,7 +971,7 @@ def _append_turn_atomic(store: Any, *msgs: Dict[str, Any]) -> None:
         if not isinstance(current, list):
             current = []
         data["chats"] = chats
-        data["current"] = list(current) + clean
+        data["current"] = (list(current) + clean)[-MAX_MSGS_PER_CHAT:]
         return data
 
     try:
@@ -979,7 +979,7 @@ def _append_turn_atomic(store: Any, *msgs: Dict[str, Any]) -> None:
     except AttributeError:
         # Fallback for test doubles without _mutate_chats.
         chats, current, _w = _load_state(store)
-        store.save_chats(chats, list(current) + clean)
+        store.save_chats(chats, (list(current) + clean)[-MAX_MSGS_PER_CHAT:])
 
 
 def _replace_message_atomic(store: Any, index: int, msg: Dict[str, Any]) -> None:

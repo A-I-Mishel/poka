@@ -11,7 +11,6 @@ import logging
 from services.storage.ids import (
     ATTACH_KINDS,
     MAX_MODEL_NAME_LEN,
-    MAX_MSGS_PER_CHAT,
     MAX_PROJECT_NAME_LEN,
     MAX_SOURCES,
     MAX_SOURCE_DOMAIN_LEN,
@@ -24,6 +23,7 @@ from services.storage.ids import (
     _SPEC_TOOLS,
     is_valid_id,
 )
+from services.limits import MAX_MSGS_PER_CHAT
 
 logger = logging.getLogger(__name__)
 

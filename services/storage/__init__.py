@@ -25,7 +25,6 @@ from services.storage.ids import (
     _SPEC_TOOLS,
     ATTACH_KINDS,
     MAX_MODEL_NAME_LEN,
-    MAX_MSGS_PER_CHAT,
     MAX_PROJECT_NAME_LEN,
     MAX_SOURCES,
     MAX_SOURCE_DOMAIN_LEN,
@@ -41,6 +40,7 @@ from services.storage.ids import (
     is_valid_id,
     new_conversation_id,
 )
+from services.limits import MAX_MSGS_PER_CHAT
 from services.storage.io import (
     _LOCKS_MAX,
     _acquire_interprocess,
