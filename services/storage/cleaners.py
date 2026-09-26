@@ -225,11 +225,14 @@ def clean_messages(messages: Any) -> List[Dict[str, Any]]:
                         pa.append({"id": str(a["id"])[:64], "tool": str(a["tool"])[:64], "summary": str(a.get("summary", ""))[:120]})
                 if pa:
                     entry["pending_approvals"] = pa
-            # Teaching session cursor: explicit session flag so continuation
-            # does not rely solely on 📘 FILE: header scan. Strict types,
-            # capped lengths — mirrors pending_approvals hygiene above.
-            # Inactive flags (messages merely quoting a lesson) are kept
-            # too, so the UI hint renders only on genuine teaching turns.
+            # Teaching session cursor + awaiting pointer: explicit session
+            # flag so continuation does not rely solely on 📘 FILE: header
+            # scan. Strict types, capped lengths — mirrors
+            # pending_approvals hygiene above. Inactive flags (messages
+            # merely quoting a lesson) are kept too, so the UI hint renders
+            # only on genuine teaching turns. `awaiting` (v>=1) is the
+            # bare-ack routing pointer; unknown/absent means pre-pointer
+            # chat (backfill derives it once at read time).
             try:
                 _t = m.get("teaching")
                 if isinstance(_t, dict) and "active" in _t:
@@ -239,11 +242,28 @@ def clean_messages(messages: Any) -> List[Dict[str, Any]]:
                         _cursor = max(0, int(_cursor))
                     except Exception:
                         _cursor = 0
-                    entry["teaching"] = {
-                        "active": bool(_t.get("active")),
-                        "file": _tfile,
-                        "cursor": _cursor,
-                    }
+                    if "awaiting" not in _t and "v" not in _t:
+                        # Pre-pointer chat: keep the legacy 3-key shape so
+                        # readers derive the pointer once via backfill
+                        # instead of mistaking it for a genuine "none".
+                        entry["teaching"] = {
+                            "active": bool(_t.get("active")),
+                            "file": _tfile,
+                            "cursor": _cursor,
+                        }
+                    else:
+                        _await = str(_t.get("awaiting", "") or "")[:160]
+                        try:
+                            _tv = int(_t.get("v", 0) or 0)
+                        except Exception:
+                            _tv = 0
+                        entry["teaching"] = {
+                            "active": bool(_t.get("active")),
+                            "file": _tfile,
+                            "cursor": _cursor,
+                            "awaiting": _await or "none",
+                            "v": _tv,
+                        }
             except Exception:
                 logger.debug("teaching cursor clean failed; dropping flag", exc_info=True)
             cleaned.append(entry)

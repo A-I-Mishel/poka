@@ -305,8 +305,17 @@ def build_chat_history(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
 def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
                      searched: bool, deep_mode: bool, tier: str,
                      fallback: Optional[Dict[str, str]] = None,
-                     teaching: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Response metadata stored on the message (locally known facts only)."""
+                     teaching: Optional[Dict[str, Any]] = None,
+                     *, awaiting: str) -> Dict[str, Any]:
+    """Response metadata stored on the message (locally known facts only).
+
+    `awaiting` is REQUIRED (keyword-only, no default): every assistant-turn
+    writer must state what Pluto is waiting on the user to respond to
+    ("teaching:{file}:{cursor}", "none", or "ambiguous:..." — the latter
+    produced ONLY by _awaiting_for_turn in turns.py). There is no valid
+    "I don't know": pass "none". Forgetting it is a TypeError, not a
+    silent stale pointer.
+    """
     meta: Dict[str, Any] = {
         "mode": "deep" if deep_mode else "fast",
         "searched": bool(searched),
@@ -319,6 +328,10 @@ def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
     # Explicit teaching session cursor — session boundary does not rely
     # solely on 📘 FILE: header scan. Validated + capped at write time;
     # cleaners.py whitelists the same shape on reload.
+    # Always-emit: every turn stores the teaching dict (active or not) so
+    # readers never branch on missing-vs-False. Non-teaching turns stamp
+    # active:False with the current awaiting pointer.
+    _awaiting = str(awaiting or "none")[:160] or "none"
     if isinstance(teaching, dict) and teaching.get("active") is True:
         try:
             _cursor = max(0, int(teaching.get("cursor", 0)))
@@ -328,6 +341,16 @@ def _assistant_meta(tools_used: List[str], sources: List[Dict[str, str]],
             "active": True,
             "file": str(teaching.get("file", "") or "")[:120],
             "cursor": _cursor,
+            "awaiting": str(teaching.get("awaiting", "") or _awaiting)[:160] or "none",
+            "v": 1,
+        }
+    else:
+        meta["teaching"] = {
+            "active": False,
+            "file": "",
+            "cursor": 0,
+            "awaiting": _awaiting,
+            "v": 1,
         }
     names = [t for t in tools_used if isinstance(t, str) and t]
     meta["search_executed"] = "web_search" in names

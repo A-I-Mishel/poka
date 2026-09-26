@@ -498,37 +498,74 @@ def _is_dont_know(text: str, history: List[Dict[str, Any]]) -> bool:
         return False
 
 
+def _pointer_in_recent(history: List[Dict[str, Any]]) -> Tuple[Optional[str], int]:
+    """Awaiting pointer from the last assistant turn (never raises).
+
+    Returns (awaiting, v): v>=1 means a post-pointer chat whose routing
+    is decided by the pointer alone; (None, 0) means pre-pointer history
+    (backfill derives it once via the legacy window below).
+    """
+    try:
+        for m in reversed(history or []):
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                t = m.get("teaching")
+                if isinstance(t, dict):
+                    try:
+                        v = int(t.get("v", 0) or 0)
+                    except Exception:
+                        logger.debug("pointer version parse failed", exc_info=True)
+                        v = 0
+                    if v >= 1:
+                        a = str(t.get("awaiting", "") or "").strip()
+                        return (a[:160] or "none", v)
+                    return (None, 0)
+                return (None, 0)
+    except Exception:
+        logger.debug("pointer read failed", exc_info=True)
+    return (None, 0)
+
+
 def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
     """True for "Next/continue" follow-ups, bare acks, AND closing-question answers.
 
-    Requires an explicit `teaching.active` flag in the last 10 messages
-    (flag+recency, same window as `_apply_teaching_session`). Old chats
-    without flags fall back to a normalized header scan in the last 10.
-    Bare acknowledgments ("ok", "go", "yes") advance an active session —
-    admin turns end without a closing question, so acks are the only way
-    forward there. "teach A → unrelated Q → continue" can resume A within
-    the window; NEW_INTENT ("next song") always exits instead. An explicit
-    new task ("convert ... to docx") always exits: each message is
-    evaluated on its own and the topic never assumes continuation.
+    PRECEDENCE (pointer migration): when the last assistant message carries
+    teaching.awaiting with v>=1, the pointer decides and the 10-message
+    window below is IGNORED — no exceptions, no merging. The window runs
+    only as backfill for pre-pointer chats (no v key). Disagreement always
+    resolves to the pointer: pointer-teaching + flushed window still
+    continues; pointer-none + live marker still stops (the reported
+    "ok resumes a stale lecture" bug). Bare acks continue teaching ONLY
+    when the pointer points at teaching — never from a bare window hit.
+    An explicit new task ("convert ... to docx") always exits: each message
+    is evaluated on its own and the topic never assumes continuation.
     Never raises.
     """
     try:
         t = str(text or "")
         if not t:
             return False
+        try:
+            _awaiting, _pv = _pointer_in_recent(history)
+        except Exception:
+            _awaiting, _pv = None, 0
+        _pointer_live = bool(_pv >= 1)
         # Active session requires explicit flag in last 10; old chats use
         # normalized header scan in last 10 (same recency as the stage).
+        # BACKFILL ONLY: skipped entirely when a live pointer exists.
         try:
-            _flag = _teaching_flag_in_recent(history, window=10)
-            if _flag is not None:
-                has_teaching = True
+            if _pointer_live:
+                has_teaching = str(_awaiting or "").startswith("teaching:") or str(_awaiting or "").startswith("ambiguous:")
             else:
-                # No flags anywhere in full history = old chat → header fallback.
-                _any_flag = _teaching_flag_in_recent(history, window=1000)
-                if _any_flag is not None:
-                    has_teaching = False
+                _flag = _teaching_flag_in_recent(history, window=10)
+                if _flag is not None:
+                    has_teaching = True
                 else:
-                    has_teaching = _has_teaching_header_in_recent(history, window=10)
+                    # No flags anywhere in full history = old chat → header fallback.
+                    _any_flag = _teaching_flag_in_recent(history, window=1000)
+                    if _any_flag is not None:
+                        has_teaching = False
+                    else:
+                        has_teaching = _has_teaching_header_in_recent(history, window=10)
         except Exception:
             has_teaching = False
         if not has_teaching:
@@ -549,11 +586,20 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
                 return False
         except Exception:
             logger.debug("explicit-task check failed", exc_info=True)
+        # Pointer gate: with a live pointer, Next/continue/recall/acks
+        # require it to point at teaching (or compound). Pointer-none
+        # stops here even when the legacy window still shows markers.
+        if _pointer_live and not (
+                str(_awaiting or "").startswith("teaching:")
+                or str(_awaiting or "").startswith("ambiguous:")):
+            return False
         if len(t.strip()) <= TEACHING_CONTINUATION_MAX_CHARS and _signals(low, CONTINUATION_SIGNALS):
             return True
         # Bare acknowledgments advance an active session (admin turns have
         # no closing question; short acks are the only way forward there).
         # Tight length guard so "ok, but explain X again" routes normally.
+        # With a live pointer this fires ONLY on pointer-teaching (gated
+        # above) — never from a bare window hit.
         if len(t.strip()) <= 20 and _signals(low, _TEACHING_ACK_SIGNALS):
             return True
         # A short answer to a closing question continues the session for

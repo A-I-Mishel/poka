@@ -133,6 +133,85 @@ def _teaching_meta_for_turn(send_text: str, output: str) -> Optional[Dict[str, A
         return None
 
 
+# Marker the teaching stage appends when it attaches a lecture-continue
+# offer onto a turn whose primary thread is NOT teaching. Parsing this
+# marker is the ONLY path to an "ambiguous:..." pointer value — no other
+# call site may construct a compound state (enforced by test).
+_COMPOUND_THREAD_MARKER = "[Thread: teaching-offer on non-teaching answer]"
+
+
+def _pointer_of(msg: Any) -> str:
+    """Awaiting pointer carried by one assistant message (never raises)."""
+    try:
+        if isinstance(msg, dict):
+            t = msg.get("teaching")
+            if isinstance(t, dict):
+                a = str(t.get("awaiting", "") or "").strip()
+                if a:
+                    return a[:160]
+    except Exception:
+        logger.debug("pointer read failed", exc_info=True)
+    return "none"
+
+
+def _prior_awaiting(history: Any) -> str:
+    """Pointer from the last assistant turn; legacy-derived when missing.
+
+    Post-upgrade turns always carry teaching.awaiting (always-emit), so a
+    missing pointer means a pre-pointer chat: derive via the legacy
+    teaching state once (backfill) instead of inventing "none" and
+    killing a live pre-upgrade lecture. Never raises.
+    """
+    try:
+        for m in reversed(history or []):
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                t = m.get("teaching")
+                if isinstance(t, dict) and str(t.get("awaiting", "") or "").strip():
+                    return str(t.get("awaiting", "")).strip()[:160]
+                try:
+                    from backend.teach import _last_teaching_state
+                    _name, _end = _last_teaching_state(history)
+                except Exception:
+                    return "none"
+                if _name:
+                    try:
+                        _cur = max(0, int(_end or 0))
+                    except Exception:
+                        logger.debug("prior pointer cursor parse failed", exc_info=True)
+                        _cur = 0
+                    return f"teaching:{str(_name or '')[:120]}:{_cur}"
+                return "none"
+    except Exception:
+        logger.debug("prior pointer read failed", exc_info=True)
+    return "none"
+
+
+def _awaiting_for_turn(send_text: str, output: str, teaching_meta: Any,
+                       prev_awaiting: str) -> str:
+    """Pointer for a fresh model-answer turn (never raises).
+
+    SOLE producer of "ambiguous:..." values: only the teaching stage may
+    append _COMPOUND_THREAD_MARKER, so only this function can return a
+    compound state. Teaching turns point at the lecture; all other model
+    answers resolve their thread ("none"). Fallback/clarify/greeting
+    turns do NOT come here — their call sites carry prev_awaiting forward.
+    """
+    _ = prev_awaiting
+    try:
+        if isinstance(teaching_meta, dict) and teaching_meta.get("active") is True:
+            if _COMPOUND_THREAD_MARKER in str(send_text or ""):
+                return "ambiguous:teaching+plan"
+            try:
+                _cur = max(0, int(teaching_meta.get("cursor", 0) or 0))
+            except Exception:
+                logger.debug("turn pointer cursor parse failed", exc_info=True)
+                _cur = 0
+            return f"teaching:{str(teaching_meta.get('file', '') or '')[:120]}:{_cur}"
+    except Exception:
+        logger.debug("turn pointer build failed", exc_info=True)
+    return "none"
+
+
 def _atomic_turn(store: Any, fn: Any) -> Any:
     """Execute a turn atomically under the chat file lock.
 
@@ -243,12 +322,17 @@ def _complete_turn(ctx: UserContext, send_text: str,
         _teaching_meta = _teaching_meta_for_turn(send_text, output)
     except Exception:
         _teaching_meta = None
+    try:
+        _awaiting = _awaiting_for_turn(send_text, output, _teaching_meta,
+                                       _prior_awaiting(prior_raw))
+    except Exception:
+        _awaiting = "none"
     assistant_msg: Dict[str, Any] = {
         "role": "assistant",
         "content": output,
         "time": utcnow_iso(),
         **_assistant_meta(tools_used, sources, force_search, deep_mode, tier,
-                          ui_fallback, _teaching_meta),
+                           ui_fallback, _teaching_meta, awaiting=_awaiting),
     }
     corrections = _sanitize_corrections(result)
     if corrections:
@@ -393,7 +477,7 @@ def run_chat(ctx: UserContext, content: str,
                         "it will appear above when ready. No need to resend."),
             "time": utcnow_iso(),
                 **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                                   "clarify", None),
+                                   "clarify", None, awaiting="none"),
         }
         return {
             "message": dupe_msg,
@@ -500,7 +584,8 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
                             "what should I call you?"),
                 "time": utcnow_iso(),
                 **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                                   "identity", None),
+                                   "identity", None,
+                                   awaiting=_prior_awaiting(current)),
             }
             _append_turn_atomic(store, user_msg, identity_msg)
             return {
@@ -526,7 +611,8 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             "content": clarify,
             "time": utcnow_iso(),
             **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                               "clarify", None),
+                               "clarify", None,
+                               awaiting=_prior_awaiting(current)),
         }
         _append_turn_atomic(store, user_msg, assistant_msg)
         return {
@@ -570,7 +656,8 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             "content": _greet_text,
             "time": utcnow_iso(),
             **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                               "greeting", None),
+                               "greeting", None,
+                               awaiting=_prior_awaiting(current)),
         }
         _append_turn_atomic(store, user_msg, greeting_msg)
         return {
@@ -615,7 +702,7 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             "time": utcnow_iso(),
             **_assistant_meta([], [], bool(force_search), bool(deep_mode),
                                str(_repeat_hit.get("tier", "") or "repeat"),
-                               None),
+                               None, awaiting=_prior_awaiting(current)),
         }
         _append_turn_atomic(store, user_msg, repeat_msg)
         return {
@@ -669,7 +756,8 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         # never reach here; validation errors (ValueError) are the
         # caller's to fix, not to retry.
         _append_turn_atomic(store, user_msg, _failed_turn_message(
-            e, bool(force_search), bool(deep_mode)))
+            e, bool(force_search), bool(deep_mode),
+            awaiting=_prior_awaiting(current)))
         raise
 
     try:
@@ -682,12 +770,31 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
             try:
                 _repaired_teaching = _teaching_meta_for_turn(
                     send_text, fixed)
-                if _repaired_teaching:
-                    assistant_msg["teaching"] = _repaired_teaching
-                elif "teaching" in assistant_msg:
-                    # Repair removed header — session ended, drop flag so
-                    # stale cursor cannot resume a finished session.
-                    assistant_msg.pop("teaching", None)
+                try:
+                    _repaired_awaiting = _awaiting_for_turn(
+                        send_text, fixed, _repaired_teaching,
+                        _pointer_of(assistant_msg))
+                except Exception:
+                    _repaired_awaiting = "none"
+                if _repaired_teaching and _repaired_teaching.get("active") is True:
+                    try:
+                        _rcur = max(0, int(_repaired_teaching.get("cursor", 0) or 0))
+                    except Exception:
+                        _rcur = 0
+                    assistant_msg["teaching"] = {
+                        "active": True,
+                        "file": str(_repaired_teaching.get("file", "") or "")[:120],
+                        "cursor": _rcur,
+                        "awaiting": _repaired_awaiting,
+                        "v": 1,
+                    }
+                else:
+                    # Repair removed header — session ended, clear the pointer
+                    # so a stale cursor cannot resume a finished session.
+                    assistant_msg["teaching"] = {
+                        "active": False, "file": "", "cursor": 0,
+                        "awaiting": "none", "v": 1,
+                    }
             except Exception:
                 logger.debug("repaired teaching meta rebuild failed", exc_info=True)
             # Same-turn refinement, not a second episode: the turn
@@ -743,12 +850,17 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         logger.debug("repeat-cache store failed", exc_info=True)
     # Quoted-lesson stamp: output carries a FILE header but this turn
     # was not teaching (no flag above) — mark inactive so the UI
-    # continuation hint renders only on genuine teaching turns.
+    # continuation hint renders only on genuine teaching turns. Keeps
+    # the already-stamped awaiting pointer (the turn's live thread).
     try:
-        if ("teaching" not in assistant_msg
+        _t = assistant_msg.get("teaching")
+        if (not (isinstance(_t, dict) and _t.get("active") is True)
                 and "📘 FILE:" in str(assistant_msg.get("content", "") or "")):
             assistant_msg = dict(assistant_msg)
-            assistant_msg["teaching"] = {"active": False}
+            assistant_msg["teaching"] = {
+                "active": False, "file": "", "cursor": 0,
+                "awaiting": _pointer_of(assistant_msg), "v": 1,
+            }
     except Exception:
         logger.debug("teaching inactive stamp failed", exc_info=True)
     _append_turn_atomic(store, user_msg, assistant_msg)
@@ -800,7 +912,8 @@ def _sanitize_identity_hallucination(ctx: UserContext, text: str,
                         "what should I call you?"),
             "time": utcnow_iso(),
             **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                               "identity", None),
+                               "identity", None,
+                               awaiting=_pointer_of(assistant_msg)),
         }
         return clean, "identity", "simple"
     except Exception:
@@ -828,7 +941,8 @@ def _failed_turn_reason(error: Any) -> str:
         return "all models were unavailable"
 
 
-def _failed_turn_message(error: Any, force_search: bool, deep_mode: bool) -> Dict[str, Any]:
+def _failed_turn_message(error: Any, force_search: bool, deep_mode: bool,
+                         *, awaiting: str) -> Dict[str, Any]:
     """Recoverable failed-turn marker (user request stays retryable)."""
     return {
         "role": "assistant",
@@ -838,7 +952,8 @@ def _failed_turn_message(error: Any, force_search: bool, deep_mode: bool) -> Dic
             "or send a follow-up to continue."),
         "time": utcnow_iso(),
         "failed": True,
-        **_assistant_meta([], [], bool(force_search), bool(deep_mode), "", None),
+        **_assistant_meta([], [], bool(force_search), bool(deep_mode), "", None,
+                           awaiting=awaiting),
     }
 
 
@@ -1001,7 +1116,8 @@ def regenerate_chat(ctx: UserContext, index: int,
             "content": clarify,
             "time": utcnow_iso(),
             **_assistant_meta([], [], bool(force_search), bool(deep_mode),
-                               "clarify", None),
+                               "clarify", None,
+                               awaiting=_prior_awaiting(prior)),
         }
         _append_turn_atomic(store, fresh_msg)
         return {
@@ -1034,6 +1150,29 @@ def regenerate_chat(ctx: UserContext, index: int,
         if repaired:
             fresh_msg = dict(fresh_msg)
             fresh_msg["content"] = fixed
+            try:
+                _regen_meta = _teaching_meta_for_turn(send_text, fixed)
+                _regen_awaiting = _awaiting_for_turn(
+                    send_text, fixed, _regen_meta, _pointer_of(fresh_msg))
+                if _regen_meta and _regen_meta.get("active") is True:
+                    try:
+                        _gcur = max(0, int(_regen_meta.get("cursor", 0) or 0))
+                    except Exception:
+                        _gcur = 0
+                    fresh_msg["teaching"] = {
+                        "active": True,
+                        "file": str(_regen_meta.get("file", "") or "")[:120],
+                        "cursor": _gcur,
+                        "awaiting": _regen_awaiting,
+                        "v": 1,
+                    }
+                else:
+                    fresh_msg["teaching"] = {
+                        "active": False, "file": "", "cursor": 0,
+                        "awaiting": "none", "v": 1,
+                    }
+            except Exception:
+                logger.debug("regen teaching meta rebuild failed", exc_info=True)
         _log_teaching_format(send_text, str(fresh_msg.get("content", "")),
                              tier, repaired=repaired, violations=len(left))
     except Exception:
