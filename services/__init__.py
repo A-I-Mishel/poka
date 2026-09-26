@@ -55,7 +55,6 @@ __all__ = [
     "snapshot_notify",
     "snapshot_restore",
     "truncate_tokens",
-    "update_memory_from_chat",
     "update_memory_incremental",
     "verify_access_token",
 ]
@@ -107,7 +106,6 @@ _LAZY = {
     "snapshot_notify": ("services.snapshots", "notify"),
     "snapshot_restore": ("services.snapshots", "maybe_restore"),
     "truncate_tokens": ("services.tokens", "truncate_tokens"),
-    "update_memory_from_chat": ("services.memory", "update_memory_from_chat"),
     "update_memory_incremental": ("services.memory", "update_memory_incremental"),
     "verify_access_token": ("services.auth", "verify_access_token"),
 }

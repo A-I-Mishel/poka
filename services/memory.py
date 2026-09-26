@@ -827,15 +827,15 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
 def update_memory_from_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Extract facts from recent user messages and persist them (deduped).
 
-    Legacy entry point kept for compatibility; prefers the incremental
-    path for efficiency.
-
-    Args:
-        messages: Raw chat message dicts with 'role'/'content'.
-
-    Returns:
-        The updated memory dict.
+    Deprecated: use update_memory_incremental instead. Kept for
+    compatibility; will be removed in a future release.
     """
+    import warnings
+    warnings.warn(
+        "update_memory_from_chat is deprecated; use update_memory_incremental instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     update_memory_incremental(messages)
     return load_structured_memory()
 
