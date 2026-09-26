@@ -1,7 +1,7 @@
 """Shared bounded FIFO parse cache for tool file reads (pdf/document/csv).
 
 Second read of the same upload in one chat is RAM, not re-parse. Keys
-are user:upload:mtime:size (a rewrite busts the entry); values are
+are user:upload:mtime_ns:size (a rewrite busts the entry); values are
 opaque to the cache (rendered text, or (frame, truncated) tuples for
 CSV — copy-on-read stays at that call site). All operations are
 best-effort and never raise into tools.
@@ -38,7 +38,7 @@ class ParseCache:
             if path is None:
                 return ""
             stat = path.stat()
-            return f"{user}:{uid}:{stat.st_mtime}:{stat.st_size}"
+            return f"{user}:{uid}:{stat.st_mtime_ns}:{stat.st_size}"
         except Exception:
             return ""
 

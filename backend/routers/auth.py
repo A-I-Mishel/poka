@@ -192,7 +192,7 @@ def _auth_gate(request: Request) -> None:
         # bucket (DoS). Use peer-or-random so failures don't block others.
         import secrets as _secrets
 
-        ip = (peer or "").strip() or ("anon-" + _secrets.token_hex(4))
+        ip = (peer or "").strip() or ("anon-" + _secrets.token_hex(12))
     verdict = get_rate_limiter().check("auth:%s" % ip[:45], "auth")
     if not verdict.allowed:
         obs_event("ratelimit.deny", action="auth")

@@ -129,7 +129,7 @@ def _ram_key(user_id: str, upload_id: str, question_hint: str = "") -> str:
         path = FileStore(str(user_id)).resolve_upload(str(upload_id))
         if path is not None:
             stat = path.stat()
-            return f"{user_id}:{upload_id}:{stat.st_mtime}:{stat.st_size}:{_hint_hash(question_hint) or 'base'}"
+            return f"{user_id}:{upload_id}:{stat.st_mtime_ns}:{stat.st_size}:{_hint_hash(question_hint) or 'base'}"
     except Exception:
         logger.debug("bridge ram key stat failed", exc_info=True)
     return f"{user_id}:{upload_id}:{_hint_hash(question_hint) or 'base'}"

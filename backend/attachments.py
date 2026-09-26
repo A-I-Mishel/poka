@@ -166,7 +166,7 @@ def _attachment_text_hint(ctx: UserContext, attach: Dict[str, str]) -> str:
         try:
             st = path.stat()
             size = st.st_size
-            mtime = st.st_mtime
+            mtime_ns = st.st_mtime_ns
         except OSError:
             return _extraction_note(
                 name, kind, "the file could not be read from storage")
@@ -175,11 +175,11 @@ def _attachment_text_hint(ctx: UserContext, attach: Dict[str, str]) -> str:
                 name, kind,
                 "the file (%.1f MB) is too large to include here"
                 % (size / (1024 * 1024),))
-        cache_key = f"{ctx.user_id}:{uid}:{mtime}:{size}"
+        cache_key = f"{ctx.user_id}:{uid}:{mtime_ns}:{size}"
         with _ATTACH_TEXT_LOCK:
             hit = _ATTACH_TEXT_CACHE.get(cache_key)
             if hit is not None:
-                # hit is (mtime,size,text) but key already encodes them — return text
+                # hit is (mtime_ns,size,text) but key already encodes them — return text
                 return hit[2]
         text, reason = kb_svc.extract_text(
             path.read_bytes(), str(attach.get("name", "file")))
@@ -189,7 +189,7 @@ def _attachment_text_hint(ctx: UserContext, attach: Dict[str, str]) -> str:
             with _ATTACH_TEXT_LOCK:
                 if len(_ATTACH_TEXT_CACHE) >= _ATTACH_TEXT_MAX:
                     _ATTACH_TEXT_CACHE.pop(next(iter(_ATTACH_TEXT_CACHE)))
-                _ATTACH_TEXT_CACHE[cache_key] = (mtime, size, note)
+                _ATTACH_TEXT_CACHE[cache_key] = (mtime_ns, size, note)
             return note
         if len(text) > MAX_DOCUMENT_CHARS:
             text = text[:MAX_DOCUMENT_CHARS] + "\n[Note: file content truncated.]"
@@ -199,7 +199,7 @@ def _attachment_text_hint(ctx: UserContext, attach: Dict[str, str]) -> str:
         with _ATTACH_TEXT_LOCK:
             if len(_ATTACH_TEXT_CACHE) >= _ATTACH_TEXT_MAX:
                 _ATTACH_TEXT_CACHE.pop(next(iter(_ATTACH_TEXT_CACHE)))
-            _ATTACH_TEXT_CACHE[cache_key] = (mtime, size, out)
+            _ATTACH_TEXT_CACHE[cache_key] = (mtime_ns, size, out)
         return out
     except Exception:
         logger.debug("attachment text hint failed", exc_info=True)
@@ -253,20 +253,20 @@ def _upload_map(ctx: UserContext) -> Dict[str, Any]:
     try:
         reg_path = ctx.file_store.uploads_registry
         try:
-            mtime = reg_path.stat().st_mtime
+            mtime_ns = reg_path.stat().st_mtime_ns
         except OSError:
-            mtime = 0.0
+            mtime_ns = 0
         now = __import__("time").time()
         key = _upload_map_cache_key(str(ctx.user_id))
         with _UPLOAD_MAP_LOCK:
             hit = _UPLOAD_MAP_CACHE.get(key)
-            if hit is not None and hit[0] == mtime and (now - hit[1]) < 2.0:
+            if hit is not None and hit[0] == mtime_ns and (now - hit[1]) < 2.0:
                 return hit[2]
         mp = {m.id: m for m in ctx.file_store.list_uploads()}
         with _UPLOAD_MAP_LOCK:
             if len(_UPLOAD_MAP_CACHE) >= 64:
                 _UPLOAD_MAP_CACHE.pop(next(iter(_UPLOAD_MAP_CACHE)))
-            _UPLOAD_MAP_CACHE[key] = (mtime, now, mp)
+            _UPLOAD_MAP_CACHE[key] = (mtime_ns, now, mp)
         return mp
     except Exception:
         try:

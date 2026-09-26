@@ -7,7 +7,8 @@ services:
     ports:
       - "7860:7860"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       PORT: "7860"
       PLUTO_DATA_DIR: /app/data

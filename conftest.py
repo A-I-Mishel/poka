@@ -16,8 +16,12 @@ def _pluto_hermetic(tmp_path, monkeypatch):
     # PLUTO_AUTH_MODE=private / PLUTO_USER_ID / SNAPSHOT_ENABLED=false):
     # the suite assumes defaults unless a test sets its own values.
     for _var in ("PLUTO_AUTH_MODE", "PLUTO_USER_ID",
-                 "PLUTO_FRONTEND_ORIGIN", "SNAPSHOT_ENABLED"):
+                 "PLUTO_FRONTEND_ORIGIN", "SNAPSHOT_ENABLED",
+                 "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+                 "COHERE_API_KEY", "PLUTO_HEALTH_PROBE", "PLUTO_DOTENV",
+                 "PLUTO_DOTENV_PATH"):
         monkeypatch.delenv(_var, raising=False)
+    monkeypatch.setenv("PLUTO_HEALTH_PROBE", "0")
     monkeypatch.chdir(tmp_path)
     yield
     try:

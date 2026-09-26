@@ -143,8 +143,9 @@ def invalidate_store_caches(user_id: str) -> None:
 
 def clear_all_store_caches() -> None:
     """Clear all store caches (for testing)."""
-    _user_store_cache.clear()
-    _file_store_cache.clear()
+    with _store_cache_lock:
+        _user_store_cache.clear()
+        _file_store_cache.clear()
 
 
 def _referenced_upload_ids(user_store: UserStore) -> Optional[Set[str]]:

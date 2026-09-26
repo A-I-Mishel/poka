@@ -43,8 +43,8 @@ def send(req: schemas.SendRequest, ctx: UserContext = Depends(current_user)):
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    except StorageError as e:
-        raise HTTPException(status_code=503, detail=f"Storage unavailable ({e})")
+    except StorageError:
+        raise HTTPException(status_code=503, detail="Storage unavailable.")
 
 
 @router.post("/regenerate", response_model=schemas.SendResponse)
@@ -66,8 +66,8 @@ def regenerate(req: schemas.RegenerateRequest,
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    except StorageError as e:
-        raise HTTPException(status_code=503, detail=f"Storage unavailable ({e})")
+    except StorageError:
+        raise HTTPException(status_code=503, detail="Storage unavailable.")
 
 
 _KEEPALIVE_SECONDS = 15.0

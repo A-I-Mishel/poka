@@ -31,7 +31,9 @@ EXPORT_MAX_CHARS: int = 200_000
 class ExportPdfRequest(BaseModel):
     chat_id: Optional[str] = Field(default=None, max_length=64)
     title: Optional[str] = Field(default=None, max_length=120)
-    messages: Optional[List[Dict[str, Any]]] = None
+    # Bounded to EXPORT_MAX_MESSAGES (500): larger payloads are rejected
+    # with 413 before markdown rendering to avoid RAM/CPU DoS.
+    messages: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=500)
 
 
 def _safe_text(value: Any, limit: int = 20000) -> str:
@@ -163,6 +165,8 @@ def export_pdf(body: ExportPdfRequest, ctx: UserContext = Depends(current_user))
     elif body.messages is not None:
         if not isinstance(body.messages, list):
             raise HTTPException(status_code=400, detail="messages must be a list.")
+        if len(body.messages) > EXPORT_MAX_MESSAGES:
+            raise HTTPException(status_code=413, detail="Too many messages to export.")
         messages = [m for m in body.messages if isinstance(m, dict)]
         title = title or "chat"
     else:
@@ -172,8 +176,8 @@ def export_pdf(body: ExportPdfRequest, ctx: UserContext = Depends(current_user))
     markdown = chat_export_markdown(title, messages)
     try:
         from tools.make_tool import _build_pdf, _parse_blocks
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF builder unavailable ({e}).")
+    except Exception:
+        raise HTTPException(status_code=500, detail="PDF builder unavailable.")
     try:
         blocks = _parse_blocks(markdown)
         data = _build_pdf(title.strip()[:120] or "chat", blocks)
@@ -184,8 +188,8 @@ def export_pdf(body: ExportPdfRequest, ctx: UserContext = Depends(current_user))
             raise ValueError("no pages")
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF build failed ({str(e)[:120]}).")
+    except Exception:
+        raise HTTPException(status_code=500, detail="PDF build failed.")
     name = _pdf_filename(title)
     return Response(
         content=data,

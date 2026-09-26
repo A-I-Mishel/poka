@@ -4,7 +4,7 @@ import platform
 import secrets as _secrets
 import shutil
 import time
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel
 
 from backend.deps import UserContext, current_user
@@ -218,7 +218,7 @@ def health_detailed(ctx: UserContext = Depends(current_user)):
 # compatible with py-spy / pyrasite / gperftools via profile conversion.
 
 @router.get("/debug/pprof/profile")
-def pprof_cpu_profile(seconds: int = 30, ctx: UserContext = Depends(current_user)):
+def pprof_cpu_profile(seconds: int = Query(default=30, ge=1, le=60), ctx: UserContext = Depends(current_user)):
     """CPU profile via py-spy (requires py-spy installed and root/capabilities)."""
     # In production, run py-spy as sidecar or use `py-spy record -o profile.pb.gz --pid <pid>`
     # This endpoint documents the capability; actual profiling done externally.

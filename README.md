@@ -37,9 +37,12 @@ are always labeled untrusted data in prompts.
 
 ## Installation
 
-Requires Python 3.12 and Node 24.
+Requires Python 3.12 (lock file is compiled for 3.12; `>=3.12` is allowed
+but 3.13 is untested) and Node 24 (`frontend/package.json` enforces
+`engines: node >= 24`).
 
 ```bash
+cp .env.example .env   # required: docker compose reads .env (optional but recommended locally)
 pip install -r requirements.lock
 uvicorn backend.main:app --port 8000   # API on http://localhost:8000
 cd frontend && npm install && npm run dev   # UI on http://localhost:5173
@@ -56,8 +59,15 @@ cd frontend; if ($?) { npm install }; if ($?) { npm run dev }
 Reproducible prod-parity stack (API builds and serves the UI):
 
 ```bash
-docker compose up --build   # API on http://localhost:7860, data in pluto-data volume
+docker compose up --build   # API+UI on http://localhost:7860, data in pluto-data volume
 ```
+
+Ports: local dev API `8000` + UI `5173` (Vite dev proxies `/api` to
+`http://localhost:8000`, hardcoded in `frontend/vite.config.ts` — changing
+the API port requires editing that proxy); Docker single-server `7860`
+serves both API and built UI (same-origin, `VITE_API_URL` empty);
+Vercel+Render split needs `VITE_API_URL` (build-time) + `PLUTO_FRONTEND_ORIGIN`
+(runtime) to match or CORS fails.
 
 `requirements.txt` holds the loose constraints; `requirements.lock`
 is the hash-pinned build input (regenerate with
@@ -69,8 +79,9 @@ Run the test suite (stubbed models, temp directories — no API quota
 spent):
 
 ```bash
-pip install pytest
-python -m pytest tests/ -q
+pip install -r requirements.lock
+pip install pytest==9.1.1 pytest-cov==7.1.0
+python -m pytest tests/ -q --cov --cov-fail-under=65
 ```
 
 ## Environment variables / secrets
@@ -290,6 +301,21 @@ generated outputs older than 30 days. Upload quotas (100 files / 1 GiB
 per user) are enforced before writes; permission/infrastructure
 failures raise instead of masquerading as corruption.
 
+### Solo backup (local dev)
+
+All state lives under `PLUTO_DATA_DIR` (default `./data/`, override via
+env; Docker uses `/app/data` in the `pluto-data` volume). No migrations:
+stop the server, copy/zip the directory, restart to restore.
+
+```bash
+# backup (PowerShell)
+Copy-Item -Recurse data "data-backup-$(Get-Date -Format yyyyMMdd)"
+# restore
+# 1. stop uvicorn / compose  2. Copy-Item -Recurse data-backup-YYYYMMDD/* data/ -Force
+```
+
+Keep `UVICORN_WORKERS=1` (default, no Redis needed for solo).
+
 ## Security model
 
 - Per-user isolation for chats, memory, uploads, outputs, memory
@@ -327,7 +353,9 @@ failures raise instead of masquerading as corruption.
 ## Tests
 
 ```bash
-python -m pytest tests/ -q
+pip install -r requirements.lock
+pip install pytest==9.1.1 pytest-cov==7.1.0
+python -m pytest tests/ -q --cov --cov-fail-under=65
 ```
 
 All tests use stubbed models and temp directories — no API quota spent.
