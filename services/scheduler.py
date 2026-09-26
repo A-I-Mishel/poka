@@ -141,10 +141,6 @@ def stop_scheduler() -> None:
         _started = False
 
 
-def is_running() -> bool:
-    return _started and _scheduler is not None and _scheduler.running
-
-
 def _run_kb_reaper() -> None:
     """Retry shed KB ingests from disk (never raises; scheduler-safe)."""
     try:
@@ -153,22 +149,6 @@ def _run_kb_reaper() -> None:
         run_reaper_once()
     except Exception:
         logger.debug("kb ingest reaper job failed", exc_info=True)
-
-
-def trigger_hygiene_now() -> None:
-    """Manually trigger hygiene run (for testing/admin)."""
-    _run_all_users_hygiene()
-
-
-def trigger_kb_reaper_now() -> int:
-    """Manually trigger one KB reaper pass (for testing/admin)."""
-    try:
-        from services.kb_ingest import run_reaper_once
-
-        return run_reaper_once()
-    except Exception:
-        logger.debug("manual kb reaper trigger failed", exc_info=True)
-        return 0
 
 
 if __name__ == "__main__":
