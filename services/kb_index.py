@@ -357,12 +357,6 @@ def invalidate_index(user_id: str) -> None:
         _index_cache.pop(safe, None)
 
 
-def rebuild_index(user_id: str, dim: int = 768) -> KBIndex:
-    """Force rebuild of index for a user."""
-    invalidate_index(user_id)
-    return get_index(user_id, dim)
-
-
 # For backward compatibility / graceful degradation
 def _brute_force_search(docs: Dict[str, Any], query_vec: List[float], k: int, valid_ids: Optional[set] = None) -> List[Dict[str, Any]]:
     """Fallback brute-force search when FAISS unavailable or index empty."""
