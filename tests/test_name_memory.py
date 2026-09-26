@@ -25,6 +25,9 @@ def test_name_everyday_phrasings():
     assert _names("im bob") == ["Bob"]
     assert _names("call me zed") == ["Zed"]
     assert _names("this is kai") == ["Kai"]
+    assert _names("from now on you will address me as buddy ok?") == ["Buddy"]
+    assert _names("please adress me as buddy") == ["Buddy"]
+    assert _names("refer to me as chief") == ["Chief"]
 
 
 def test_name_guards_not_moods_or_gerunds():
@@ -33,6 +36,9 @@ def test_name_guards_not_moods_or_gerunds():
     assert _names("this is great") == []
     assert _names("call me back later") == []
     assert _names("what is 2+2?") == []
+    assert _names("i am a student") == []
+    assert _names("i am a") == []
+    assert _names("A") == []
 
 
 def test_name_sets_user_name_and_reaches_prompt(tmp_path):
@@ -60,6 +66,78 @@ def test_legacy_name_fact_fallback_reaches_prompt():
     ], "past_tasks": [], "user_name": None}
     out = mem.format_memory_for_prompt(m)
     assert "User name: Mishel" in out
+
+
+def test_explicit_name_beats_inferred_article(tmp_path):
+    """Explicit "address me as Buddy" survives a later "i am a ..." turn."""
+    mem.set_memory_dir(str(tmp_path))
+    try:
+        mem.update_memory_incremental([
+            {"role": "user", "content": "from now on address me as buddy"},
+        ])
+        assert mem.load_structured_memory()["user_name"] == "Buddy"
+        # A later low-confidence turn must not clobber the explicit name.
+        # ("i am a student" mines nothing now; simulate an older-style
+        # low-confidence hit directly.)
+        stored = mem.load_structured_memory()
+        stored["facts"].append({"type": "name", "value": "Sam",
+                                "polarity": "positive", "confidence": "low",
+                                "source": "inferred", "date": "t"})
+        mem.save_structured_memory(stored)
+        mem.update_memory_incremental([
+            {"role": "user", "content": "unrelated follow-up"},
+        ])
+        assert mem.load_structured_memory()["user_name"] == "Buddy"
+    finally:
+        mem.set_memory_dir("")
+
+
+def test_single_letter_name_heals(tmp_path):
+    """Pre-fix vaults with user_name "A" heal to None on load."""
+    mem.set_memory_dir(str(tmp_path))
+    try:
+        stored = mem.load_structured_memory()
+        stored["user_name"] = "A"
+        mem.save_structured_memory(stored)
+        assert mem.load_structured_memory()["user_name"] is None
+        assert mem.get_stored_user_name() == ""
+    finally:
+        mem.set_memory_dir("")
+
+
+def test_digit_delete_clears_matching_user_name(tmp_path):
+    """Forgetting fact #i also clears user_name when it matches."""
+    mem.set_memory_dir(str(tmp_path))
+    try:
+        mem.update_memory_incremental([
+            {"role": "user", "content": "my name is sam"},
+        ])
+        assert mem.load_structured_memory()["user_name"] == "Sam"
+        assert mem.delete_memory_fact("0") is True
+        assert mem.load_structured_memory()["user_name"] is None
+    finally:
+        mem.set_memory_dir("")
+
+
+def test_request_shaped_preference_never_stores():
+    """Whole requests ("i want to make X, can you...?") are not preferences."""
+    prefs = [f for f in mem.extract_facts_from_message(
+        "I WANT TO MAKE A HTML PORTFOLIO WEBSTE CAN YOU WRITE THE CODE FOR ME?")
+        if f["type"] == "preference"]
+    assert prefs == []
+    assert [f["value"] for f in mem.extract_facts_from_message("i like coffee")
+            if f["type"] == "preference"] == ["coffee"]
+
+
+def test_name_endpoint_reports_scalar(client=None):
+    """GET /api/memory/name exposes the scalar the panel hid."""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+    with TestClient(app) as c:
+        res = c.get("/api/memory/name")
+        assert res.status_code in (200, 401)
+        if res.status_code == 200:
+            assert "name" in res.json()
 
 
 def test_name_shared_across_chats(tmp_path, monkeypatch):

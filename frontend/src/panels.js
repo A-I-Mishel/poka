@@ -191,11 +191,13 @@ var SECTIONS = {
     render: async function () {
       var notes = "";
       var facts = [];
+      var storedName = "";
       try { notes = (await req("/api/memory/notes")).text || ""; } catch (e) {}
       try {
         var f = await req("/api/memory/facts");
         facts = Array.isArray(f) ? f : [];
       } catch (e) {}
+      try { storedName = String((await req("/api/memory/name")).name || ""); } catch (e) {}
       var rows = facts.map(function (m, i) {
         var label = String((m && m.value) || "");
         var sub = m && m.type ? String(m.type) : "";
@@ -203,7 +205,12 @@ var SECTIONS = {
           '<div class="g"><div class="t">' + esc(label) + "</div>" + (sub ? '<div class="s">' + esc(sub) + "</div>" : "") + "</div>" +
           '<button class="forget" data-fact="' + i + '">Forget</button></div>';
       }).join("");
-      if (!facts.length) rows = '<div class="sub" style="margin-top:16px">Nothing remembered yet.</div>';
+      var nameRow = storedName ?
+        '<div class="card">' + ic("cpu") +
+        '<div class="g"><div class="t">' + esc(storedName) + "</div>" +
+        '<div class="s">name</div></div></div>' : "";
+      if (!facts.length && !storedName) rows = '<div class="sub" style="margin-top:16px">Nothing remembered yet.</div>';
+      else rows = nameRow + rows;
       return "<h2>Memory</h2><div class=\"sub\">Things Pluto remembers across conversations.</div>" +
         '<textarea class="notes-ta" id="notesTa" placeholder="Memory notes…">' + esc(notes) + "</textarea>" +
         '<div class="notes-actions"><button class="btn solid" id="notesSave">Save notes</button></div>' +

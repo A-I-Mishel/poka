@@ -44,6 +44,15 @@ def list_facts(ctx: UserContext = Depends(current_user)):
         raise HTTPException(status_code=500, detail="Could not load memory facts.")
 
 
+@router.get("/name")
+def get_name(ctx: UserContext = Depends(current_user)):
+    """Stored user name ("" when none) for the Memory panel."""
+    try:
+        return {"name": memory_svc.get_stored_user_name()}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not load memory name.")
+
+
 @router.delete("/facts")
 def delete_fact(
     ctx: UserContext = Depends(current_user),

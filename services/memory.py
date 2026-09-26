@@ -51,12 +51,14 @@ _MEMORY_DIR: str = ""
 _state = threading.local()
 
 _NEGATION_RE = re.compile(r"\b(don't|dont|do not|never|hate|dislike|avoid)\b")
-_EXPLICIT_RE = re.compile(r"\b(remember this|remember that|my name is|call me|always)\b")
+_EXPLICIT_RE = re.compile(r"\b(remember this|remember that|my name is|call me|address me as|refer to me as|always)\b")
 
 # Single words that are never a person's name. Guards the broad "i am X" /
 # "this is X" name patterns below so "i am happy" or "this is great" are
 # not stored as the user's name. Includes adverbs/time-words the same
 # patterns catch ("i am currently studying" must never store "Currently").
+# Also articles/pronouns/link-verbs ("i am a student" must never store "A")
+# and every single letter (no 1-char name is real; claims need {2,20}).
 _NON_NAME_WORDS = frozenset({
     "happy", "sad", "glad", "sorry", "fine", "good", "bad", "busy", "tired",
     "ready", "done", "here", "there", "back", "new", "sure", "afraid",
@@ -67,6 +69,7 @@ _NON_NAME_WORDS = frozenset({
     "currently", "actually", "really", "just", "still", "already", "now",
     "never", "always", "soon", "today", "tonight", "again", "also",
     "even", "quite", "very", "yet",
+    "a", "an", "the", "i", "me", "you", "am", "my", "is",
 })
 
 # Communication-style requests → stored as type="style" facts (DATA for
@@ -118,6 +121,8 @@ def _is_poisoned_name_value(value: Any) -> bool:
     try:
         if not isinstance(value, str) or not value.strip():
             return False
+        if len(value.strip()) < 2:
+            return True
         return value.strip().lower() in _NON_NAME_WORDS
     except Exception:
         return False
@@ -220,7 +225,11 @@ def _new_fact(fact_type: str, value: str, content_lower: str,
     "I like coffee, I hate tea" must not negate coffee. A missing/blank
     span falls back to the whole message (legacy behavior).
     """
-    value = re.split(r"[,;]", value.strip(), maxsplit=1)[0].strip()[:120]
+    # Preference values are the greedy-capture risk ("i want to make X,
+    # can you...?" must never persist as a liking): cap them tighter than
+    # other types. Questions are already skipped at the call site.
+    _cap = 64 if fact_type == "preference" else 120
+    value = re.split(r"[,;]", value.strip(), maxsplit=1)[0].strip()[:_cap]
     scope = span if isinstance(span, str) and span.strip() else content_lower
     explicit = bool(_EXPLICIT_RE.search(scope))
     return {
@@ -230,6 +239,57 @@ def _new_fact(fact_type: str, value: str, content_lower: str,
         "confidence": "high" if explicit else "low",
         "source": "explicit" if explicit else "inferred",
     }
+
+
+_NAME_VERBS = ("my name is", "call me", "address me as", "refer to me as",
+                 "this is", "i am", "i'm", "im")
+
+
+def _match_name_verb(content_lower: str):
+    """Match a name verb, tolerating verb typos (never raises).
+
+    Returns (match, span_text) with span_text suitable for confidence
+    scoping, or (None, None). Exact alternation first; on miss, repair
+    tokens close to a known verb (same first letter, len>=4, difflib
+    ratio>=80 — e.g. "adress me as") and retry once. stdlib difflib
+    only, no new dependency. Repaired matches scope confidence to the
+    repaired span (indices don't map back to the original text).
+    """
+    try:
+        direct = re.search(
+            r"(?:my name is|call me|address me as|refer to me as|this is|i am|i'm|\bim) (\w+)",
+            content_lower,
+        )
+        if direct:
+            return direct, None
+        import difflib as _difflib
+        words = re.findall(r"[a-z]+", content_lower)
+        canon = ["address", "refer", "call"]
+        fixed = []
+        for w in words:
+            hit = w
+            if len(w) >= 4:
+                for c in canon:
+                    if w != c and abs(len(w) - len(c)) <= 2 and w[0] == c[0]:
+                        try:
+                            if _difflib.SequenceMatcher(None, w, c).ratio() >= 0.8:
+                                hit = c
+                                break
+                        except Exception:  # noqa: S112 -- try next candidate
+                            continue
+            fixed.append(hit)
+        repaired = " ".join(fixed)
+        if repaired == " ".join(words):
+            return None, None
+        m = re.search(
+            r"(?:my name is|call me|address me as|refer to me as|this is|i am|i'm|\bim) (\w+)",
+            repaired,
+        )
+        if not m:
+            return None, None
+        return m, m.string[m.start(0):m.end(0)]
+    except Exception:
+        return None, None
 
 
 def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
@@ -255,17 +315,18 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
     # "call me ana", "this is bob", "my name is zed"). The broad "i am X"
     # / "this is X" forms are guarded by _NON_NAME_WORDS so moods and
     # gerunds ("i am happy", "i am working") never become a stored name.
-    name_match = re.search(
-        r"(?:my name is|call me|this is|i am|i'm|\bim) (\w+)",
-        content_lower,
-    )
+    name_match, repaired_span = _match_name_verb(content_lower)
     if name_match:
         candidate = name_match.group(1)
-        if candidate not in _NON_NAME_WORDS:
-            facts.append(_new_fact(
-                "name", candidate.title(), content_lower,
-                _segment_around(content_lower, name_match.start(0),
-                                name_match.end(0))))
+        if len(candidate) >= 2 and candidate not in _NON_NAME_WORDS:
+            if repaired_span is not None:
+                facts.append(_new_fact(
+                    "name", candidate.title(), content_lower, repaired_span))
+            else:
+                facts.append(_new_fact(
+                    "name", candidate.title(), content_lower,
+                    _segment_around(content_lower, name_match.start(0),
+                                    name_match.end(0))))
 
     for style_value, pattern in _STYLE_PATTERNS:
         style_match = re.search(pattern, content_lower)
@@ -293,8 +354,13 @@ def extract_facts_from_message(content: str) -> List[Dict[str, str]]:
             raw_value = match.group(idx).strip() if idx else ""
             if not raw_value:
                 continue
+            # Questions are not preferences: "i want to make X, can you write
+            # the code for me?" must never become a stored liking. Whole
+            # requests ("to make a html portfolio...?") fail closed here.
+            if "?" in raw_value:
+                continue
             head = match.string[match.start(0):match.start(idx)] if idx else ""
-            value = re.split(r"[,;]", raw_value, maxsplit=1)[0].strip()[:120]
+            value = re.split(r"[,;.!?]", raw_value, maxsplit=1)[0].strip()[:64]
             facts.append(_new_fact("preference", raw_value, content_lower,
                                    head + value))
 
@@ -409,6 +475,8 @@ def _bare_name_reply(text: Any) -> Optional[str]:
         return None
     lowered = [p.lower() for p in parts]
     if not all(p.isalpha() for p in parts):
+        return None
+    if any(len(p) < 2 for p in lowered):
         return None
     if stripped.lower() in _NON_NAME_WORDS:
         return None
@@ -775,7 +843,20 @@ def update_memory_incremental(messages: List[Dict[str, Any]],
         for fact in msg_facts:
             fact["date"] = utcnow_iso()
             if fact.get("type") == "name":
-                mem["user_name"] = fact.get("value")
+                # Explicit instructions ("address me as X", "my name is X",
+                # high confidence) always win; low-confidence inferred names
+                # never overwrite an existing name (kills "i am a ..." -> "A"
+                # clobbering an explicit "Buddy"). Fail-open to overwrite on
+                # any doubt (never lose a name to an exception).
+                try:
+                    _cur = mem.get("user_name")
+                    _cur_set = isinstance(_cur, str) and bool(_cur.strip())
+                    _high = str(fact.get("confidence", "") or "") == "high"
+                    if (not _cur_set) or _high:
+                        mem["user_name"] = fact.get("value")
+                except Exception:
+                    logger.debug("user_name confidence gate failed", exc_info=True)
+                    mem["user_name"] = fact.get("value")
             neighbors = [
                 {"type": f.get("type"), "value": f.get("value"),
                  "polarity": f.get("polarity")}
@@ -851,8 +932,18 @@ def delete_memory_fact(ref: str) -> bool:
     if query.isdigit():
         idx = int(query)
         if 0 <= idx < len(mem.get("facts", [])):
+            dropped = mem["facts"][idx]
             del mem["facts"][idx]
             removed = True
+            # Index deletes must clear a matching user_name too, or the
+            # scalar keeps driving answers after its fact is gone.
+            try:
+                if (isinstance(dropped, dict) and mem.get("user_name")
+                        and str(dropped.get("value", "")).strip().lower()
+                        == str(mem["user_name"]).strip().lower()):
+                    mem["user_name"] = None
+            except Exception:
+                logger.debug("user_name orphan check failed", exc_info=True)
     else:
         lowered = query.lower()
         kept = [f for f in mem.get("facts", []) if lowered not in str(f.get("value", "")).lower()]
@@ -872,6 +963,19 @@ def list_memory_facts() -> List[Dict[str, Any]]:
     mem = load_structured_memory()
     facts = mem.get("facts", [])
     return [dict(f) for f in facts if isinstance(f, dict)]
+
+
+def get_stored_user_name() -> str:
+    """Return the stored user name ("" when none). Display helper.
+
+    The facts list hides this scalar, so the Memory panel would claim
+    "Nothing remembered yet" while the name still drives answers.
+    """
+    try:
+        name = load_structured_memory().get("user_name")
+        return str(name).strip() if isinstance(name, str) else ""
+    except Exception:
+        return ""
 
 
 def _clean_aliases(aliases: Any) -> List[str]:
