@@ -357,31 +357,6 @@ def invalidate_index(user_id: str) -> None:
         _index_cache.pop(safe, None)
 
 
-# For backward compatibility / graceful degradation
-def _brute_force_search(docs: Dict[str, Any], query_vec: List[float], k: int, valid_ids: Optional[set] = None) -> List[Dict[str, Any]]:
-    """Fallback brute-force search when FAISS unavailable or index empty."""
-    q = np.array(query_vec, dtype=np.float32)
-    scored = []
-    for uid, doc in docs.items():
-        if not isinstance(doc, dict):
-            continue
-        if valid_ids and uid not in valid_ids:
-            continue
-        for idx, ch in enumerate(doc.get("chunks") or []):
-            if not isinstance(ch, dict):
-                continue
-            vec = ch.get("vector")
-            if not vec:
-                continue
-            v = np.array(vec, dtype=np.float32)
-            # Normalized vectors: IP = cosine
-            score = float(np.dot(q, v))
-            if score > 0:
-                scored.append({"upload_id": uid, "chunk": idx, "score": score})
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:k]
-
-
 if __name__ == "__main__":
     # Quick smoke test
     import tempfile
