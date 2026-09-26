@@ -110,7 +110,6 @@ def resolve_in_workspace(user_id: str, relpath: str, allow_run_dir: bool = False
     Raises StorageError on escape.
     """
     cleaned = clean_relpath(relpath, allow_run_dir=allow_run_dir)
-    cleaned = clean_relpath(relpath)
     root = workspace_root(user_id, create=False)
     candidate = root / Path(*cleaned.split("/"))
     try:

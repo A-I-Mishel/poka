@@ -143,6 +143,33 @@ def test_run_dir_read_allowed_write_denied():
     assert out.startswith("STATUS=INVALID"), out
 
 
+def test_resolve_in_workspace_allows_run_dir_when_flagged():
+    """resolve_in_workspace with allow_run_dir=True allows .run/ paths (P0 fix).
+
+    Previously line 113 re-validated without the flag, dropping the .run/ allowance.
+    """
+    from services.workspace import resolve_in_workspace, workspace_root
+
+    uid = "resolve-test-user"
+    root = workspace_root(uid, create=True)
+    # Create a dummy file inside .run/ to prove resolution works for existing files
+    (root / ".run").mkdir(exist_ok=True)
+    (root / ".run" / "app.out").write_text("built", encoding="utf-8")
+
+    # Should resolve when flag is True
+    resolved = resolve_in_workspace(uid, ".run/app.out", allow_run_dir=True)
+    assert resolved.is_file()
+    assert resolved.name == "app.out"
+
+    # Should reject when flag is False (writes still blocked)
+    with pytest.raises(StorageError):
+        resolve_in_workspace(uid, ".run/app.out", allow_run_dir=False)
+
+    # Normal paths still work
+    resolved_normal = resolve_in_workspace(uid, "main.py")
+    assert resolved_normal.name == "main.py"
+
+
 def test_tail_truncate_keeps_traceback_tail():
     from services.coderun import _tail_truncate
 
