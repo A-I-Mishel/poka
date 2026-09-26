@@ -141,6 +141,8 @@ def _blank_kb() -> Dict[str, Any]:
 # KB cache: user_id -> (mtime, kb_dict)
 # Invalidate on mtime change or explicit write operations
 _KB_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_KB_CACHE_MAX: int = 16
+_KB_CACHE_LOCK = __import__("threading").Lock()
 
 # ponytail: query embedding cache — second search with same query avoids Gemini RTT
 _QUERY_EMBED_CACHE: Dict[tuple, List[float]] = {}
@@ -178,6 +180,10 @@ def load_kb(user_id: Any) -> Dict[str, Any]:
             except OSError:
                 mtime = 0.0
     _KB_CACHE[str(user_id)] = (mtime, kb)
+    # FIFO eviction: keep cache bounded to _KB_CACHE_MAX entries
+    with _KB_CACHE_LOCK:
+        if len(_KB_CACHE) > _KB_CACHE_MAX:
+            _KB_CACHE.pop(next(iter(_KB_CACHE)))
     return kb
 
 

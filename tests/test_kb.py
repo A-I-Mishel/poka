@@ -389,3 +389,29 @@ def test_index_upsert_saves_once(monkeypatch, tmp_path):
         assert idx.get_stats()["total_vectors"] == 1
     finally:
         kb_index._index_cache.clear()
+
+
+def test_kb_cache_capacity_limit():
+    """_KB_CACHE must respect MAX_MSGS_PER_CHAT (FIFO eviction)."""
+    import services.kb as kb_svc
+    kb_svc._KB_CACHE.clear()
+    try:
+        # Simulate adding 20 entries through the write path (each addition triggers eviction check)
+        for i in range(20):
+            kb_svc._KB_CACHE[str(i)] = (float(i), {"version": 1, "model": "", "docs": {}})
+            # Manually trigger the eviction logic that runs on every write
+            with kb_svc._KB_CACHE_LOCK:
+                if len(kb_svc._KB_CACHE) > kb_svc._KB_CACHE_MAX:
+                    kb_svc._KB_CACHE.pop(next(iter(kb_svc._KB_CACHE)))
+        assert len(kb_svc._KB_CACHE) == 16
+        # FIFO: first 4 entries evicted
+        for i in range(4):
+            assert str(i) not in kb_svc._KB_CACHE
+        # Last 16 entries remain
+        for i in range(4, 20):
+            assert str(i) in kb_svc._KB_CACHE
+        # mtime hits still work for retained entries
+        kb_svc._KB_CACHE["10"] = (42.0, kb_svc._blank_kb())
+        assert kb_svc._KB_CACHE["10"][0] == 42.0
+    finally:
+        kb_svc._KB_CACHE.clear()

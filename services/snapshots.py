@@ -308,10 +308,17 @@ def _build_archive_to_file(root: Optional[Path] = None, dest: Optional[str] = No
     if dest is None:
         fd, dest = tempfile.mkstemp(prefix="pluto-snap-", suffix=".tar.gz")
         os.close(fd)
-    with open(dest, "wb") as f:
-        with tarfile.open(fileobj=f, mode="w:gz") as tar:
-            for rel, full in (files if files is not None else _iter_data_files(base)):
-                tar.add(str(full), arcname=rel, recursive=False)
+    try:
+        with open(dest, "wb") as f:
+            with tarfile.open(fileobj=f, mode="w:gz") as tar:
+                for rel, full in (files if files is not None else _iter_data_files(base)):
+                    tar.add(str(full), arcname=rel, recursive=False)
+    except Exception:
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
+        raise
     return dest
 
 
@@ -629,6 +636,10 @@ def _download_to_temp(client: Any = None) -> Optional[str]:
                 elif isinstance(body, (bytes, bytearray)):
                     f.write(bytes(body))
                 else:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
                     return None
             if os.path.getsize(tmp) == 0:
                 try:

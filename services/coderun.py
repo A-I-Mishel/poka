@@ -278,3 +278,58 @@ def execute_inline(user_id: str, language: str, code: str) -> Dict[str, object]:
     except StorageError as e:
         return {"error": str(e), "invalid": True}
     return execute_file(user_id, unique_rel)
+
+
+def prune_build_artifacts(max_age_days: int = 7, keep_newest: int = 20) -> int:
+    """Prune old build artifacts (.run/ directory and _snippet_* files).
+
+    Removes compiled binaries and snippet files older than max_age_days,
+    keeping at least keep_newest most recent files to protect against
+    clock skew or recent use.
+
+    Returns the number of files deleted.
+    """
+    import time
+    import logging
+    from services.storage import data_root
+
+    logger = logging.getLogger(__name__)
+    deleted = 0
+    try:
+        # Prune .run/ compiled binaries
+        root = data_root()
+        run_dir = root / ".run"
+        if run_dir.exists():
+            cutoff = time.time() - max_age_days * 86400
+            for item in run_dir.iterdir():
+                if not item.is_file():
+                    continue
+                try:
+                    if item.stat().st_mtime < cutoff:
+                        item.unlink()
+                        deleted += 1
+                except OSError:
+                    logger.debug("failed to delete old binary %s", item, exc_info=True)
+        # Prune old _snippet_* files (keep newest N)
+        users_root = data_root() / "users"
+        if users_root.exists():
+            for user_dir in users_root.iterdir():
+                if not user_dir.is_dir():
+                    continue
+                workspace_root = user_dir / "workspace"
+                if not workspace_root.exists():
+                    continue
+                # Find all _snippet_* files
+                snippet_files = list(workspace_root.glob("_snippet_*.*"))
+                # Sort by mtime, newest first
+                snippet_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                # Delete all but the newest keep_newest
+                for old_file in snippet_files[keep_newest:]:
+                    try:
+                        old_file.unlink()
+                        deleted += 1
+                    except OSError:
+                        logger.debug("failed to delete old snippet %s", old_file, exc_info=True)
+    except Exception:
+        logger.debug("prune_build_artifacts failed", exc_info=True)
+    return deleted

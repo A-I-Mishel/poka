@@ -12,6 +12,8 @@ from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from services.coderun import prune_build_artifacts
+from services.kb_ingest import run_reaper_once
 from services.limits import STORAGE_HYGIENE_INTERVAL_SECONDS
 from services.secrets import get_secret
 from services.storage import data_root
@@ -118,6 +120,14 @@ def start_scheduler() -> None:
                 coalesce=True,
                 misfire_grace_time=120,
             )
+            _scheduler.add_job(
+                prune_build_artifacts,
+                IntervalTrigger(seconds=3600, jitter=600),  # hourly with 10min jitter
+                id="build_artifact_prune",
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=600,
+            )
             _scheduler.start()
         except Exception:
             logger.warning("background scheduler failed to start", exc_info=True)
@@ -144,8 +154,6 @@ def stop_scheduler() -> None:
 def _run_kb_reaper() -> None:
     """Retry shed KB ingests from disk (never raises; scheduler-safe)."""
     try:
-        from services.kb_ingest import run_reaper_once
-
         run_reaper_once()
     except Exception:
         logger.debug("kb ingest reaper job failed", exc_info=True)
