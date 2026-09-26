@@ -249,20 +249,33 @@ def _iter_data_files(root: Path) -> List[Tuple[str, Path]]:
     return found
 
 
+def _scan_data(root: Path) -> Tuple[List[Tuple[str, Path]], str, int]:
+    """Single-walk scan: (sorted files, fingerprint, total bytes).
+
+    One os.walk + one stat per file feeds the change check, the disk
+    precheck, and the archive builder — previously three separate walks.
+    """
+    files = _iter_data_files(root)
+    digest = hashlib.sha256()
+    total = 0
+    for rel, full in files:
+        try:
+            stat = full.stat()
+        except OSError:
+            continue
+        digest.update(f"{rel}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode("utf-8"))
+        total += max(0, stat.st_size)
+    return files, digest.hexdigest(), total
+
+
 def _fingerprint(root: Optional[Path] = None) -> str:
     """Cheap change detector: sha256 over relpath+size+mtime of data files."""
     base = root or _data_root()
-    digest = hashlib.sha256()
     try:
-        for rel, full in _iter_data_files(base):
-            try:
-                stat = full.stat()
-            except OSError:
-                continue
-            digest.update(f"{rel}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode("utf-8"))
+        _files, fp, _total = _scan_data(base)
     except OSError:
-        pass
-    return digest.hexdigest()
+        return hashlib.sha256().hexdigest()
+    return fp
 
 
 def _build_archive(root: Optional[Path] = None) -> bytes:
@@ -280,13 +293,14 @@ def _build_archive(root: Optional[Path] = None) -> bytes:
     return buf.getvalue()
 
 
-def _build_archive_to_file(root: Optional[Path] = None, dest: Optional[str] = None) -> str:
+def _build_archive_to_file(root: Optional[Path] = None, dest: Optional[str] = None,
+                          files: Optional[List[Tuple[str, Path]]] = None) -> str:
     """Tar.gz the data root directly to a temp file. Returns its path.
 
     Same format/layout as _build_archive (rel paths, skips *.tmp), but
     the archive is never held fully in RAM — required when the data
     root approaches ~1 GiB (Finding 3). Caller owns cleanup (unlink).
-    Raises on I/O errors.
+    Pass a pre-scanned file list to skip re-walking. Raises on I/O errors.
     """
     import tempfile
 
@@ -296,7 +310,7 @@ def _build_archive_to_file(root: Optional[Path] = None, dest: Optional[str] = No
         os.close(fd)
     with open(dest, "wb") as f:
         with tarfile.open(fileobj=f, mode="w:gz") as tar:
-            for rel, full in _iter_data_files(base):
+            for rel, full in (files if files is not None else _iter_data_files(base)):
                 tar.add(str(full), arcname=rel, recursive=False)
     return dest
 
@@ -406,15 +420,10 @@ _SNAPSHOT_MIN_HEADROOM_BYTES = 64 * 1024 * 1024
 
 def _data_bytes(root: Path) -> int:
     """Sum of data-file sizes (archive upper bound pre-compression)."""
-    total = 0
     try:
-        for _rel, full in _iter_data_files(root):
-            try:
-                total += max(0, full.stat().st_size)
-            except OSError:
-                continue
+        _files, _fp, total = _scan_data(root)
     except OSError:
-        pass
+        return 0
     return total
 
 
@@ -441,7 +450,13 @@ def _upload_now(client: Any = None, force: bool = False) -> bool:
             with _lock:
                 _dirty = False
             return False  # never overwrite a good remote with an empty or half-wiped disk
-        fp = _fingerprint(root)
+        fp: Optional[str] = None
+        need = 0
+        files: List[Tuple[str, Path]] = []
+        try:
+            files, fp, need = _scan_data(root)
+        except OSError:
+            fp, need, files = _fingerprint(root), _data_bytes(root), _iter_data_files(root)
         with _lock:
             if not force and fp == _last_fingerprint:
                 _dirty = False
@@ -450,7 +465,6 @@ def _upload_now(client: Any = None, force: bool = False) -> bool:
         # filesystem plus headroom (1 GiB Render disk). Skip — keeping
         # _dirty so the debounced worker retries — instead of a doomed
         # build. Never blocks writes; never raises.
-        need = _data_bytes(root)
         free = _temp_free_bytes()
         if free is not None and free < need + _SNAPSHOT_MIN_HEADROOM_BYTES:
             logger.warning(
@@ -461,7 +475,8 @@ def _upload_now(client: Any = None, force: bool = False) -> bool:
         # File-backed archive (Finding 3): never hold the whole tar.gz
         # in RAM. boto3 streams file-like Body (multipart for large
         # objects); temp file is unlinked on every path below.
-        archive_path = _build_archive_to_file(root)
+        # Reuse the scan's file list so we don't walk a third time.
+        archive_path = _build_archive_to_file(root, files=files)
         try:
             size = os.path.getsize(archive_path)
             own_client = client if client is not None else _get_client()

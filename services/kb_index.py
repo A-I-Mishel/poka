@@ -198,8 +198,9 @@ class KBIndex:
                 self.id_map = {}
                 self.reverse_map = {}
                 self._label_counter = 0
-            # Remove any existing chunks for this upload_id (upsert semantics)
-            self.remove_document(upload_id)
+            # Remove any existing chunks for this upload_id (upsert semantics).
+            # Deferred save: _save once at the end instead of twice per upsert.
+            self.remove_document(upload_id, save=False)
 
             # Convert vectors to float32 array
             vecs = np.array(vectors, dtype=np.float32)
@@ -253,11 +254,13 @@ class KBIndex:
                     break
             return results
 
-    def remove_document(self, upload_id: str) -> None:
+    def remove_document(self, upload_id: str, save: bool = True) -> None:
         """Remove all chunks for a document from the index.
 
-        HNSWFlat has no true deletion: compact by rebuilding without the
-        removed labels so dead vectors don't grow forever.
+        HNSWFlat has no true deletion: native removal leaves dead vectors;
+        maps are compacted here and space is reclaimed by
+        rebuild_if_fragmented(). Pass save=False when the caller persists
+        afterwards (e.g. add_chunks upsert saves once at the end).
         """
         with self._lock:
             # Find labels to remove
@@ -266,7 +269,6 @@ class KBIndex:
             }
             if not labels_to_remove:
                 return
-            keep = [(lbl, uv) for lbl, uv in self.id_map.items() if lbl not in labels_to_remove]
             # Try native removal first; always compact maps.
             try:
                 if hasattr(self.index, "remove_ids"):
@@ -275,20 +277,14 @@ class KBIndex:
                     self.index.remove_ids(_np.array(sorted(labels_to_remove), dtype=_np.int64))
             except Exception:
                 logger.debug("kb native remove failed", exc_info=True)
-            # Compact: rebuild index from surviving vectors when possible.
-            try:
-                ntotal = int(getattr(self.index, "ntotal", 0) or 0)
-            except Exception:
-                logger.debug("kb ntotal read failed", exc_info=True)
-                ntotal = 0
-            if ntotal > len(keep) * 2 and keep:
-                # Heavily fragmented — rebuild below via _rebuild_from_maps
-                pass
+            # Fragmentation itself is reclaimed by rebuild_if_fragmented();
+            # remove stays cheap and never rebuilds inline while holding the lock.
             for lbl in labels_to_remove:
                 self.id_map.pop(lbl, None)
             # Rebuild reverse_map
             self.reverse_map = {v: k for k, v in self.id_map.items()}
-            self._save()
+            if save:
+                self._save()
 
     def rebuild_if_fragmented(self, max_fragmentation: float = 0.3) -> None:
         """Rebuild index when native deleted count exceeds threshold."""
@@ -353,9 +349,12 @@ def get_index(user_id: str, dim: int = 768) -> KBIndex:
 
 def invalidate_index(user_id: str) -> None:
     """Invalidate and remove cached index for a user."""
+    try:
+        safe = _safe_user(user_id)
+    except ValueError:
+        return
     with _cache_lock:
-        if user_id in _index_cache:
-            del _index_cache[user_id]
+        _index_cache.pop(safe, None)
 
 
 def rebuild_index(user_id: str, dim: int = 768) -> KBIndex:

@@ -992,7 +992,9 @@ def search(user_id: Any, query: Any, top_k: int = KB_TOP_K,
     qv: List[float] = []
     try:
         # ponytail: query embed cache — second identical search avoids Gemini call
-        qkey = (q.strip().lower(), kb_embeddings.default_model())
+        # Whitespace-normalized key: "Hello " and "hello  world" share one embed.
+        qnorm = " ".join(str(q or "").lower().strip().split())
+        qkey = (qnorm, kb_embeddings.default_model())
         with _QUERY_EMBED_LOCK:
             hit = _QUERY_EMBED_CACHE.get(qkey)
         if hit is not None:

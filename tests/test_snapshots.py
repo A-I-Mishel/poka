@@ -342,3 +342,20 @@ def test_cli_upload_and_download(tmp_path, monkeypatch, capsys):
     assert snap.main(["--download"]) == 0
     assert (root / "accounts.json").exists()
     capsys.readouterr()
+
+
+def test_scan_data_single_walk_matches_helpers(tmp_path):
+    """_scan_data must equal the legacy helpers in one walk, skipping .tmp."""
+    root = tmp_path / "data"
+    (root / "users" / "alice").mkdir(parents=True)
+    (root / "a.json").write_text('{"a": 1}', encoding="utf-8")
+    (root / "users" / "alice" / "chats.json").write_text('{"m": []}', encoding="utf-8")
+    (root / "half.json.abc123.tmp").write_text("in-flight", encoding="utf-8")
+
+    files, fp, total = snap._scan_data(root)
+    rels = [rel for rel, _full in files]
+    assert "half.json.abc123.tmp" not in " ".join(rels)
+    assert rels == sorted(rels)
+    assert fp == snap._fingerprint(root)
+    assert total == snap._data_bytes(root)
+    assert total == (root / "a.json").stat().st_size + (root / "users" / "alice" / "chats.json").stat().st_size
