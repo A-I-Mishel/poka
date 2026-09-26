@@ -84,7 +84,7 @@ CONTINUATION_SIGNALS = (
 # this slide" mid-teaching is a teaching follow-up, not an exit.
 EXPLICIT_TASK_SIGNALS = (
     "create a", "create me", "convert to", "convert into",
-    "convert the full", "generate a", "make a",
+    "convert the full", "generate a", "make a", "make me", "build a", "build me",
     "into a docx", "into pdf", "as docx", "as pdf",
     "docx", "pdf", "download", "export",
 )

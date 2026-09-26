@@ -147,13 +147,31 @@ def test_explicit_new_task_exits_teaching():
     from backend.chatflow import _is_recall_answer, _is_teaching_continuation
 
     concept_hist = [{"role": "assistant",
-                     "content": "📘 FILE: Lecture_01\nSlides: 4-4\n## Concept: Applications\n"
-                                "**Source:** [slide 4]\n"
-                                "What does the degree of a vertex represent?"}]
+                      "content": "📘 FILE: Lecture_01\nSlides: 4-4\n## Concept: Applications\n"
+                                 "**Source:** [slide 4]\n"
+                                 "What does the degree of a vertex represent?"}]
     task = "convert the full conversation into a docx file"
     assert _is_recall_answer(task, concept_hist) is False
     assert _is_teaching_continuation(task, concept_hist) is False
     # Genuine continuations still work on the same history.
+    assert _is_teaching_continuation("Next", concept_hist) is True
+    assert _is_teaching_continuation("ok", concept_hist) is True
+    assert _is_recall_answer("It counts connected edges", concept_hist) is True
+
+
+def test_portfolio_new_task_exits_teaching():
+    """Portfolio/new-task verbs mid-teaching exit (no hold, no advance)."""
+    from backend.chatflow import _is_recall_answer, _is_teaching_continuation
+
+    concept_hist = [{"role": "assistant",
+                      "content": "📘 FILE: Lecture_01\nSlides: 4-4\n## Concept: Applications\n"
+                                 "**Source:** [slide 4]\n"
+                                 "What does the degree of a vertex represent?"}]
+    # New explicit-task signals must exit teaching
+    for task in ("build me a portfolio site", "build a website", "make me a webpage"):
+        assert _is_recall_answer(task, concept_hist) is False, task
+        assert _is_teaching_continuation(task, concept_hist) is False, task
+    # Genuine continuations still work
     assert _is_teaching_continuation("Next", concept_hist) is True
     assert _is_teaching_continuation("ok", concept_hist) is True
     assert _is_recall_answer("It counts connected edges", concept_hist) is True

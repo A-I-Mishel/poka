@@ -247,10 +247,14 @@ def test_explicit_new_task_signals():
                  "create a pdf of these slides",
                  "download this as docx",
                  "export the chat",
-                 "generate a presentation about dogs"):
+                 "generate a presentation about dogs",
+                 "build me a portfolio site",
+                 "build a website",
+                 "make me a webpage"):
         assert explicit_new_task(text) is True, text
     for text in ("Next", "ok", "A vertex is a node", "summarize this slide",
-                 "a graph is created from vertices and edges", ""):
+                 "a graph is created from vertices and edges", "",
+                 "I want a website", "write code that sorts a list"):
         assert explicit_new_task(text) is False, text
 
 
