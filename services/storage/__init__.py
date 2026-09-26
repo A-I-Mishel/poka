@@ -18,7 +18,6 @@ from services.storage.cleaners import (
     clean_generation_spec,
     clean_messages,
     clean_source_record,
-    find_chat_by_id,
 )
 from services.storage.ids import (
     _ID16_RE,

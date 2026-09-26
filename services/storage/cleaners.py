@@ -295,23 +295,6 @@ def _clean_chat_record(value: Any) -> Optional[Dict[str, Any]]:
     return record
 
 
-def find_chat_by_id(chats: Any, chat_id: Any) -> Optional[Dict[str, Any]]:
-    """Resolve a conversation by stable ID within one user's list.
-
-    Returns a copy, or None for malformed IDs and misses. Never raises.
-    Index-based access remains for existing UI paths; no new feature
-    may persist list indexes as references.
-    """
-    if not is_valid_id(chat_id):
-        return None
-    if not isinstance(chats, list):
-        return None
-    for chat in chats:
-        if isinstance(chat, dict) and chat.get("id") == chat_id:
-            return dict(chat)
-    return None
-
-
 def _clean_brief_record(value: Any) -> Optional[Dict[str, Any]]:
     """Validate one brief record; None when identity/content fields fail.
 
