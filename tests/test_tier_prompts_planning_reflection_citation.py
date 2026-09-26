@@ -270,3 +270,24 @@ def test_episodic_uses_bounded_micro_budget(monkeypatch):
     # exactly one LLM call against a short wall.
     assert isinstance(seen["budget"], RequestBudget)
     assert seen["budget"].max_llm == 1
+
+
+def test_teaching_strip_regression():
+    """Non-teaching prompts must drop the teaching override (~3k chars).
+
+    _strip_teaching_block fails closed (keeps the full prompt), so a
+    future wording edit to the block anchors would silently bloat every
+    non-teaching turn. This fails loudly instead.
+    """
+    from agent.prompts import (
+        _TEACHING_BLOCK_END,
+        _TEACHING_BLOCK_START,
+        _build_system_prompt,
+    )
+
+    full = _build_system_prompt(teaching=True)
+    stripped = _build_system_prompt(teaching=False)
+    assert _TEACHING_BLOCK_START in full
+    assert _TEACHING_BLOCK_START not in stripped
+    assert _TEACHING_BLOCK_END not in stripped
+    assert len(full) - len(stripped) > 2000

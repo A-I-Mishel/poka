@@ -32,7 +32,9 @@ Design constraints (the trust model):
 import json
 import logging
 import os
+import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,25 @@ def _user_dir(user_id: str):
         return user_dir(str(user_id or ""), create=False)
     except Exception:
         return None
+
+
+def _tmp_for(path, stem: str):
+    """Unique tmp sibling so concurrent writers never share one file."""
+    try:
+        token = f"{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}"
+    except Exception:
+        token = str(os.getpid())
+    return path.with_name(f"{stem}.tmp.{token}")
+
+
+def _cap_value(v: Any, limit: int = 500) -> Any:
+    """Bound stored signal/cost values; non-strings pass through."""
+    try:
+        if isinstance(v, str) and len(v) > limit:
+            return v[:limit]
+    except Exception:
+        logger.debug("experience cap failed", exc_info=True)
+    return v
 
 
 def _valid_tool(name: Any) -> bool:
@@ -119,12 +140,34 @@ def _prune_episodes(user_id: str) -> None:
         path = root / EXPERIENCE_FILE
         if not path.is_file():
             return
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        if len(lines) <= EXPERIENCE_MAX_EPISODES:
+        try:
+            from services.storage import path_lock as _plock
+        except Exception:
+            _plock = None
+        if _plock is None:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if len(lines) <= EXPERIENCE_MAX_EPISODES:
+                return
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(lines[-EXPERIENCE_MAX_EPISODES:])
             return
-        with open(path, "w", encoding="utf-8") as f:
-            f.writelines(lines[-EXPERIENCE_MAX_EPISODES:])
+        with _plock(path):
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if len(lines) <= EXPERIENCE_MAX_EPISODES:
+                return
+            tmp = _tmp_for(path, EXPERIENCE_FILE)
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.writelines(lines[-EXPERIENCE_MAX_EPISODES:])
+                os.replace(tmp, path)
+            except Exception:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    logger.debug("experience prune tmp cleanup failed", exc_info=True)
+                raise
     except Exception:
         logger.debug("experience prune failed", exc_info=True)
 
@@ -156,13 +199,22 @@ def record_episode(user_id: str, task_type: str, tools: Any, outcome: str,
             "outcome": result,
             "quality": qual,
             "tier": str(tier or "")[:64],
-            "signals": {str(k)[:32]: v for k, v in dict(signals or {}).items()},
-            "cost": {str(k)[:32]: v for k, v in dict(cost or {}).items()},
+            "signals": {str(k)[:32]: _cap_value(v) for k, v in dict(signals or {}).items()},
+            "cost": {str(k)[:32]: _cap_value(v) for k, v in dict(cost or {}).items()},
             "ts": time.time(),
         }
         try:
-            with open(root / EXPERIENCE_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            from services.storage import path_lock as _plock
+        except Exception:
+            _plock = None
+        try:
+            if _plock is None:
+                with open(root / EXPERIENCE_FILE, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            else:
+                with _plock(root / EXPERIENCE_FILE):
+                    with open(root / EXPERIENCE_FILE, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
             logger.debug("experience append failed", exc_info=True)
             return False
@@ -235,11 +287,21 @@ def amend_last_episode(user_id: str, task_type: str, tools: Any, quality: str) -
             return False
         entry["quality"] = qual
         lines[target] = json.dumps(entry, ensure_ascii=False) + "\n"
-        tmp = path.with_name(f"{EXPERIENCE_FILE}.tmp.{os.getpid()}")
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-            os.replace(tmp, path)
+            from services.storage import path_lock as _plock
+        except Exception:
+            _plock = None
+        tmp = _tmp_for(path, EXPERIENCE_FILE)
+        try:
+            if _plock is None:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+                os.replace(tmp, path)
+            else:
+                with _plock(path):
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        f.writelines(lines)
+                    os.replace(tmp, path)
         except Exception:
             try:
                 tmp.unlink(missing_ok=True)
@@ -337,13 +399,25 @@ def _save_state(user_id: str, state: Dict[str, Any]) -> bool:
             return False
         root.mkdir(parents=True, exist_ok=True)
         path = root / LESSONS_FILE
-        tmp = path.with_name(f"{LESSONS_FILE}.tmp.{os.getpid()}")
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"lessons": state.get("lessons", []),
-                           "episodes_since_mine": int(state.get("episodes_since_mine", 0) or 0)},
-                          f, ensure_ascii=False)
-            os.replace(tmp, path)
+            from services.storage import path_lock as _plock
+        except Exception:
+            _plock = None
+        tmp = _tmp_for(path, LESSONS_FILE)
+        try:
+            if _plock is None:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump({"lessons": state.get("lessons", []),
+                               "episodes_since_mine": int(state.get("episodes_since_mine", 0) or 0)},
+                              f, ensure_ascii=False)
+                os.replace(tmp, path)
+            else:
+                with _plock(path):
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump({"lessons": state.get("lessons", []),
+                                   "episodes_since_mine": int(state.get("episodes_since_mine", 0) or 0)},
+                                  f, ensure_ascii=False)
+                    os.replace(tmp, path)
         except Exception:
             try:
                 tmp.unlink(missing_ok=True)
