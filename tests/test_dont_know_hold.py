@@ -89,6 +89,9 @@ def test_hold_reserves_same_window(tmp_path, monkeypatch):
     assert "Slide 10" in send
     assert "Slide 11" not in send
     assert "Do NOT advance" in send
+    # Softer reteach: shape restated, learner wording reused, fresh metaphor.
+    assert "Imagine" in send
+    assert "metaphor" in send.lower()
 
 
 def test_repeat_hold_escalates(tmp_path, monkeypatch):
@@ -128,3 +131,5 @@ def test_attempt_still_advances(tmp_path, monkeypatch):
     assert clarify is None
     assert "Slide 11" in send
     assert "evaluate" in send.lower()
+    # Wrong answers get the softer repair too (then advance, per design).
+    assert "metaphor" in send.lower()

@@ -9,7 +9,7 @@ from backend.deps import UserContext
 
 from backend.attachments import (_escape_hint, attachment_hint, attachments_overview)
 from backend.flow.stages import _available_for_gate
-from backend.teach import (TEACHING_SUFFIX, TEACHING_WINDOW_SLIDES, _extract_teaching_blocks, _is_admin_block, _is_recall_answer, _is_teaching_request, _last_teaching_state, _pace_direction, _teaching_scope_line, _teaching_window_hint, _time_pressure)
+from backend.teach import (TEACHING_SUFFIX, TEACHING_WINDOW_SLIDES, _extract_teaching_blocks, _is_admin_block, _is_recall_answer, _is_teaching_request, _last_teaching_state, _pace_direction, _pointer_in_recent, _teaching_scope_line, _teaching_window_hint, _time_pressure)
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,16 @@ def _apply_teaching_session(
         _explicit_request = False
     try:
         from backend.teach import _has_teaching_header_in_recent, _teaching_flag_in_recent
-        _flag = _teaching_flag_in_recent(history, window=10)
-        _prior_session = _flag is not None or _has_teaching_header_in_recent(history, window=10)
+        try:
+            _pawait, _pv = _pointer_in_recent(history)
+        except Exception:
+            _pawait, _pv = None, 0
+        if _pv >= 1:
+            # Pointer decides; the window below is backfill-only.
+            _prior_session = str(_pawait or "").startswith("teaching:") or str(_pawait or "").startswith("ambiguous:")
+        else:
+            _flag = _teaching_flag_in_recent(history, window=10)
+            _prior_session = _flag is not None or _has_teaching_header_in_recent(history, window=10)
     except Exception:
         try:
             _prior_session = any(
@@ -117,6 +125,26 @@ def _apply_teaching_session(
                         continue
         except Exception:
             logger.debug("teaching registry fallback failed", exc_info=True)
+    # Compound thread (teaching-stage-only): the last assistant turn opened
+    # two live threads (a non-teaching answer plus a lecture-continue offer)
+    # and the user answered with a bare ack. Only this branch may produce
+    # the disambiguation question — plain topic switches never land here
+    # (their pointer is "none", routed before this stage). No model call.
+    try:
+        _pawait_c, _pv_c = _pointer_in_recent(history)
+    except Exception:
+        _pawait_c, _pv_c = None, 0
+    if _pv_c >= 1 and str(_pawait_c or "").startswith("ambiguous:"):
+        try:
+            from agent.router import _signals as _ack_signals
+            from backend.teach import _TEACHING_ACK_SIGNALS
+            _low_c = str(gate_text or "").lower()
+            if len(str(gate_text or "").strip()) <= 20 and _ack_signals(_low_c, _TEACHING_ACK_SIGNALS):
+                return send_text, vision_ids, (
+                    "Quick check so I answer the right thing — should I continue "
+                    "what I just sent, or go back to the lecture slides?")
+        except Exception:
+            logger.debug("compound disambiguation check failed", exc_info=True)
     if not candidates:
         if _explicit_request and not _prior_session:
             # Fresh ask with no files: general-knowledge teaching is allowed,
@@ -168,7 +196,28 @@ def _apply_teaching_session(
     except Exception:
         logger.debug("teaching file pick failed; keeping first candidate", exc_info=True)
     # Cursor: end slide of the active file's last taught window.
-    _, last_end = _last_teaching_state(history)
+    # Pointer-first: a live teaching pointer carries file+cursor directly
+    # (no history scan); pre-pointer chats fall back to the header scan.
+    _pointer_cursor_used = False
+    try:
+        _pawait_cur, _pv_cur = _pointer_in_recent(history)
+    except Exception:
+        _pawait_cur, _pv_cur = None, 0
+    if _pv_cur >= 1 and str(_pawait_cur or "").startswith("teaching:"):
+        try:
+            _pfile, _pcur = str(_pawait_cur).rsplit(":", 2)[1], str(_pawait_cur).rsplit(":", 2)[2]
+            _pcur = max(0, int(_pcur))
+            for c in candidates:
+                if str(c.get("name", "")).strip().lower() == str(_pfile or "").strip().lower():
+                    active = c
+                    break
+            last_end = _pcur
+            _pointer_cursor_used = True
+        except Exception:
+            logger.debug("pointer cursor parse failed; using header scan", exc_info=True)
+            _pointer_cursor_used = False
+    if not _pointer_cursor_used:
+        _, last_end = _last_teaching_state(history)
     # Explicit reteach ("teach X again", "restart") restarts at 1 —
     # otherwise a past-end cursor yields an empty window (no wrap).
     try:
@@ -442,26 +491,37 @@ def _apply_teaching_session(
             send_text += (
                 "\n\n[The learner could not answer again on this same concept. "
                 "First rebuild the missing prerequisite in 2-3 simple lines, "
-                "then reteach the concept simply with a smaller example, then "
-                "ask one easy check question. Tell them they may say Next to "
-                "park it and move on. Do not advance unless they say so.]"
+                "then reteach the concept simply keeping the Concept shape "
+                "(short Imagine: + tiny sketch + Here: mapping + one hook + "
+                "Source), reusing their own words where possible, with a smaller "
+                "example and a fresh supporting metaphor from a different domain "
+                "than the last turn (label it supporting), then ask one easy check "
+                "question. Tell them they may say Next to park it and move on. "
+                "Do not advance unless they say so.]"
             )
         elif _teach_hold:
             send_text += (
                 "\n\n[The user just answered your closing question above with "
                 "an explicit non-answer (they could not answer it). Do NOT "
                 "advance to new slides — the same window is served again "
-                "below. Reteach THIS concept in 3-4 simpler lines with a "
-                "smaller example, then ask one easier check question.]"
+                "below. Reteach THIS concept in 3-4 simpler lines keeping the "
+                "Concept shape (short Imagine: + Here: + one hook + Source), "
+                "reusing their own words where possible, with a smaller example "
+                "and a fresh supporting metaphor from a different domain than "
+                "the last turn (label it supporting), then ask one easier check "
+                "question.]"
             )
         elif not _is_next and _is_recall_answer(str(gate_text or ""), history):
             send_text += (
                 "\n\n[The user just answered your closing question above. First "
                 "evaluate in 3-5 lines: if correct confirm the key idea and "
                 "optionally refine wording; if partial name the missing piece; "
-                "if incorrect name the misconception, explain why simply, and "
-                "re-check briefly. Never mark an answer wrong without repairing "
-                "the misconception. Only then teach the next window below.]"
+                "if incorrect name the misconception in their own words, reteach "
+                "simply keeping Imagine: + Here: + one hook with a smaller example "
+                "and a fresh supporting metaphor from a different domain than the "
+                "last turn (label it supporting), and re-check briefly. Never mark "
+                "an answer wrong without repairing the misconception. Only then "
+                "teach the next window below.]"
             )
     except Exception:
         logger.debug("recall-answer note failed", exc_info=True)
