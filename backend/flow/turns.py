@@ -367,8 +367,8 @@ def _apply_attachment_gate(ctx: UserContext, gate_text: str,
     try:
         _teaching_hit = (
             _is_teaching_request(gate_text)
-            or _is_teaching_continuation(gate_text, history)
-            or _is_pace_feedback(gate_text, history)
+            or _is_teaching_continuation(gate_text, history, image_ids, attachments)
+            or _is_pace_feedback(gate_text, history, image_ids, attachments)
         )
     except Exception:
         _teaching_hit = False
@@ -535,8 +535,8 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
     try:
         _teaching_turn = bool(
             _is_teaching_request(text)
-            or _is_teaching_continuation(text, current)
-            or _is_pace_feedback(text, current)
+            or _is_teaching_continuation(text, current, image_ids, attachments)
+            or _is_pace_feedback(text, current, image_ids, attachments)
         )
     except Exception:
         _teaching_turn = False
@@ -638,8 +638,8 @@ def _run_chat_inner(ctx: UserContext, text: str, store: Any,
         )
         _in_session = bool(
             _is_teaching_request(text)
-            or _is_teaching_continuation(text, current)
-            or _is_pace_feedback(text, current))
+            or _is_teaching_continuation(text, current, image_ids, attachments)
+            or _is_pace_feedback(text, current, image_ids, attachments))
         _greet_hit = bool(
             _greet_on() and not _in_session and _is_greet(text)
             and not attachments and not image_ids)

@@ -87,6 +87,14 @@ EXPLICIT_TASK_SIGNALS = (
     "convert the full", "generate a", "make a", "make me", "build a", "build me",
     "into a docx", "into pdf", "as docx", "as pdf",
     "docx", "pdf", "download", "export",
+    # Image-to-code intents: a new image plus an HTML/CSS build request is
+    # never a teaching quiz answer (e.g. "make html page like the image
+    # i attached"). Phrased to avoid bare nouns ("website" alone stays a
+    # non-task so "I want a website" still routes normally).
+    "html page", "html file", ".html", "with css",
+    "look like the image", "like the image", "from the image",
+    "from this image", "from that image", "image attached",
+    "image i attached", "css",
 )
 
 

@@ -249,7 +249,7 @@ def _apply_teaching_session(
     try:
         from backend.teach import _is_dont_know as _dont_know
 
-        _teach_hold = bool(_dont_know(str(gate_text or ""), history))
+        _teach_hold = bool(_dont_know(str(gate_text or ""), history, image_ids, attachments))
         if _teach_hold:
             # Repeat = the previous user turn was also a non-answer
             # (current text isn't in history yet, so pair it explicitly).
@@ -260,7 +260,7 @@ def _apply_teaching_session(
             ][-1:]
             if (len(_prior_user) == 1
                     and _dont_know(_prior_user[0], history)
-                    and _dont_know(str(gate_text or ""), history)):
+                    and _dont_know(str(gate_text or ""), history, image_ids, attachments)):
                 _teach_hold_repeat = True
     except Exception:
         logger.debug("teaching hold check failed", exc_info=True)
@@ -511,7 +511,7 @@ def _apply_teaching_session(
                 "the last turn (label it supporting), then ask one easier check "
                 "question.]"
             )
-        elif not _is_next and _is_recall_answer(str(gate_text or ""), history):
+        elif not _is_next and _is_recall_answer(str(gate_text or ""), history, image_ids, attachments):
             send_text += (
                 "\n\n[The user just answered your closing question above. First "
                 "evaluate in 3-5 lines: if correct confirm the key idea and "

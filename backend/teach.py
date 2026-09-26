@@ -356,11 +356,44 @@ def _last_teaching_ends_with_recall(history: List[Dict[str, Any]]) -> bool:
         return False
 
 
-def _is_recall_answer(text: str, history: List[Dict[str, Any]]) -> bool:
+def _has_new_image(image_ids: Any = None, attachments: Any = None) -> bool:
+    """True when the current turn carries new image attachment(s).
+
+    Teaching continuations (recall answers, Next/ok) must never hijack a
+    turn that brings a fresh image: the image is a new intent (vision /
+    image-to-code), not a quiz answer. Bare continuations ("Next", "ok")
+    with an image still continue — only substantive text exits.
+    Never raises.
+    """
+    try:
+        if image_ids:
+            try:
+                if len(list(image_ids or [])) > 0:
+                    return True
+            except Exception:
+                return True
+        for a in (attachments or []):
+            try:
+                if isinstance(a, dict) and str(a.get("kind", "") or "") == "image":
+                    return True
+            except Exception:
+                logger.debug("new-image attachment scan failed", exc_info=True)
+                continue
+    except Exception:
+        logger.debug("new-image check failed", exc_info=True)
+    return False
+
+
+def _is_recall_answer(text: str, history: List[Dict[str, Any]],
+                      image_ids: Any = None, attachments: Any = None) -> bool:
     """True when the user is answering a closing question (stays in teaching)."""
     try:
         t = str(text or "")
         if not t or not t.strip():
+            return False
+        if _has_new_image(image_ids, attachments):
+            # A fresh image is never a quiz answer (e.g. "make html like
+            # the image i attached" mid-lecture). Route to vision instead.
             return False
         if len(t.strip()) > 300:
             return False
@@ -416,11 +449,14 @@ def _time_pressure(text: str) -> Optional[str]:
         return None
 
 
-def _is_pace_feedback(text: str, history: List[Dict[str, Any]]) -> bool:
+def _is_pace_feedback(text: str, history: List[Dict[str, Any]],
+                      image_ids: Any = None, attachments: Any = None) -> bool:
     """True for in-session pace change asks ("slow down", "got it, harder")."""
     try:
         t = str(text or "")
         if not t or not t.strip() or len(t.strip()) > 200:
+            return False
+        if _has_new_image(image_ids, attachments):
             return False
         # Explicit flag in last 3 wins; header scan (normalized) for old chats.
         try:
@@ -468,7 +504,8 @@ _TEACHING_DONT_KNOW_PHRASES = (
 )
 
 
-def _is_dont_know(text: str, history: List[Dict[str, Any]]) -> bool:
+def _is_dont_know(text: str, history: List[Dict[str, Any]],
+                   image_ids: Any = None, attachments: Any = None) -> bool:
     """True for an explicit non-answer to a closing question (never raises).
 
     Strict subset of recall answers: short text matching the dont-know
@@ -493,7 +530,7 @@ def _is_dont_know(text: str, history: List[Dict[str, Any]]) -> bool:
             for p in _TEACHING_DONT_KNOW_PHRASES
         ):
             return False
-        return _is_recall_answer(text, history)
+        return _is_recall_answer(text, history, image_ids, attachments)
     except Exception:
         return False
 
@@ -525,7 +562,8 @@ def _pointer_in_recent(history: List[Dict[str, Any]]) -> Tuple[Optional[str], in
     return (None, 0)
 
 
-def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
+def _is_teaching_continuation(text: str, history: List[Dict[str, Any]],
+                              image_ids: Any = None, attachments: Any = None) -> bool:
     """True for "Next/continue" follow-ups, bare acks, AND closing-question answers.
 
     PRECEDENCE (pointer migration): when the last assistant message carries
@@ -538,12 +576,15 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
     when the pointer points at teaching — never from a bare window hit.
     An explicit new task ("convert ... to docx") always exits: each message
     is evaluated on its own and the topic never assumes continuation.
+    A turn carrying a fresh image exits unless it is a bare
+    continuation/ack ("Next", "ok"): image intents go to vision.
     Never raises.
     """
     try:
         t = str(text or "")
         if not t:
             return False
+        _new_image = _has_new_image(image_ids, attachments)
         try:
             _awaiting, _pv = _pointer_in_recent(history)
         except Exception:
@@ -593,6 +634,19 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
                 str(_awaiting or "").startswith("teaching:")
                 or str(_awaiting or "").startswith("ambiguous:")):
             return False
+        # Fresh image exits teaching unless the text is itself a bare
+        # continuation/ack ("Next", "ok"): a substantive message plus a
+        # new image (e.g. "make html like the image i attached") is a
+        # vision / image-to-code intent, never a quiz answer.
+        if _new_image:
+            _bare_cont = (
+                len(t.strip()) <= TEACHING_CONTINUATION_MAX_CHARS
+                and _signals(low, CONTINUATION_SIGNALS)
+            ) or (
+                len(t.strip()) <= 20 and _signals(low, _TEACHING_ACK_SIGNALS)
+            )
+            if not _bare_cont:
+                return False
         if len(t.strip()) <= TEACHING_CONTINUATION_MAX_CHARS and _signals(low, CONTINUATION_SIGNALS):
             return True
         # Bare acknowledgments advance an active session (admin turns have
@@ -604,7 +658,7 @@ def _is_teaching_continuation(text: str, history: List[Dict[str, Any]]) -> bool:
             return True
         # A short answer to a closing question continues the session for
         # evaluation (correct/partial/incorrect) before advancing.
-        return _is_recall_answer(t, history)
+        return _is_recall_answer(t, history, image_ids, attachments)
     except Exception:
         return False
 

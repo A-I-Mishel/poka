@@ -944,6 +944,41 @@ def test_repair_bills_parent_budget(monkeypatch):
     assert parent.llm_calls == 1
 
 
+def test_new_image_exits_teaching_for_vision():
+    """Screenshot regression: image + build request mid-lecture is vision, not Slide N+1.
+
+    A teaching session ending with a closing question must not swallow a
+    turn that carries a fresh image ("make html page like the image i
+    attached" + screenshot): recall answers and continuations yield to
+    the new image intent so the vision cascade runs. Bare "Next"/"ok"
+    with an image still continue the session.
+    """
+    from backend.chatflow import _is_recall_answer, _is_teaching_continuation
+
+    concept_hist = [{"role": "assistant",
+                     "content": "📘 FILE: Lecture_03_Eulerian\nSlides: 2-2\n## Concept: Graphs\n"
+                                "**Source:** [slide 2]\n"
+                                "If a driver visits every town once, Euler or Hamiltonian?",
+                     "teaching": {"active": True, "awaiting": "teaching:Lecture_03:2", "v": 1}}]
+    task = "OK CAN YOU MAKE AND HTML PAGE WITH CSS WHICH WILL LOOK LIKE THE IMAGE I ATTACHED?"
+    # Without image info the expanded explicit-task signals already exit.
+    assert _is_recall_answer(task, concept_hist) is False
+    assert _is_teaching_continuation(task, concept_hist) is False
+    # With a fresh image attached: never a quiz answer, never continuation.
+    assert _is_recall_answer(task, concept_hist, ["img123"]) is False
+    assert _is_teaching_continuation(task, concept_hist, ["img123"]) is False
+    assert _is_teaching_continuation(
+        task, concept_hist, None,
+        [{"id": "img123", "kind": "image", "name": "Screenshot_2026.png"}]) is False
+    assert _is_recall_answer("what is this?", concept_hist, ["img123"]) is False
+    # Bare continuations still advance even when an image rides along.
+    assert _is_teaching_continuation("Next", concept_hist, ["img123"]) is True
+    assert _is_teaching_continuation("ok", concept_hist, ["img123"]) is True
+    # Genuine quiz answers without images still continue.
+    assert _is_recall_answer("It visits every edge once", concept_hist) is True
+    assert _is_teaching_continuation("It visits every edge once", concept_hist) is True
+
+
 def test_repair_on_spent_budget_keeps_draft(monkeypatch):
     """Exhausted parent budget fails fast into the untouched draft."""
     import types
