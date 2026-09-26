@@ -130,3 +130,37 @@ def test_registered_in_tool_map():
     for name in ("workspace_list", "workspace_read", "workspace_write",
                  "workspace_delete", "run_code"):
         assert name in TOOL_MAP, name
+
+
+def test_run_dir_read_allowed_write_denied():
+    from services.storage import StorageError
+
+    # Reads may inspect build output; writes stay blocked for dot-paths.
+    assert ws.clean_relpath(".run/app.out", allow_run_dir=True) == ".run/app.out"
+    with pytest.raises(StorageError):
+        ws.clean_relpath(".run/app.out")
+    out = workspace_write.invoke({"path": ".run/x.py", "content": "x"})
+    assert out.startswith("STATUS=INVALID"), out
+
+
+def test_tail_truncate_keeps_traceback_tail():
+    from services.coderun import _tail_truncate
+
+    body = "setup\n" + "x\n" * 8000 + "Traceback (most recent call last):\n  line 42\nValueError: boom\n"
+    clipped = _tail_truncate(body, limit=12000, head=2000)
+    assert len(clipped) <= 12000
+    assert "line 42" in clipped
+    assert "ValueError: boom" in clipped
+    assert clipped.startswith("setup")
+
+
+def test_inline_snippets_do_not_clobber():
+    out1 = run_code.invoke({"language": "python", "code": "print('first')"})
+    assert "first" in out1, out1
+    out2 = run_code.invoke({"language": "python", "code": "print('second')"})
+    assert "second" in out2, out2
+    paths = [f["path"] for f in ws.list_workspace("code-user")]
+    uniques = sorted(p for p in paths if p.startswith("_snippet_") and p.endswith(".py"))
+    assert len(uniques) >= 2, paths
+    assert "_snippet.py" in paths
+    assert "second" in workspace_read.invoke({"path": "_snippet.py"})

@@ -122,6 +122,19 @@ def _build_command(lang: str, path: Path) -> Optional[List[str]]:
     return None
 
 
+def _tail_truncate(out: str, limit: int = MAX_CODE_OUTPUT_CHARS, head: int = 2000) -> str:
+    """Keep command head + error tail for tracebacks within the cap.
+
+    Tracebacks put the error at the tail; head-only truncation hides it.
+    Full output stays on disk for workspace_read.
+    """
+    if len(out) <= limit:
+        return out
+    marker = "\n[…truncated middle…]\n"
+    tail_budget = max(0, limit - head - len(marker))
+    return out[:head] + marker + out[-tail_budget:] if tail_budget else out[:limit]
+
+
 def _run_argv(argv: List[str], cwd: Path, extra_args: List[str]) -> Dict[str, object]:
     full = list(argv) + list(extra_args)
     started = time.time()
@@ -135,7 +148,7 @@ def _run_argv(argv: List[str], cwd: Path, extra_args: List[str]) -> Dict[str, ob
         out = proc.stdout or ""
         truncated = False
         if len(out) > MAX_CODE_OUTPUT_CHARS:
-            out = out[:MAX_CODE_OUTPUT_CHARS]
+            out = _tail_truncate(out)
             truncated = True
         return {"output": out, "exit_code": int(proc.returncode),
                 "truncated": truncated,
@@ -143,7 +156,7 @@ def _run_argv(argv: List[str], cwd: Path, extra_args: List[str]) -> Dict[str, ob
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or "") if isinstance(e.stdout, str) else ""
         if len(out) > MAX_CODE_OUTPUT_CHARS:
-            out = out[:MAX_CODE_OUTPUT_CHARS]
+            out = _tail_truncate(out)
         return {"error": f"timed out after {MAX_CODE_EXEC_SECONDS:g}s",
                 "output": out, "timeout": True}
     except OSError as e:
@@ -251,7 +264,17 @@ def execute_inline(user_id: str, language: str, code: str) -> Dict[str, object]:
                + text + "\n    }\n}\n"
     rel = f"_snippet.{ext}"
     try:
-        write_workspace_file(user_id, rel, text)
+        # Unique name per snippet so sequential runs don't clobber history;
+        # _snippet.<ext> stays as an alias for the latest run.
+        import hashlib
+
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+        unique_rel = f"_snippet_{digest}.{ext}"
+        write_workspace_file(user_id, unique_rel, text)
+        try:
+            write_workspace_file(user_id, rel, text)
+        except StorageError:
+            pass
     except StorageError as e:
         return {"error": str(e), "invalid": True}
-    return execute_file(user_id, rel)
+    return execute_file(user_id, unique_rel)

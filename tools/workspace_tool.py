@@ -45,8 +45,8 @@ def _clean_path(path: str) -> str:
         raise ValueError("empty path")
     if text.startswith(("/", "\\", "~")) or ".." in text.split("/"):
         raise ValueError("path must be workspace-relative without '..'")
-    if len(text) > 256:
-        raise ValueError("path too long")
+    if len(text) > 200:
+        raise ValueError("Workspace path too long (limit 200).")
     return text
 
 
@@ -130,6 +130,11 @@ def workspace_write(path: str, content: str) -> str:
         return f"STATUS=INVALID tool=workspace_write: {e}"
     except Exception as e:
         return f"STATUS=FAILED tool=workspace_write: {str(e)[:200]}"
+    ext = str(saved.get("path", "") or "").rsplit(".", 1)[-1].lower() if "." in str(saved.get("path", "")) else ""
+    if ext in ("jsx", "tsx", "h", "hpp", "pyi"):
+        return (f"STATUS=OK tool=workspace_write: saved {saved['path']} ({int(saved['size'])} bytes). "
+                f"Note: .{ext} files cannot be executed directly "
+                "(runnable: py, js/mjs/cjs, ts/mts, java, go, c, cpp, rs, php, rb).")
     return f"STATUS=OK tool=workspace_write: saved {saved['path']} ({int(saved['size'])} bytes). Run it with run_code."
 
 

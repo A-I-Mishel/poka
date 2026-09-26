@@ -60,11 +60,14 @@ def workspace_root(user_id: str, create: bool = False) -> Path:
     return root
 
 
-def clean_relpath(raw: Any) -> str:
+def clean_relpath(raw: Any, allow_run_dir: bool = False) -> str:
     """Validate a workspace-relative path. Returns normalized posix path.
 
     Raises StorageError on absolute paths, drive letters, traversal,
     hidden parts, reserved names, bad characters, depth or length abuse.
+    When allow_run_dir is True, the read-only build prefix ".run/" is
+    permitted as the first segment (compiled artifacts); writes still
+    reject it via write_workspace_file.
     """
     text = str(raw or "").replace("\x00", "").strip().replace("\\", "/").strip()
     if not text:
@@ -80,11 +83,13 @@ def clean_relpath(raw: Any) -> str:
     parts = [p for p in text.split("/") if p not in ("", ".")]
     if not parts or len(parts) > 8:
         raise StorageError("Workspace path is empty or too deep (max 8 levels).")
-    for part in parts:
+    for i, part in enumerate(parts):
         if part in ("..", "", "."):
             raise StorageError("Workspace path must not contain '..'.")
-        if part.startswith("."):
+        if part.startswith(".") and not (allow_run_dir and i == 0 and part == ".run"):
             raise StorageError("Hidden files/dirs are not allowed in the workspace.")
+        if allow_run_dir and i == 0 and part == ".run":
+            continue
         if len(part) > 100:
             raise StorageError("Workspace path segment too long.")
         stem = part.split(".", 1)[0].upper()
@@ -97,13 +102,14 @@ def clean_relpath(raw: Any) -> str:
     return "/".join(parts)
 
 
-def resolve_in_workspace(user_id: str, relpath: str) -> Path:
+def resolve_in_workspace(user_id: str, relpath: str, allow_run_dir: bool = False) -> Path:
     """Resolve a validated relpath to a contained absolute path.
 
     Never raises for missing files — returns the canonical resolved path
     after containment check. Symlinks are denied (TOCTOU escape).
     Raises StorageError on escape.
     """
+    cleaned = clean_relpath(relpath, allow_run_dir=allow_run_dir)
     cleaned = clean_relpath(relpath)
     root = workspace_root(user_id, create=False)
     candidate = root / Path(*cleaned.split("/"))
@@ -189,10 +195,10 @@ def list_workspace(user_id: str) -> List[Dict[str, Any]]:
 
 def read_workspace_file(user_id: str, relpath: str) -> str:
     """Read a workspace text file, capped. Raises StorageError/FileNotFoundError."""
-    path = resolve_in_workspace(user_id, relpath)
+    path = resolve_in_workspace(user_id, relpath, allow_run_dir=True)
     try:
         if not path.is_file():
-            raise FileNotFoundError(f"Workspace file not found: {clean_relpath(relpath)}")
+            raise FileNotFoundError(f"Workspace file not found: {clean_relpath(relpath, allow_run_dir=True)}")
         if path.stat().st_size > MAX_WORKSPACE_FILE_BYTES:
             raise StorageError(
                 f"File too large to read (limit {MAX_WORKSPACE_FILE_BYTES} bytes)."
