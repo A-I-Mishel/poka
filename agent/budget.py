@@ -143,6 +143,16 @@ class RequestBudget:
             if self.plan_calls > self.max_plan:
                 raise BudgetExhausted(f"Planning budget exhausted ({self.max_plan}).")
 
+    def add_external_tokens(self, n: int) -> None:
+        """Add telemetry tokens (thread-safe for parallel tool execution)."""
+        with self._lock:
+            self.external_tokens += int(n or 0)
+
+    def record_timeout(self) -> None:
+        """Record one bounded-call timeout (thread-safe telemetry)."""
+        with self._lock:
+            self.timeouts += 1
+
     def check_context(self, messages: Any) -> None:
         """Raise BudgetExhausted when prompt exceeds CONTEXT_MAX_TOKENS.
 

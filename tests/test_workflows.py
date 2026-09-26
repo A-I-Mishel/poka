@@ -233,12 +233,14 @@ def test_run_happy_path_templating():
     ]), "hi", "wf-user", "wf-user")
     assert out["status"] == "ok", out
     outputs = [s["output"] for s in out["steps"]]
-    # Tool-funnel envelope is reported verbatim (templates chain the
-    # reported value, so step 2 visibly contains step 1's output).
+    # Tool-funnel envelope is reported verbatim except boundary tags, which
+    # are defanged so a chained envelope can't fake a closing tag: step 2
+    # visibly contains step 1's content with inner tags escaped.
     assert all(o.startswith("STATUS=OK") for o in outputs), out
     assert "echo:a" in outputs[0]
     assert "echo:hi!" in outputs[2]
-    assert outputs[0] in outputs[1] and outputs[1].endswith("+b\n</untrusted_tool_output>")
+    assert "echo:a" in outputs[1] and outputs[1].endswith("+b\n</untrusted-tool-output>")
+    assert "&lt;/untrusted-tool-output&gt;" in outputs[1]
     assert out["tools_used"] == ["_wf_echo"]
     assert out["error"] == ""
 
@@ -343,7 +345,7 @@ def test_api_run_404(client):
                        json={"input": ""}).status_code == 404
 
 
-def test_api_create_blocked_tool(client):
+def test_api_create_removed_tool_rejected(client):
     bad = client.post("/api/workflows", json={
         "name": "bad", "description": "",
         "steps": [{"tool": "send_gmail", "args": {"to": "a@b.c"}}],

@@ -1037,11 +1037,13 @@ def answer_with_fallback(
                 _skip_verify = "[Teaching mode:" in str(user_input or "")
             except Exception:
                 _skip_verify = False
-            if task_type == "research" and not _skip_verify:
+            if task_type in ("research", "creative", "data", "multi_step") and not _skip_verify:
                 # Grounded-link check: one cheap call only when the answer
                 # links pages absent from retrieved sources. Teaching
                 # turns are slides-only by construction (never the web),
-                # so the check would only burn quota.
+                # so the check would only burn quota. The check itself
+                # early-returns when no unknown URLs exist, so extending
+                # beyond research only costs quota on ungrounded answers.
                 draft = _verify_citations(
                     draft, used_sources, budget,
                     cheap_tiers=(CHEAP_TIERS if tiers is None else None))

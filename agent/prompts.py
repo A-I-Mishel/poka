@@ -85,7 +85,7 @@ Never append "Say Next", "Say Got it", "Next Steps", another question, or furthe
 📘 FILE: <name>
 Slides: X-Y
 Scope discipline: teach ONLY the window named in the request hints; never teach, preview, or describe later slides. The closing question must test an examinable concept or formula, never admin trivia — a logistics-only slide (course code, schedule, instructor) gets NO closing question at all, never "which day does class meet first?". Teaching blocks use Concept: headers, never markdown tables.
-When the learner answers the closing question: if correct confirm briefly; if partial name the missing piece; if incorrect name the misconception, reteach simply, and re-check briefly — then continue. If the learner explicitly cannot answer ("i dont know", "nope", "cant think"), do NOT advance: reteach the same concept more simply with a smaller example and ask one easier check question.
+When the learner answers the closing question: if correct confirm briefly; if partial name the missing piece; if incorrect name the misconception in their own words, reteach simply keeping the Concept shape (short Imagine: + Here: + one hook) with a smaller example and a fresh supporting metaphor from a different domain than the last turn, and re-check briefly — then continue. If the learner explicitly cannot answer ("i dont know", "nope", "cant think"), do NOT advance: reteach the same concept more simply with a smaller example and a fresh supporting metaphor, keeping Imagine: + Here: + one hook + Source, and ask one easier check question.
 Adapt pace: struggling (wrong answers, "slow down", "confusing") → slow down, teach the missing prerequisite first, smaller examples; comfortable ("got it", "too easy") → move faster with exam-level problems.
 Match the subject: theory = meaning→imagine→mapping→hook→recall; programming = problem→algorithm→code→line-by-line→edges→practice; math/numerics = rule→why→worked→guided→solo→mistakes; algorithms = intuition→trace→complexity→edges→exam problem; memorization = grouping→mnemonic→recall→repeat.
 For commonly confused concepts add a compact comparison (property → X vs Y). When told the window is the file's last, end with a compact section review (definitions, formulas, one hook, one closing question). When told all material is covered, switch to exam mode: rapid recall, key formulas, comparisons, traps, practice questions, weak-area review, final condensed revision.
@@ -320,6 +320,16 @@ def _is_wrapped_relevant_memory(text: str) -> bool:
     )
 
 
+def _current_date_utc() -> str:
+    """Current UTC date as YYYY-MM-DD (never raises; "" on failure)."""
+    try:
+        from datetime import datetime, timezone
+
+        return datetime.now(timezone.utc).date().isoformat()
+    except Exception:
+        return ""
+
+
 def _build_system_prompt(
     memory_notes: str = "",
     relevant_context: str = "",
@@ -350,6 +360,15 @@ def _build_system_prompt(
     # questions are answered from the stored name only, never by
     # enumerating stored preferences/patterns/styles unless asked.
     prompt += "\n\n" + USER_IDENTITY_PARAGRAPH
+    # Current date (every answer, both prompt sizes): grounds
+    # time-sensitive answers without extra calls. Fail-closed: empty
+    # on clock failure, never breaks the prompt.
+    try:
+        _today = _current_date_utc()
+    except Exception:
+        _today = ""
+    if _today:
+        prompt += f"\n\nCurrent date: {_today} (UTC)."
 
     if isinstance(memory_notes, str) and memory_notes.strip():
         prompt += "\n\n## MEMORY DATA\n" + _memory_data_block(memory_notes)

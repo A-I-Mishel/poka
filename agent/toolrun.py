@@ -47,12 +47,13 @@ from agent.cascade import (
     NO_TOOLS_TIERS,
     _record_tier_failure,
     _record_tier_success,
+    _redact_detail,
     classify_provider_error,
 )
 from agent.executor import TokenStream, _call_bounded
 
 import agent  # package-attr routing: test doubles on agent._invoke_bounded stay effective
-from agent.prompts import STRICT_GROUNDING_PARAGRAPH, TEACHING_INPUT_MARKER, WEAK_TEACHING_CHECKLIST, _as_text, _build_system_prompt, strip_internal_reasoning
+from agent.prompts import STRICT_GROUNDING_PARAGRAPH, TEACHING_INPUT_MARKER, WEAK_TEACHING_CHECKLIST, _as_text, _build_system_prompt, _defang_boundary_tags, strip_internal_reasoning
 from services.normalize import any_hit as _norm_any_hit
 from services.normalize import normalize_text as _normalize_hint
 
@@ -279,18 +280,32 @@ def _execute_tool_call(tool_call: Any, budget: Optional[RequestBudget] = None) -
         text = str(out)
         rec["status"] = _result_status(text)
         if text.startswith("STATUS="):
+            # Passthrough envelopes can still carry crafted boundary tags
+            # (hostile tool/MCP output faking a closing tag) — defang + cap
+            # before returning so the outer wrapper can't be forged.
+            # Single count reused for cap + telemetry (truncate caps to MAX).
+            n = count_tokens(text)
+            if n > MAX_TOOL_RESULT_TOKENS:
+                text = truncate_tokens(text, MAX_TOOL_RESULT_TOKENS)
+                n = MAX_TOOL_RESULT_TOKENS
+            if budget is not None:
+                budget.add_external_tokens(n)
+            text = _defang_boundary_tags(text)
             return f"[{name}] {text}"
         if not text.strip():
             return f"STATUS=EMPTY tool={name}: the tool returned no content."
-        if count_tokens(text) > MAX_TOOL_RESULT_TOKENS:
+        n = count_tokens(text)
+        if n > MAX_TOOL_RESULT_TOKENS:
             text = truncate_tokens(text, MAX_TOOL_RESULT_TOKENS)
+            n = MAX_TOOL_RESULT_TOKENS
         if budget is not None:
-            budget.external_tokens += count_tokens(text)
-        return f"STATUS=OK tool={name}\n<untrusted_tool_output>\n{text}\n</untrusted_tool_output>"
+            budget.add_external_tokens(n)
+        text = _defang_boundary_tags(text)
+        return f"STATUS=OK tool={name}\n<untrusted-tool-output>\n{text}\n</untrusted-tool-output>"
     except TimeoutError as e:
-        return f"STATUS=FAILED tool={name}: {e}"
+        return f"STATUS=FAILED tool={name}: {_redact_detail(str(e))}"
     except Exception as e:
-        return f"STATUS=FAILED tool={name}: {str(e)[:300]}"
+        return f"STATUS=FAILED tool={name}: {_redact_detail(str(e))}"
 
 
 def _has_read_only_tools(tool_calls: List[Any]) -> bool:
@@ -364,7 +379,7 @@ def _execute_tool_calls_parallel(
                 except (BudgetExhausted, TurnCancelled, ExecutorBusyError):
                     raise
                 except Exception as e:
-                    results[idx] = f"STATUS=FAILED tool=parallel: {str(e)[:200]}"
+                    results[idx] = f"STATUS=FAILED tool=parallel: {_redact_detail(str(e))}"
 
     # Execute mutating tools serially (preserve order)
     for idx, tc in mutating:
@@ -373,7 +388,7 @@ def _execute_tool_calls_parallel(
         except (BudgetExhausted, TurnCancelled, ExecutorBusyError):
             raise
         except Exception as e:
-            results[idx] = f"STATUS=FAILED tool=serial: {str(e)[:200]}"
+            results[idx] = f"STATUS=FAILED tool=serial: {_redact_detail(str(e))}"
 
     return results
 
@@ -441,7 +456,8 @@ def filter_tools_for_hint(hint: str, tier_name: Optional[str] = None,
         base += [create_pptx, build_presentation, create_docx, build_document, create_pdf, create_markdown, create_doc, create_html, read_output]
     if _any(("code", "python", "workspace", "run_code",
              "script", "program", "function",
-             "execute")):
+             "execute", "debug", "fix", "refactor",
+             "pytest", "traceback")):
         base += [workspace_write, workspace_delete, run_code, run_python, list_mcp_tools, call_mcp_tool]
     if _any(("email", "mail", "calendar",
              "event", "meeting", "invite")):
@@ -800,7 +816,7 @@ def run_tool_loop(
     Tool results are returned to the model inside fresh human messages so
     the history never contains functionCall blocks (which Gemini 3.x
     rejects without thought_signature). Untrusted tool content is always
-    wrapped in <untrusted_tool_output> delimiters. History and memory are
+    wrapped in <untrusted-tool-output> delimiters. History and memory are
     fitted to token budgets; the current request is never truncated.
 
     When force_web_search is true, a web search is EXECUTED first (not
@@ -974,7 +990,7 @@ def run_tool_loop(
         except BudgetExhausted:
             forced = "STATUS=FAILED tool=web_search: search budget exhausted."
         except Exception as e:
-            forced = f"STATUS=FAILED tool=web_search: {e}"
+            forced = f"STATUS=FAILED tool=web_search: {_redact_detail(str(e))}"
         _note_search(forced)
         messages.append(
             HumanMessage(
@@ -1048,7 +1064,7 @@ def run_tool_loop(
                 break
             if tier_name in NO_TOOLS_TIERS:
                 # A tools-bound round can never succeed here (local VL
-                # models 400 on any tools payload) â€” skip without the
+                # models 400 on any tools payload) — skip without the
                 # network call or the failure record so the tier stays
                 # live for tool-free vision use. Failover continues on
                 # the next capable tier.

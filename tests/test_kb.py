@@ -321,3 +321,71 @@ def test_search_documents_tool(open_env, stubbed_embedder):
     finally:
         ctx.set_current_user_id(None)
         ctx.set_limit_key(None)
+
+
+def test_invalidate_index_normalizes_user():
+    """invalidate_index must normalize like get_index (no stale cache)."""
+    kb_index = pytest.importorskip("services.kb_index")
+    kb_index._index_cache.clear()
+    try:
+        kb_index.get_index("alice")
+        assert "alice" in kb_index._index_cache
+        kb_index.invalidate_index(" alice ")
+        assert "alice" not in kb_index._index_cache
+        # Invalid ids are a no-op, never raise.
+        kb_index.invalidate_index("!!!bad!!!")
+    finally:
+        kb_index._index_cache.clear()
+
+
+def test_query_embed_cache_normalizes_whitespace(open_env, stubbed_embedder, monkeypatch):
+    """'Hello ' and 'hello  world'-style variants share one Gemini embed."""
+    from services import kb_embeddings as _emb
+
+    calls = []
+    real = _emb.embed_texts
+
+    def _counting(texts):
+        calls.append(list(texts))
+        return real(texts)
+
+    monkeypatch.setattr(_emb, "embed_texts", _counting)
+    kb_svc._QUERY_EMBED_CACHE.clear()
+    try:
+        kb_svc.search("cache-user", "Hello Cache")
+        kb_svc.search("cache-user", "  hello   cache  ")
+        assert len(calls) == 1, calls
+    finally:
+        kb_svc._QUERY_EMBED_CACHE.clear()
+
+
+def test_index_upsert_saves_once(monkeypatch, tmp_path):
+    """add_chunks upsert must persist once, replacing the old document."""
+    kb_index = pytest.importorskip("services.kb_index")
+    monkeypatch.setenv("PLUTO_DATA_DIR", str(tmp_path / "data"))
+    kb_index._index_cache.clear()
+    try:
+        idx = kb_index.get_index("upsert-user", dim=2)
+
+        class _FakeIndex:
+            def __init__(self):
+                self.ntotal = 0
+
+            def add_with_ids(self, vecs, labels):
+                self.ntotal += len(labels)
+
+            def remove_ids(self, ids):
+                self.ntotal = max(0, self.ntotal - len(ids))
+
+        idx.index = _FakeIndex()
+        saves = []
+        monkeypatch.setattr(idx, "_save", lambda: saves.append(1))
+        vecs = [[1.0, 0.0], [0.0, 1.0]]
+        idx.add_chunks("doc1", [{"text": "a"}, {"text": "b"}], vecs)
+        assert len(saves) == 1
+        assert idx.get_stats()["unique_documents"] == 1
+        idx.add_chunks("doc1", [{"text": "c"}], [[1.0, 0.0]])
+        assert len(saves) == 2
+        assert idx.get_stats()["total_vectors"] == 1
+    finally:
+        kb_index._index_cache.clear()

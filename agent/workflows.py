@@ -159,7 +159,12 @@ def run_workflow(
                 return _result("partial", done, used, str(e)[:200], input_truncated)
             except Exception as e:
                 logger.warning("workflow step failed: %s", e)
-                output = f"STATUS=FAILED tool={tool_name}: {str(e)[:200]}"
+                try:
+                    from agent.cascade import _redact_detail as _wf_redact
+                    _detail = _wf_redact(str(e))[:200]
+                except Exception:
+                    _detail = str(e)[:200]
+                output = f"STATUS=FAILED tool={tool_name}: {_detail}"
             output = str(output or "")
             ok = output.startswith("STATUS=OK")
             done.append({"index": pos, "tool": tool_name, "ok": ok, "output": output})
@@ -176,11 +181,21 @@ def run_workflow(
                     input_truncated,
                 )
         # Charge the caller's budget for what we spent (share, don't reset).
+        # count_tool(is_search=True) bumps both tool_calls and search_calls,
+        # so replay non-search and search calls separately to avoid
+        # double-counting tool_calls.
         if budget is not None and own_budget is not budget:
             try:
-                for _ in range(max(0, own_budget.tool_calls)):
+                searches = max(0, own_budget.search_calls)
+                nons = max(0, own_budget.tool_calls - searches)
+                for _ in range(nons):
                     try:
-                        budget.count_tool()
+                        budget.count_tool(is_search=False)
+                    except BudgetExhausted:
+                        break
+                for _ in range(searches):
+                    try:
+                        budget.count_tool(is_search=True)
                     except BudgetExhausted:
                         break
                 for _ in range(max(0, own_budget.llm_calls)):
